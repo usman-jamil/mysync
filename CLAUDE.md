@@ -159,7 +159,7 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | Project (path) | Responsibility | Contains |
 |---|---|---|
 | `SharedKernel` (`libs/shared/shared-kernel/SharedKernel.csproj`) | Building blocks | `Result` / `Result<T>`, `Error`, `ErrorType`, `ValidationError`, `IDateTimeProvider`. No dependencies. |
-| `MySync.Domain` (`libs/mysync/domain/MySync.Domain.csproj`) | Sync rules | Value objects (`ShareId`, `SharePath`, `ContentHash`, `Revision`), `Manifest` / `ManifestEntry`, `ShareState`, `MergePlanner`, `SyncPlan` / `SyncAction`, `Conflict` / `ConflictKind`, `MassDeleteGuard`, `ShareLayout` (blob key scheme, provider-agnostic), `ShareState` + `StorageLocation` + `HashCacheEntry`, `CaseCollision`, `StateFileNames`, `NfcNormalizer` (our own Unicode NFC, §8), and **static `*Errors` classes** (`ShareErrors`, `SyncErrors`, `PathErrors`, `StateErrors`, `StorageErrors`, `ConfigurationErrors`). No I/O. |
+| `MySync.Domain` (`libs/mysync/domain/MySync.Domain.csproj`) | Sync rules | Value objects (`ShareId`, `SharePath`, `ContentHash`, `Revision`), `Manifest` / `ManifestEntry`, `ShareState`, `MergePlanner`, `SyncPlan` / `SyncAction`, `Conflict` / `ConflictKind`, `MassDeleteGuard`, `ShareLayout` (blob key scheme, provider-agnostic), `ShareState` + `StorageLocation` + `HashCacheEntry`, `CaseCollision`, `StateFileNames`, `NfcNormalizer` (our own Unicode NFC, §8), and **static `*Errors` classes** (`ShareErrors`, `SyncErrors`, `PathErrors`, `LocalFileErrors`, `StateErrors`, `StorageErrors`, `ConfigurationErrors`). No I/O. |
 | `MySync.Application` (`libs/mysync/application/MySync.Application.csproj`) | Use cases | Command/query handlers, FluentValidation validators, **all abstractions** (`I...`), behaviors (decorators), response DTOs, the internal `SyncPipeline` that sequences the phases in §9. |
 | `MySync.Infrastructure` (`libs/mysync/infrastructure/MySync.Infrastructure.csproj`) | Local machine | `LocalFolder` / `FileScanner`, `Sha256ContentHasher`, `JsonShareStateStore` + `FolderLock`, `FileConflictLog`, `GitIgnoreRulesLoader`, `ManifestSerializer` + `MySyncJsonContext` (source-generated JSON), `MachineIdentity`, `DateTimeProvider`, `DependencyInjection.AddInfrastructure()`. |
 | `MySync.Storage.Azure` (`libs/mysync/storage-azure/MySync.Storage.Azure.csproj`) | Azure Blob provider | `AzureBlobShareStore : IShareStore`, `AzureStorageOptions`, `AzureErrorMapper` (`RequestFailedException` → `StorageErrors`), `ConnectionStringRedactor`, `DependencyInjection.AddAzureBlobStorage()`. |
@@ -333,6 +333,7 @@ Everything for a share lives under one prefix in the container. Key building is 
 - `shareId`: lowercase UUID, `Guid.NewGuid().ToString("D")`. `ShareId.TryParse` accepts only the 36-character form (no braces, no whitespace, not the nil UUID).
 - Object name: lowercase hex SHA-256 of the **uncompressed file bytes**. The first two hex characters form the fan-out folder (`objects/ab/abcdef…`).
 - Objects are **immutable**. An object blob is never overwritten or modified. Upload with `If-None-Match: *`; a `409/412` because it already exists counts as success (same name, same content).
+- **The store verifies every upload's SHA-256 and stores nothing on a mismatch** (`StorageErrors.HashMismatch`). A file that changed while it was being read must never become an object under the wrong name: because objects are immutable and an existing object is never re-uploaded, a wrong one would stay wrong. (Azure: stage the blocks while hashing, commit the block list only if the hash matches.) The pipeline treats a mismatch as "unstable", skips the path and retries it next run.
 - Object blob metadata: `sha256=<hex>`, `size=<bytes>`. Content-Type `application/octet-stream`.
 - Identical files in a share are stored once. Renames cost nothing (only the manifest changes).
 - Dedupe is **per share**, not across shares. Shares stay independent, which keeps GC and deletion trivial.
@@ -607,21 +608,24 @@ Mapped from `Error.Code` (failures) or from the report (partial successes). Noth
 ```csharp
 public interface IShareStore
 {
-    Task<Result> EnsureReadyForNewShareAsync(CancellationToken ct);                                         // e.g. create container
-    Task<Result<ManifestSnapshot?>> GetManifestAsync(ShareId shareId, CancellationToken ct);                 // null value = share doesn't exist
-    Task<Result<string>> CreateManifestAsync(ShareId shareId, Manifest manifest, CancellationToken ct);      // If-None-Match: *; returns ETag
-    Task<Result<string>> ReplaceManifestAsync(ShareId shareId, Manifest manifest, string ifMatchETag, CancellationToken ct); // StorageErrors.PreconditionFailed on 412
-    Task<Result> PutManifestHistoryAsync(ShareId shareId, Manifest manifest, CancellationToken ct);
-    IAsyncEnumerable<Result<Manifest>> ListManifestHistoryAsync(ShareId shareId, CancellationToken ct);
+    Result<StorageLocation> GetLocation();                                                                   // provider, account, container (no secrets)
+    Task<Result> EnsureReadyForNewShareAsync(CancellationToken ct);                                         // e.g. create container; idempotent
+    Task<Result<ManifestSnapshot?>> GetManifestAsync(ShareId shareId, CancellationToken ct);                 // null value = share doesn't exist (also before "ready")
+    Task<Result<string>> CreateManifestAsync(ShareId shareId, Manifest manifest, CancellationToken ct);      // If-None-Match: *; AlreadyExists; returns ETag
+    Task<Result<string>> ReplaceManifestAsync(ShareId shareId, Manifest manifest, string ifMatchETag, CancellationToken ct); // PreconditionFailed on 412, and when HEAD is gone
+    Task<Result> PutManifestHistoryAsync(ShareId shareId, Manifest manifest, CancellationToken ct);         // already stored = success
+    IAsyncEnumerable<Result<Manifest>> ListManifestHistoryAsync(ShareId shareId, CancellationToken ct);     // oldest first
+    Task<Result> DeleteManifestHistoryAsync(ShareId shareId, Revision revision, CancellationToken ct);      // gc; missing = success
 
     Task<Result<bool>> ObjectExistsAsync(ShareId shareId, ContentHash hash, CancellationToken ct);
-    Task<Result> UploadObjectAsync(ShareId shareId, ContentHash hash, Stream content, long length, CancellationToken ct);
-    Task<Result<Stream>> OpenObjectReadAsync(ShareId shareId, ContentHash hash, CancellationToken ct);
-    IAsyncEnumerable<Result<StoredObjectInfo>> ListObjectsAsync(ShareId shareId, CancellationToken ct);
-    Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken ct);
+    Task<Result> UploadObjectAsync(ShareId shareId, ContentHash hash, Stream content, long length, CancellationToken ct); // verifies SHA-256 (HashMismatch); existing = success
+    Task<Result<Stream>> OpenObjectReadAsync(ShareId shareId, ContentHash hash, CancellationToken ct);      // NotFound
+    IAsyncEnumerable<Result<StoredObjectInfo>> ListObjectsAsync(ShareId shareId, CancellationToken ct);     // canonical object names only
+    Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken ct);                // missing = success
 }
 
 public sealed record ManifestSnapshot(Manifest Manifest, string ETag);
+public sealed record StoredObjectInfo(ContentHash Hash, long Size, DateTimeOffset LastModifiedUtc);
 ```
 
 - **Every method returns `Result` / `Result<T>`.** The provider translates its SDK's failures into `StorageErrors` (`NotFound`, `PreconditionFailed`, `AlreadyExists`, `Unauthorized`, `Unreachable`, `Timeout`). Application code never sees `Azure.RequestFailedException`. Only `OperationCanceledException` from the caller's own token propagates.
@@ -667,6 +671,7 @@ public sealed record ManifestSnapshot(Manifest Manifest, string ETag);
 | `xunit.v3` | tests | Test framework, on **Microsoft.Testing.Platform** |
 | `Shouldly` | tests | Assertions |
 | `NSubstitute` | tests | Substitutes for abstractions in handler tests |
+| `xunit.v3.extensibility.core` | `MySync.Testing` | `[Fact]` and `TestContext` for the abstract contract suites, without making the library a test project |
 | `Testcontainers.Azurite` | `MySync.Testing`, Azurite-backed suites | Starts the Azurite container. Keep ≥ 4.16: 4.13 pulls in an SSH.NET with known vulnerabilities (NU1903 fails the build) |
 | `Microsoft.Extensions.DependencyInjection` | tests only | A concrete `ServiceCollection` for DI tests (the libraries reference only the abstractions) |
 | `NetArchTest.Rules` | architecture tests | Dependency rules (§3) |
@@ -687,12 +692,13 @@ Every test project is xUnit v3 on the Microsoft Testing Platform with Shouldly, 
 | `MySync.Storage.Azure.IntegrationTests` (`tests/mysync/storage-azure-integration-tests/`) | `type:integration-test` | `AzureBlobShareStore` against **Azurite**, plus the `IShareStore` **contract suite** | Azurite |
 | `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + Azure) with two temp folders as two "machines" | Azurite |
 | `MySync.ArchitectureTests` (`tests/mysync/architecture-tests/`) | `type:architecture-test` | The dependency rules in §3 | none |
-| `MySync.Testing` (`tests/mysync/testing/`) | `type:lib` | **Not a test project.** Shared fakes and builders: `InMemoryShareStore`, `InMemoryLocalFolder`, `ManifestBuilder`, `TempShareFolder`, `FixedDateTimeProvider`, `RecordingSyncProgressReporter`, `ShareStoreContractTests` (abstract) | |
+| `MySync.Testing` (`tests/mysync/testing/`) | `type:lib` | **Not a test project.** Shared fakes and builders: `InMemoryShareStore`, `InMemoryLocalFolder` (also a simple `IFileScanner`; `ExecutableBitSupported = false` simulates Windows), `PathListIgnoreMatcher`, `ManifestBuilder` (real hashes + their bytes), `ManifestAssertions.ShouldMatchManifest`, `TempShareFolder`, `FixedDateTimeProvider`, `RecordingSyncProgressReporter`, and the abstract contract suites `Contracts/ShareStoreContractTests` and `Contracts/LocalFolderContractTests` | |
 
 ### Conventions
 
 - **Handler tests never touch real storage or disk.** Use `InMemoryShareStore` / `InMemoryLocalFolder` for behaviour, and NSubstitute when a test is about one failing call.
 - **Progress is asserted as a sequence**, not as counters. `RecordingSyncProgressReporter` writes each call down as a line, so a test pins the whole order. Nothing in `apps/mysync/Rendering` is unit-tested, so this is where the reporting contract is held.
+- **One contract suite per abstraction, run against the fake and the real thing.** `LocalFolderContractTests` does for `ILocalFolder` what `ShareStoreContractTests` does for storage: it runs against `InMemoryLocalFolder` (as Unix and as Windows) in the application tests, and against the real folder in the infrastructure tests.
 - **One contract suite, many stores.** `ShareStoreContractTests` (abstract, in `MySync.Testing`) pins ETag and conditional-write behaviour: `If-Match` mismatch → `PreconditionFailed`, `If-None-Match: *` on an existing blob → `AlreadyExists`, missing manifest → null, object idempotency. It runs against `InMemoryShareStore` (in application unit tests) **and** against Azurite (in the storage integration tests). If the fake and Azurite disagree, the fake is wrong.
 - Tests that touch the environment use their own variables and never read the developer's real `AZURE_STORAGE_CONNECTION_STRING`.
 

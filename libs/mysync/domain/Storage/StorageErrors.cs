@@ -17,6 +17,10 @@ public static class StorageErrors
     public static Error AlreadyExists(string blobName) => Error.Conflict(
         "Storage.AlreadyExists", $"'{blobName}' already exists.");
 
+    /// <summary>The uploaded bytes don't hash to the object's name; nothing was stored.</summary>
+    public static Error HashMismatch(string blobName) => Error.Problem(
+        "Storage.HashMismatch", $"The content uploaded for '{blobName}' does not match its hash; it was not stored.");
+
     public static readonly Error Unauthorized = Error.Problem(
         "Storage.Unauthorized", "The storage account rejected the credentials. Check AZURE_STORAGE_CONNECTION_STRING.");
 

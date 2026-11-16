@@ -9,6 +9,9 @@
 
   <ItemGroup>
     <PackageReference Include="Testcontainers.Azurite" />
+    <!-- The abstract contract suites carry [Fact]s and assertions; the runner stays in the test projects. -->
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="xunit.v3.extensibility.core" />
   </ItemGroup>
 
   <ItemGroup>
