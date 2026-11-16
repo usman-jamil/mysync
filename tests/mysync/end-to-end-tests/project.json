@@ -1,0 +1,24 @@
+{
+  "name": "mysync-end-to-end-tests",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/mysync/end-to-end-tests",
+  "tags": [
+    "stack:mysync",
+    "type:e2e-test"
+  ],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet build tests/mysync/end-to-end-tests/MySync.EndToEndTests.csproj -c Release"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet test --project tests/mysync/end-to-end-tests/MySync.EndToEndTests.csproj -c Release"
+      }
+    }
+  }
+}

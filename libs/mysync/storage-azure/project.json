@@ -1,0 +1,18 @@
+{
+  "name": "mysync-storage-azure",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/mysync/storage-azure",
+  "tags": [
+    "stack:mysync",
+    "type:lib"
+  ],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet build libs/mysync/storage-azure/MySync.Storage.Azure.csproj -c Release"
+      }
+    }
+  }
+}

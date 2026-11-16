@@ -1,0 +1,34 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path="CLAUDE.md" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/apps/" />
+  <Folder Name="/apps/mysync/">
+    <Project Path="apps/mysync/MySync.Cli.csproj" />
+  </Folder>
+  <Folder Name="/libs/" />
+  <Folder Name="/libs/mysync/">
+    <Project Path="libs/mysync/domain/MySync.Domain.csproj" />
+    <Project Path="libs/mysync/application/MySync.Application.csproj" />
+    <Project Path="libs/mysync/infrastructure/MySync.Infrastructure.csproj" />
+    <Project Path="libs/mysync/storage-azure/MySync.Storage.Azure.csproj" />
+  </Folder>
+  <Folder Name="/libs/shared/">
+    <Project Path="libs/shared/shared-kernel/SharedKernel.csproj" />
+  </Folder>
+  <Folder Name="/tests/" />
+  <Folder Name="/tests/mysync/">
+    <Project Path="tests/mysync/testing/MySync.Testing.csproj" />
+    <Project Path="tests/mysync/domain-unit-tests/MySync.Domain.UnitTests.csproj" />
+    <Project Path="tests/mysync/application-unit-tests/MySync.Application.UnitTests.csproj" />
+    <Project Path="tests/mysync/infrastructure-unit-tests/MySync.Infrastructure.UnitTests.csproj" />
+    <Project Path="tests/mysync/storage-azure-integration-tests/MySync.Storage.Azure.IntegrationTests.csproj" />
+    <Project Path="tests/mysync/end-to-end-tests/MySync.EndToEndTests.csproj" />
+    <Project Path="tests/mysync/architecture-tests/MySync.ArchitectureTests.csproj" />
+  </Folder>
+</Solution>

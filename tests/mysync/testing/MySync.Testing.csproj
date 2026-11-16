@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Shared fakes and builders for the mysync test projects. Not a test project itself. -->
+  <PropertyGroup>
+    <RootNamespace>MySync.Testing</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Testcontainers.Azurite" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\libs\mysync\application\MySync.Application.csproj" />
+  </ItemGroup>
+
+</Project>

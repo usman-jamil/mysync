@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MySync.ArchitectureTests</RootNamespace>
+    <OutputType>exe</OutputType>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NetArchTest.Rules" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="xunit.v3.mtp-v2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\libs\shared\shared-kernel\SharedKernel.csproj" />
+    <ProjectReference Include="..\..\..\libs\mysync\domain\MySync.Domain.csproj" />
+    <ProjectReference Include="..\..\..\libs\mysync\application\MySync.Application.csproj" />
+    <ProjectReference Include="..\..\..\libs\mysync\infrastructure\MySync.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\libs\mysync\storage-azure\MySync.Storage.Azure.csproj" />
+    <ProjectReference Include="..\..\..\apps\mysync\MySync.Cli.csproj" />
+  </ItemGroup>
+
+</Project>

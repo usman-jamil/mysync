@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MySync.Storage.Azure</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The only project allowed to reference Azure.* (CLAUDE.md §3). -->
+    <PackageReference Include="Azure.Storage.Blobs" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\application\MySync.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MySync.Storage.Azure.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

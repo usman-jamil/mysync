@@ -1,0 +1,23 @@
+{
+  "name": "mysync-domain",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/mysync/domain",
+  "tags": ["stack:mysync", "type:lib"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet build libs/mysync/domain/MySync.Domain.csproj -c Release"
+      }
+    },
+    "generate-unicode": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "dotnet run tools/unicode/GenerateNfcData.cs -- {args.version}",
+        "args": "--version=17.0.0"
+      }
+    }
+  }
+}

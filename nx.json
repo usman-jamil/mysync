@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/bin/**/*",
+      "!{projectRoot}/**/obj/**/*"
+    ],
+    "sharedGlobals": [
+      "{workspaceRoot}/global.json",
+      "{workspaceRoot}/Directory.Build.props",
+      "{workspaceRoot}/Directory.Packages.props",
+      "{workspaceRoot}/.editorconfig"
+    ]
+  },
+  "targetDefaults": {
+    "build": {
+      "cache": true,
+      "inputs": ["production", "^production"]
+    },
+    "test": {
+      "cache": true,
+      "inputs": ["default", "^production"]
+    },
+    "publish": {
+      "cache": false
+    }
+  }
+}

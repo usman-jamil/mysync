@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_VERSION: '10.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  TESTINGPLATFORM_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  build-and-unit-test:
+    name: Build + unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore mysync.slnx
+
+      - name: Build
+        run: dotnet build mysync.slnx --configuration Release --no-restore
+
+      # Path rules and local-disk behaviour differ per OS, so unit tests run on all three.
+      - name: Unit + architecture tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for project in \
+            tests/mysync/domain-unit-tests/MySync.Domain.UnitTests.csproj \
+            tests/mysync/application-unit-tests/MySync.Application.UnitTests.csproj \
+            tests/mysync/infrastructure-unit-tests/MySync.Infrastructure.UnitTests.csproj \
+            tests/mysync/architecture-tests/MySync.ArchitectureTests.csproj
+          do
+            dotnet test --project "$project" --configuration Release --no-build
+          done
+
+  azurite:
+    name: Azurite suites
+    # Docker is only available on the Linux runners.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Build
+        run: dotnet build mysync.slnx --configuration Release
+
+      - name: Storage integration + end-to-end tests
+        run: |
+          set -euo pipefail
+          dotnet test --project tests/mysync/storage-azure-integration-tests/MySync.Storage.Azure.IntegrationTests.csproj --configuration Release --no-build
+          dotnet test --project tests/mysync/end-to-end-tests/MySync.EndToEndTests.csproj --configuration Release --no-build

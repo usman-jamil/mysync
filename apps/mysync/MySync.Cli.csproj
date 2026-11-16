@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>MySync.Cli</RootNamespace>
+    <!-- Renaming the tool? See the note at the top of CLAUDE.md. -->
+    <AssemblyName>mysync</AssemblyName>
+    <!-- Overridden by the release workflow with -p:Version=<tag>. -->
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Update="project.json">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ConsoleAppFramework">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="ConsoleAppFramework.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Extensions.Hosting" />
+    <PackageReference Include="Serilog.Extensions.Logging" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+    <PackageReference Include="Spectre.Console" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\libs\mysync\application\MySync.Application.csproj" />
+    <ProjectReference Include="..\..\libs\mysync\infrastructure\MySync.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\libs\mysync\storage-azure\MySync.Storage.Azure.csproj" />
+  </ItemGroup>
+
+</Project>

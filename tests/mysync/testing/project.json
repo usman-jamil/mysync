@@ -1,0 +1,18 @@
+{
+  "name": "mysync-testing",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/mysync/testing",
+  "tags": [
+    "stack:mysync",
+    "type:lib"
+  ],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet build tests/mysync/testing/MySync.Testing.csproj -c Release"
+      }
+    }
+  }
+}

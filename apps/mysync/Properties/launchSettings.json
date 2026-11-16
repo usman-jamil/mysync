@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "version": {
+      "commandName": "Project",
+      "commandLineArgs": "--version"
+    },
+    "help": {
+      "commandName": "Project",
+      "commandLineArgs": "--help"
+    },
+    "self-check": {
+      "commandName": "Project",
+      "commandLineArgs": "self-check --verbose"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# Keep line endings identical on every OS so EnforceCodeStyleInBuild (IDE0055) behaves the
+# same on the ubuntu, windows and macos CI runners. .editorconfig asks for CRLF in C#.
+* text=auto
+*.cs text eol=crlf
+*.sh text eol=lf
+*.gz binary

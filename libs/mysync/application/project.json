@@ -1,0 +1,18 @@
+{
+  "name": "mysync-application",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/mysync/application",
+  "tags": [
+    "stack:mysync",
+    "type:lib"
+  ],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet build libs/mysync/application/MySync.Application.csproj -c Release"
+      }
+    }
+  }
+}

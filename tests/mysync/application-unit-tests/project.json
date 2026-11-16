@@ -1,0 +1,24 @@
+{
+  "name": "mysync-application-unit-tests",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/mysync/application-unit-tests",
+  "tags": [
+    "stack:mysync",
+    "type:unit-test"
+  ],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet build tests/mysync/application-unit-tests/MySync.Application.UnitTests.csproj -c Release"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet test --project tests/mysync/application-unit-tests/MySync.Application.UnitTests.csproj -c Release"
+      }
+    }
+  }
+}

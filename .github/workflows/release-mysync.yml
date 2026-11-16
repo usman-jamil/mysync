@@ -1,0 +1,300 @@
+name: Release mysync
+
+# Publishes the mysync CLI (apps/mysync) for every supported platform (CLAUDE.md §16).
+#
+# Tagging `mysync-1.2.3` (or `mysync-v1.2.3-beta.1`) builds the binaries and creates the GitHub
+# release. `workflow_dispatch` runs the same build and leaves the archives as workflow artifacts
+# without publishing anything, so a release can be rehearsed before it is tagged.
+
+on:
+  push:
+    tags:
+      - 'mysync-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, e.g. 1.2.3 or 1.2.3-beta.1. Dry run — no release is published.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-mysync-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: '10.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  TESTINGPLATFORM_TELEMETRY_OPTOUT: 'true'
+  PROJECT: apps/mysync/MySync.Cli.csproj
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - name: Resolve the version from the tag or the dispatch input
+        id: resolve
+        env:
+          # Through the environment rather than inline `${{ }}`: a tag name is attacker-supplied
+          # text and must never be pasted into a shell script.
+          RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          raw="$RAW_VERSION"
+          if [ "$EVENT_NAME" != "workflow_dispatch" ]; then
+            raw="${raw#mysync-}"
+          fi
+          version="${raw#v}"
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$version' is not a valid version. Tag as mysync-1.2.3 or mysync-v1.2.3-beta.1."
+            exit 1
+          fi
+
+          prerelease=false
+          case "$version" in
+            *-*) prerelease=true ;;
+          esac
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "mysync $version (prerelease: $prerelease)" >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Build
+        run: dotnet build mysync.slnx --configuration Release
+
+      - name: Test everything (Azurite suites included; Docker is available here)
+        run: dotnet test --solution mysync.slnx --configuration Release --no-build
+
+  build:
+    name: Build ${{ matrix.rid }}
+    needs: [version, test]
+    # Every target is cross-published from Linux. A self-contained (non-AOT) publish does not
+    # need a matching host, and building the Unix targets on a Unix host is what preserves the
+    # executable bit inside the archives — a Windows runner would drop it.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            archive: tar.gz
+          - rid: linux-arm64
+            archive: tar.gz
+          - rid: linux-musl-x64
+            archive: tar.gz
+          - rid: osx-x64
+            archive: tar.gz
+          - rid: osx-arm64
+            archive: tar.gz
+          - rid: win-x64
+            archive: zip
+          - rid: win-arm64
+            archive: zip
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # Mirrored by the Nx `publish` target in apps/mysync/project.json — keep them in sync.
+      # Not trimmed: the configuration binder and Serilog resolve types by reflection.
+      - name: Publish
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RID: ${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+
+          dotnet publish "$PROJECT" \
+            --configuration Release \
+            --runtime "$RID" \
+            --self-contained true \
+            --output "publish/$RID" \
+            -p:Version="$VERSION" \
+            -p:PublishSingleFile=true \
+            -p:EnableCompressionInSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:InvariantGlobalization=true \
+            -p:DebugType=embedded
+
+      # Proves the self-containment claim on stock images: the tagged version is reported, and
+      # Unicode normalization works inside the shipped binary (CLAUDE.md §8).
+      - name: Smoke test in a stock container
+        if: matrix.rid == 'linux-x64' || matrix.rid == 'linux-musl-x64'
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RID: ${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+
+          if [ "$RID" = "linux-musl-x64" ]; then
+            image=alpine:3.22
+            # Self-contained .NET on musl still needs the C++ runtime from the distro.
+            prepare='apk add --no-cache libstdc++ libgcc >/dev/null'
+          else
+            image=ubuntu:24.04
+            prepare='true'
+          fi
+
+          docker run --rm --volume "$PWD/publish/$RID:/opt/mysync:ro" "$image" sh -c "
+            set -e
+            $prepare
+            reported=\$(/opt/mysync/mysync --version)
+            if [ \"\$reported\" != \"$VERSION\" ]; then
+              echo \"Published binary reported version '\$reported', expected '$VERSION'.\" >&2
+              exit 1
+            fi
+            /opt/mysync/mysync self-check
+          "
+
+      - name: Package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RID: ${{ matrix.rid }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          name="mysync-$VERSION-$RID"
+
+          if [ "$ARCHIVE" = "zip" ]; then
+            (cd "publish/$RID" && zip --quiet --recurse-paths "$GITHUB_WORKSPACE/dist/$name.zip" .)
+          else
+            tar --create --gzip --file "dist/$name.tar.gz" --directory "publish/$RID" .
+          fi
+
+          (cd dist && sha256sum "$name.$ARCHIVE" > "$name.$ARCHIVE.sha256")
+          ls -l dist
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysync-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish release
+    needs: [version, build]
+    # Tags publish; a manual run only leaves the archives as workflow artifacts.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download every archive
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: mysync-*
+          merge-multiple: true
+
+      - name: Collect the checksums into one file
+        run: |
+          set -euo pipefail
+
+          cd artifacts
+          cat ./*.sha256 | sort -k 2 > SHA256SUMS.txt
+          rm -f ./*.sha256
+          cat SHA256SUMS.txt
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          notes="$RUNNER_TEMP/notes.md"
+          cat > "$notes" <<'NOTES'
+          Self-contained builds of the `mysync` CLI. No .NET runtime or SDK is required.
+
+          | Platform | Download |
+          | --- | --- |
+          | macOS (Apple silicon) | `mysync-VERSION-osx-arm64.tar.gz` |
+          | macOS (Intel) | `mysync-VERSION-osx-x64.tar.gz` |
+          | Linux (x64, glibc) | `mysync-VERSION-linux-x64.tar.gz` |
+          | Linux (arm64, glibc) | `mysync-VERSION-linux-arm64.tar.gz` |
+          | Linux (x64, musl / Alpine) | `mysync-VERSION-linux-musl-x64.tar.gz` |
+          | Windows (x64) | `mysync-VERSION-win-x64.zip` |
+          | Windows (arm64) | `mysync-VERSION-win-arm64.zip` |
+
+          ### Install — macOS and Linux
+
+          ```bash
+          tar -xzf mysync-VERSION-<platform>.tar.gz
+          sudo mv mysync /usr/local/bin/mysync
+          mysync --version
+          ```
+
+          The binary is unsigned, so macOS quarantines downloads. Clear it with
+          `xattr -d com.apple.quarantine /usr/local/bin/mysync`.
+
+          ### Install — Windows
+
+          Unzip and put `mysync.exe` somewhere on your `PATH`. SmartScreen warns about unsigned
+          executables the first time; choose *More info* → *Run anyway*.
+
+          ### Configure
+
+          ```bash
+          export AZURE_STORAGE_CONNECTION_STRING="<connection string>"
+          export MYSYNC_CONTAINER=mysync   # optional
+          ```
+
+          ### Verify the download
+
+          ```bash
+          sha256sum -c --ignore-missing SHA256SUMS.txt
+          ```
+          NOTES
+
+          sed -i "s/VERSION/$VERSION/g" "$notes"
+
+          generated=$(gh api \
+            --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            --field tag_name="$TAG" \
+            --jq '.body' || true)
+
+          if [ -n "$generated" ]; then
+            printf '\n---\n\n%s\n' "$generated" >> "$notes"
+          fi
+
+          prerelease_flag=""
+          if [ "$PRERELEASE" = "true" ]; then
+            prerelease_flag="--prerelease"
+          fi
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "mysync $VERSION" \
+            --notes-file "$notes" \
+            $prerelease_flag \
+            artifacts/*

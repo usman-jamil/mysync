@@ -1,0 +1,16 @@
+{
+  "name": "@mysync/source",
+  "version": "0.0.0",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "nx build mysync",
+    "test": "nx run-many -t test --all",
+    "test:unit": "nx run-many -t test --projects=tag:type:unit-test",
+    "test:architecture": "nx run-many -t test --projects=tag:type:architecture-test",
+    "test:azurite": "nx run-many -t test --projects=tag:type:integration-test,tag:type:e2e-test"
+  },
+  "devDependencies": {
+    "nx": "22.7.5"
+  }
+}

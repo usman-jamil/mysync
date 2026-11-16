@@ -1,0 +1,33 @@
+{
+  "name": "mysync",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/mysync",
+  "tags": [
+    "stack:mysync",
+    "type:app"
+  ],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet build apps/mysync/MySync.Cli.csproj -c Release"
+      }
+    },
+    "run": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet run --project apps/mysync/MySync.Cli.csproj --"
+      },
+      "cache": false
+    },
+    "publish": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "rid": "linux-x64",
+        "command": "dotnet publish apps/mysync/MySync.Cli.csproj -c Release -r {args.rid} --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:InvariantGlobalization=true -p:DebugType=embedded -o out/{args.rid}"
+      }
+    }
+  }
+}
