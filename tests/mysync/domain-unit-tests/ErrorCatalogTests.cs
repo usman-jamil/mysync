@@ -1,0 +1,62 @@
+using MySync.Domain.Configuration;
+using MySync.Domain.Paths;
+using MySync.Domain.Shares;
+using MySync.Domain.State;
+using MySync.Domain.Storage;
+using MySync.Domain.Sync;
+using SharedKernel;
+using Shouldly;
+using Xunit;
+using static MySync.Domain.UnitTests.TestSupport.Fixtures;
+
+namespace MySync.Domain.UnitTests;
+
+/// <summary>
+/// <c>apps/mysync/ExitCodes.cs</c> maps errors to exit codes by <see cref="Error.Code"/>, and maps
+/// every <see cref="ErrorType.Validation"/> error to exit 2 before looking at the code. These
+/// tests pin both halves of that contract from the domain side.
+/// </summary>
+public class ErrorCatalogTests
+{
+    public static TheoryData<Error, string> ErrorsWithTheirOwnExitCode => new()
+    {
+        { ShareErrors.FolderNotEmpty("/tmp/x"), "Shares.FolderNotEmpty" }, // exit 4
+        { ShareErrors.AlreadyAShare(Share()), "Shares.AlreadyAShare" }, // exit 4
+        { ShareErrors.UnsafeRoot("/"), "Shares.UnsafeRoot" }, // exit 4
+        { SyncErrors.CommitRetriesExhausted(5), "Sync.CommitRetriesExhausted" }, // exit 5
+        { StateErrors.FolderLocked, "State.FolderLocked" }, // exit 6
+        { SyncErrors.MassDeleteBlocked(40, 50), "Sync.MassDeleteBlocked" }, // exit 7
+        { ShareErrors.NotFound(Share()), "Shares.NotFound" }, // exit 8
+        { StorageErrors.Unauthorized, "Storage.Unauthorized" }, // exit 8
+    };
+
+    [Theory]
+    [MemberData(nameof(ErrorsWithTheirOwnExitCode))]
+    public void Codes_Should_MatchWhatExitCodesLooksFor_AndNotBeValidationErrors(Error error, string expectedCode)
+    {
+        error.Code.ShouldBe(expectedCode);
+
+        // A Validation type would turn these into exit 2 before their code is looked at.
+        error.Type.ShouldNotBe(ErrorType.Validation);
+    }
+
+    [Fact]
+    public void UsageErrors_Should_BeValidationErrors_SoTheyExitWithTwo()
+    {
+        ShareErrors.InvalidId().Type.ShouldBe(ErrorType.Validation);
+        PathErrors.Empty().Type.ShouldBe(ErrorType.Validation);
+        ConfigurationErrors.Missing("AZURE_STORAGE_CONNECTION_STRING").Type.ShouldBe(ErrorType.Validation);
+    }
+
+    [Fact]
+    public void StorageMismatch_Should_NameAccountsAndContainers_ButNoCredentials()
+    {
+        string description = StateErrors.StorageMismatch(
+            new StorageLocation("azure-blob", "teamsyncstorage", "mysync"),
+            new StorageLocation("azure-blob", "otheraccount", "mysync")).Description;
+
+        description.ShouldContain("teamsyncstorage");
+        description.ShouldContain("otheraccount");
+        description.ShouldNotContain("AccountKey", Case.Insensitive);
+    }
+}

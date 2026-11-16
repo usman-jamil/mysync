@@ -159,7 +159,7 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | Project (path) | Responsibility | Contains |
 |---|---|---|
 | `SharedKernel` (`libs/shared/shared-kernel/SharedKernel.csproj`) | Building blocks | `Result` / `Result<T>`, `Error`, `ErrorType`, `ValidationError`, `IDateTimeProvider`. No dependencies. |
-| `MySync.Domain` (`libs/mysync/domain/MySync.Domain.csproj`) | Sync rules | Value objects (`ShareId`, `SharePath`, `ContentHash`, `Revision`), `Manifest` / `ManifestEntry`, `ShareState`, `MergePlanner`, `SyncPlan` / `SyncAction`, `Conflict` / `ConflictKind`, `MassDeleteGuard`, `ShareLayout` (blob key scheme, provider-agnostic), `StateFileNames`, `NfcNormalizer` (our own Unicode NFC, §8), and **static `*Errors` classes** (`ShareErrors`, `SyncErrors`, `PathErrors`, `StateErrors`, `StorageErrors`, `ConfigurationErrors`). No I/O. |
+| `MySync.Domain` (`libs/mysync/domain/MySync.Domain.csproj`) | Sync rules | Value objects (`ShareId`, `SharePath`, `ContentHash`, `Revision`), `Manifest` / `ManifestEntry`, `ShareState`, `MergePlanner`, `SyncPlan` / `SyncAction`, `Conflict` / `ConflictKind`, `MassDeleteGuard`, `ShareLayout` (blob key scheme, provider-agnostic), `ShareState` + `StorageLocation` + `HashCacheEntry`, `CaseCollision`, `StateFileNames`, `NfcNormalizer` (our own Unicode NFC, §8), and **static `*Errors` classes** (`ShareErrors`, `SyncErrors`, `PathErrors`, `StateErrors`, `StorageErrors`, `ConfigurationErrors`). No I/O. |
 | `MySync.Application` (`libs/mysync/application/MySync.Application.csproj`) | Use cases | Command/query handlers, FluentValidation validators, **all abstractions** (`I...`), behaviors (decorators), response DTOs, the internal `SyncPipeline` that sequences the phases in §9. |
 | `MySync.Infrastructure` (`libs/mysync/infrastructure/MySync.Infrastructure.csproj`) | Local machine | `LocalFolder` / `FileScanner`, `Sha256ContentHasher`, `JsonShareStateStore` + `FolderLock`, `FileConflictLog`, `GitIgnoreRulesLoader`, `ManifestSerializer` + `MySyncJsonContext` (source-generated JSON), `MachineIdentity`, `DateTimeProvider`, `DependencyInjection.AddInfrastructure()`. |
 | `MySync.Storage.Azure` (`libs/mysync/storage-azure/MySync.Storage.Azure.csproj`) | Azure Blob provider | `AzureBlobShareStore : IShareStore`, `AzureStorageOptions`, `AzureErrorMapper` (`RequestFailedException` → `StorageErrors`), `ConnectionStringRedactor`, `DependencyInjection.AddAzureBlobStorage()`. |
@@ -329,7 +329,8 @@ Everything for a share lives under one prefix in the container. Key building is 
     └── objects/<h0h1>/<sha256-hex>         # file contents, named by SHA-256 of the content
 ```
 
-- `shareId`: lowercase UUID, `Guid.NewGuid().ToString("D")`.
+- Blob names come from `ShareLayout.For(shareId)` (`.Manifest`, `.ManifestHistory(rev)`, `.ObjectBlob(hash)`), and `TryParseObject` / `TryParseManifestHistory` accept only canonical names, so a stray blob is never taken for an object. `ShareLayoutTests` pins the exact strings: changing them breaks every existing share.
+- `shareId`: lowercase UUID, `Guid.NewGuid().ToString("D")`. `ShareId.TryParse` accepts only the 36-character form (no braces, no whitespace, not the nil UUID).
 - Object name: lowercase hex SHA-256 of the **uncompressed file bytes**. The first two hex characters form the fan-out folder (`objects/ab/abcdef…`).
 - Objects are **immutable**. An object blob is never overwritten or modified. Upload with `If-None-Match: *`; a `409/412` because it already exists counts as success (same name, same content).
 - Object blob metadata: `sha256=<hex>`, `size=<bytes>`. Content-Type `application/octet-stream`.
@@ -356,7 +357,9 @@ Everything for a share lives under one prefix in the container. Key building is 
 ```
 
 - `entries` is keyed by **normalized relative path** (§8), sorted ordinally when serialized, so output is deterministic.
-- `type: "dir"` entries exist **only for empty directories**. Non-empty directories are implied by file paths.
+- `type: "dir"` entries exist **only for empty directories**. Non-empty directories are implied by file paths. `Manifest` drops a redundant `dir` entry rather than rejecting the manifest.
+- `Manifest` rejects (`ShareErrors.InvalidManifest`) the same path twice (including NFD/NFC spellings of one name, which `SharePath` makes equal) and any entry "inside" a file (`a` as a file plus `a/b`). Timestamps are not cross-checked: they come from different machines' clocks.
+- A higher revision only comes from `manifest.CreateNextRevision(...)`, so "+1 per commit" holds by construction.
 - `revision` goes up by exactly 1 per commit.
 - Readers **must refuse** a manifest with `formatVersion` higher than they support (`ShareErrors.UnsupportedFormat` → "upgrade mysync").
 - Plain JSON for v1, for easy debugging. If manifests get large (>~10 MB), gzip them in a later format version.
@@ -391,7 +394,7 @@ Owned by `IShareStateStore` (`JsonShareStateStore`). JSON, written **atomically*
   "container": "mysync",
   "shareId": "0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10",
   "baseRevision": 17,
-  "base": { "docs/readme.md": { "type": "file", "sha256": "9f86d0…", "size": 1204, "exec": false } },
+  "base": { "docs/readme.md": { "type": "file", "sha256": "9f86d0…", "size": 1204, "mtimeUtc": "2026-11-15T18:31:02Z", "exec": false } },
   "hashCache": { "docs/readme.md": { "size": 1204, "mtimeTicksUtc": 638672..., "sha256": "9f86d0…" } },
   "conflicts": [
     {
@@ -407,6 +410,7 @@ Owned by `IShareStateStore` (`JsonShareStateStore`). JSON, written **atomically*
 }
 ```
 
+- `base` uses the same `ManifestEntry` type as the manifest (so it carries `mtimeUtc` too): after a commit the new base is literally the committed manifest's entries.
 - `base` is the **last state this folder and the remote agreed on**. It drives the three-way merge (§9). Losing or corrupting it would make deletes look like additions, so treat it carefully.
 - `hashCache` avoids re-hashing unchanged files. A cached hash is reused only if size **and** mtime match exactly. **Racy-mtime rule:** if a file's mtime is within 2 seconds of the moment it was hashed, don't store it in the cache (coarse-resolution filesystems such as FAT can hide a same-second edit).
 - `conflicts` is rebuilt every sync from the merge plan. An entry disappears when the path is no longer in conflict. `kind` is one of `modify/modify`, `add/add`, `modify/delete`, `delete/modify`, `type`.
@@ -440,7 +444,7 @@ Names are constants in `MySync.Domain.State.StateFileNames`.
 Rules live in `MySync.Domain/Paths/` (`SharePath` value object, `PathRules`, `PathErrors`). The OS-facing side (`ILocalFolder`) lives in Infrastructure. Both need thorough unit tests run on all three OSes in CI.
 
 - Manifest paths are **relative**, use `/`, have no leading `/` and no `.` or `..` segments, and are **Unicode NFC normalized**. macOS can return NFD names, so normalize on scan and when mapping manifest → local path.
-- **Validate every path read from a remote manifest** before touching disk. Reject absolute paths, `..`, drive letters, NUL and control characters. Make sure the resolved full path stays inside the share root (defence against a crafted manifest). A `SharePath` can only be constructed through this validation.
+- **Validate every path read from a remote manifest** before touching disk. Reject absolute paths, `..`, drive letters, NUL and control characters (C0, DEL and C1), unpaired surrogates, and **backslashes** (Windows treats `\` as a separator, so `a\..\..\x` would escape the root there; a Linux file with `\` in its name is skipped with a warning). Paths in error messages go through `PathErrors.Display`, which writes control characters as `\uXXXX`, so a crafted name can't send escape sequences to the terminal. Make sure the resolved full path stays inside the share root (defence against a crafted manifest). A `SharePath` can only be constructed through this validation.
 - **Case collisions:** if the manifest has two entries that differ only in case (`Foo.txt` / `foo.txt`), then on case-insensitive filesystems (Windows, default macOS) download neither. Warn and list them. On Linux they're fine. When creating a share or uploading, warn if the local tree contains case-only collisions.
 - **Windows-invalid names** (`<>:"|?*`, trailing dot/space, reserved names `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`): on Windows, skip those entries with a warning. Never fail the whole sync.
 - Long paths: use the full paths .NET produces. Document that Windows needs long-path support enabled for >260 chars.

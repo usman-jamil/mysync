@@ -237,7 +237,7 @@ internal static class NfcNormalizer
         return CompositionIndex.TryGetValue(PairKey(first, second), out composite);
     }
 
-    private static long PairKey(int first, int second) => (long)first << 21 | (uint)second;
+    private static long PairKey(int first, int second) => ((long)first << 21) | (uint)second;
 
     private static string ToString(List<int> codePoints, int capacity)
     {

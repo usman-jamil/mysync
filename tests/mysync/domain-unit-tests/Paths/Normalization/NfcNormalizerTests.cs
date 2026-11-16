@@ -105,15 +105,18 @@ public class NfcNormalizerTests
         NfcNormalizer.Normalize(input).ShouldBeSameAs(input);
     }
 
-    [Theory]
-    [InlineData("a\uD800b")]
-    [InlineData("\uDC00é")]
-    [InlineData("é\uD800")]
-    public void Normalize_Should_PassUnpairedSurrogatesThrough(string input)
+    // Not [InlineData]: attribute strings are stored as UTF-8, so an unpaired surrogate would
+    // arrive as U+FFFD and the test would silently check something else.
+    [Fact]
+    public void Normalize_Should_PassUnpairedSurrogatesThrough()
     {
-        string expected = input.Replace("é", "é", StringComparison.Ordinal);
+        const char high = '\uD800';
+        const char low = '\uDC00';
 
-        NfcNormalizer.Normalize(input).ShouldBe(expected);
+        NfcNormalizer.Normalize("a" + high + "b").ShouldBe("a" + high + "b");
+        NfcNormalizer.Normalize(low + "e\u0301").ShouldBe(low + "\u00E9");
+        NfcNormalizer.Normalize("e\u0301" + high).ShouldBe("\u00E9" + high);
+        NfcNormalizer.Normalize("a" + low + high + "b").ShouldBe("a" + low + high + "b"); // reversed pair stays unpaired
     }
 
     private static void Check(ConformanceCase testCase, string input, string expected, List<string> failures)
