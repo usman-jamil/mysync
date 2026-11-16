@@ -26,27 +26,42 @@ public class ManifestEntryTests
     }
 
     [Fact]
-    public void HaveSameContent_Should_TreatTwoAbsentEntriesAsTheSame()
+    public void AreEquivalent_Should_TreatTwoAbsentEntriesAsTheSame()
     {
-        ManifestEntry.HaveSameContent(null, null).ShouldBeTrue();
+        ManifestEntry.AreEquivalent(null, null).ShouldBeTrue();
     }
 
     [Fact]
-    public void HaveSameContent_Should_CompareFilesByHashOnly()
+    public void AreEquivalent_Should_IgnoreTheMtime_SoTouchingAFileIsNotAChange()
     {
         FileEntry original = File();
-        FileEntry touched = Ok(FileEntry.Create(original.Sha256, original.Size, Updated, executable: true));
+        FileEntry touched = Ok(FileEntry.Create(original.Sha256, original.Size, Updated, original.Executable));
 
-        ManifestEntry.HaveSameContent(original, touched).ShouldBeTrue();
-        ManifestEntry.HaveSameContent(original, File(HashOfEmpty, size: 0)).ShouldBeFalse();
+        ManifestEntry.AreEquivalent(original, touched).ShouldBeTrue();
     }
 
     [Fact]
-    public void HaveSameContent_Should_TreatTypeChangesAndDeletesAsDifferent()
+    public void AreEquivalent_Should_TreatADifferentHashAsAChange()
     {
-        ManifestEntry.HaveSameContent(File(), DirectoryEntry.Instance).ShouldBeFalse();
-        ManifestEntry.HaveSameContent(File(), null).ShouldBeFalse();
-        ManifestEntry.HaveSameContent(null, DirectoryEntry.Instance).ShouldBeFalse();
-        ManifestEntry.HaveSameContent(DirectoryEntry.Instance, DirectoryEntry.Instance).ShouldBeTrue();
+        ManifestEntry.AreEquivalent(File(), File(HashOfEmpty, size: 0)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void AreEquivalent_Should_TreatAnExecutableBitChangeAsAChange_SoChmodSyncs()
+    {
+        FileEntry script = File(executable: false);
+        FileEntry madeExecutable = Ok(FileEntry.Create(script.Sha256, script.Size, script.MtimeUtc, executable: true));
+
+        ManifestEntry.AreEquivalent(script, madeExecutable).ShouldBeFalse();
+        ManifestEntry.AreEquivalent(madeExecutable, script).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void AreEquivalent_Should_TreatTypeChangesAndDeletesAsDifferent()
+    {
+        ManifestEntry.AreEquivalent(File(), DirectoryEntry.Instance).ShouldBeFalse();
+        ManifestEntry.AreEquivalent(File(), null).ShouldBeFalse();
+        ManifestEntry.AreEquivalent(null, DirectoryEntry.Instance).ShouldBeFalse();
+        ManifestEntry.AreEquivalent(DirectoryEntry.Instance, DirectoryEntry.Instance).ShouldBeTrue();
     }
 }

@@ -23,14 +23,19 @@ public abstract record ManifestEntry
     public abstract EntryType Type { get; }
 
     /// <summary>
-    /// The comparison the merge uses (CLAUDE.md §9): type and SHA-256 only. Size follows from the
-    /// hash; mtime and the executable bit are metadata and do not make content "different".
-    /// Two absent entries are the same.
+    /// The comparison the merge uses (CLAUDE.md §9): type, SHA-256 and, for files, the executable
+    /// bit, so a <c>chmod +x</c> alone is a change that syncs. Size follows from the hash. mtime is
+    /// not compared: touching a file without changing it is not a change. Two absent entries are
+    /// equivalent.
     /// </summary>
-    public static bool HaveSameContent(ManifestEntry? left, ManifestEntry? right) => (left, right) switch
+    /// <remarks>
+    /// When only <see cref="FileEntry.Executable"/> differs, the bytes are identical, so applying
+    /// the change needs no upload or download, only the manifest entry or the local file mode.
+    /// </remarks>
+    public static bool AreEquivalent(ManifestEntry? left, ManifestEntry? right) => (left, right) switch
     {
         (null, null) => true,
-        (FileEntry l, FileEntry r) => l.Sha256 == r.Sha256,
+        (FileEntry l, FileEntry r) => l.Sha256 == r.Sha256 && l.Executable == r.Executable,
         (DirectoryEntry, DirectoryEntry) => true,
         _ => false,
     };

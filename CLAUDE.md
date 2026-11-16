@@ -449,7 +449,7 @@ Rules live in `MySync.Domain/Paths/` (`SharePath` value object, `PathRules`, `Pa
 - **Windows-invalid names** (`<>:"|?*`, trailing dot/space, reserved names `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`): on Windows, skip those entries with a warning. Never fail the whole sync.
 - Long paths: use the full paths .NET produces. Document that Windows needs long-path support enabled for >260 chars.
 - **Symlinks and junctions:** don't follow and don't sync. Skip with a warning (v1).
-- **Executable bit:** on Unix, record `exec: true` if any execute bit is set; on download, apply `u+x` (`File.SetUnixFileMode`). On Windows, store `exec: false` for new files and **preserve the existing manifest value** for files that only changed content, so a Windows edit doesn't strip the bit from a Linux script.
+- **Executable bit:** on Unix, record `exec: true` if any execute bit is set; on download, apply `u+x` (`File.SetUnixFileMode`). The bit **is part of the merge comparison** (§9), so a `chmod +x` (or `-x`) alone syncs. Applying an exec-only change transfers no bytes: locally it only changes the file mode, remotely only the manifest entry (the object already exists). On Windows the scanner can't see the bit, so it takes `exec` from the **base entry** for existing paths and uses `false` for new ones. A Windows machine then never reports an exec change of its own, a Windows edit doesn't strip the bit from a Linux script, and a remote exec change is a no-op on disk there.
 - **mtime:** after downloading, set the local file's last-write time to the manifest `mtimeUtc`, then record it in `hashCache`.
 - Content is synced byte-for-byte. **No line-ending conversion, ever.**
 - Relative paths are normalized to forward slashes in `FileScanner`, and scan results are sorted ordinally, so a share created on Windows reads the same everywhere and runs are reproducible.
@@ -490,7 +490,7 @@ This order makes a crash at any point safe to re-run. If it dies after the commi
 
 ### Merge decision table
 
-`B` = base entry, `L` = local entry, `R` = remote entry. Compare by `(type, sha256)` (`∅` = absent). Evaluate the rows **in order**:
+`B` = base entry, `L` = local entry, `R` = remote entry. Compare by `(type, sha256, exec)` via `ManifestEntry.AreEquivalent` (`∅` = absent; mtime is never compared). An exec-only change on one side is an ordinary local- or remote-wins change; an exec change on one side and a content change on the other is a conflict (row 4), like any two different changes. Evaluate the rows **in order**:
 
 | # | Condition | Action |
 |---|---|---|
