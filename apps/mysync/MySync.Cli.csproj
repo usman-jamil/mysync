@@ -6,7 +6,6 @@
     <!-- Renaming the tool? See the note at the top of CLAUDE.md. -->
     <AssemblyName>mysync</AssemblyName>
     <!-- Overridden by the release workflow with -p:Version=<tag>. -->
-    <Version>0.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

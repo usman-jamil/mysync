@@ -799,6 +799,8 @@ export AZURE_STORAGE_CONNECTION_STRING="UseDevelopmentStorage=true"
 git tag mysync-1.2.3 && git push origin mysync-1.2.3   # or mysync-v1.2.3-beta.1
 ```
 
+The project version lives in one place, `<Version>` in `Directory.Build.props` (every csproj inherits it; don't set it per project). Bump it in the commit you tag, so local builds report the same version.
+
 The tag is the version. `mysync-` and an optional `v` are stripped; the rest must be `MAJOR.MINOR.PATCH` with an optional `-suffix`, and it's passed to `dotnet publish` as `-p:Version=` (so `mysync --version` matches the tag). A suffix marks the GitHub release as a prerelease. Run the workflow from the Actions tab with a version input to rehearse: it builds and uploads the archives as workflow artifacts but publishes nothing.
 
 - **Seven targets, all cross-published from one Linux runner:** `linux-x64`, `linux-arm64`, `linux-musl-x64`, `osx-x64`, `osx-arm64`, `win-x64`, `win-arm64`. A self-contained, non-AOT publish doesn't need a matching host, and a Unix host keeps the executable bit inside the archives. Don't move the Unix targets onto a Windows runner.
