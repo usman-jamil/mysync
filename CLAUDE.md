@@ -476,6 +476,7 @@ Rules live in `MySync.Domain/Paths/` (`SharePath` value object, `PathRules`, `Pa
 3. **Read remote:** download `manifest.json` and remember its ETag.
 4. **Plan:** `MergePlanner.Plan(base, local, remote)` → `SyncPlan` (table below).
 5. **Safety guards** (`MassDeleteGuard`, fail with `SyncErrors.MassDeleteBlocked` → exit `7` unless `--allow-mass-delete`):
+   - Both thresholds are strict: deleting 11 of 22 (exactly half) or 10 of 10 passes. Empty directories don't count as local files. `--no-delete` plans delete nothing, so they never trip it.
    - The plan deletes > 50% of local files (and > 10 files).
    - The plan deletes > 50% of remote entries (and > 10). This protects against an unmounted drive or wrong folder making everything look deleted.
 6. **Upload** objects needed by local-wins actions (parallel, skip if the object exists).
@@ -501,6 +502,10 @@ This order makes a crash at any point safe to re-run. If it dies after the commi
 
 Row 4 covers every kind of conflict: modify/modify, add/add (no base, different content), local modified + remote deleted, local deleted + remote modified, and type conflicts (file on one side, directory or a file under it on the other).
 
+`MergePlanner.Plan(base, local, remote, MergeOptions)` returns a `SyncPlan` with one `SyncAction` per path. Remote-wins kinds are `Download`, `UpdateLocalMode` (exec bit only), `CreateLocalDirectory` and `DeleteLocal`. Local-wins kinds are `Upload`, `UpdateRemoteMode`, `AddRemoteDirectory` and `RemoveRemote`. The rest are `NoChange`, `Conflict` and `Skip`. Each action also says what each side holds afterwards (`LocalResult`, `RemoteResult`) and its `NewBase`.
+
+**Paths are decided one by one, then checked as trees.** Per-path decisions can combine into something no filesystem can hold: local adds a file `a` while remote adds `a/b`. Wherever the resulting manifest or the resulting local folder would have an entry inside a file, the actions that caused it become `type` conflicts. The planner repeats that until both results are consistent. Replacing a directory with a file (or the reverse) on one side only is not a conflict: the other side's entries are removed and the new one is added.
+
 #### Conflict handling: drop and log
 
 The tool **never resolves a conflict on its own** and never creates conflict copies. For a conflicted path:
@@ -523,7 +528,7 @@ A conflict clears itself on the next sync when either:
 
 Otherwise it's resolved explicitly with `mysync resolve` (§10).
 
-- `--no-delete`: turns every delete action (local or remote) into a skip, and keeps the base entry so it is reconsidered next run.
+- `--no-delete`: turns every delete action (local or remote, including replacing a file with a directory) into a skip, and keeps the base entry so it is reconsidered next run. An action that can't happen because of such a skip (downloading `a/b` while the file `a` is kept) is skipped too, not reported as a conflict.
 
 ### Creating a share (`mysync sync` with no `.mysynctool`)
 
