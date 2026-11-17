@@ -18,24 +18,45 @@ internal static class ConsoleOutput
     /// stdout, which is what a caller redirects to a file or pipes into something else —
     /// errors have to stay out of it.
     /// </summary>
-    private static readonly IAnsiConsole Stderr = AnsiConsole.Create(
+    private static IAnsiConsole Stderr = AnsiConsole.Create(
         new AnsiConsoleSettings { Out = new AnsiConsoleOutput(Console.Error) });
 
     /// <summary>Lines are never wrapped when they go to a file or a pipe: a path split in two breaks grep and scripts.</summary>
     private const int UnwrappedWidth = 4096;
 
-    /// <summary>Call once at startup, before anything is written.</summary>
+    /// <summary>
+    /// Call once at startup, before anything is written. A stream that isn't a terminal gets plain
+    /// text: no colour, no escape codes, no wrapping. Spectre would otherwise turn ANSI on in CI
+    /// (it recognises GitHub Actions and others), and a script reading mysync's output there would
+    /// get escape codes in the middle of paths. <c>NO_COLOR</c> is honoured by Spectre for terminals.
+    /// </summary>
     public static void Configure()
     {
         if (Console.IsOutputRedirected)
         {
-            AnsiConsole.Profile.Width = UnwrappedWidth;
+            AnsiConsole.Console = Plain(Console.Out);
         }
 
         if (Console.IsErrorRedirected)
         {
-            Stderr.Profile.Width = UnwrappedWidth;
+            Stderr = Plain(Console.Error);
         }
+    }
+
+    private static IAnsiConsole Plain(TextWriter writer)
+    {
+        IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.No,
+            ColorSystem = ColorSystemSupport.NoColors,
+            Interactive = InteractionSupport.No,
+            Out = new AnsiConsoleOutput(writer),
+            Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false }, // the CI enrichers re-enable ANSI
+        });
+        console.Profile.Capabilities.Ansi = false;
+        console.Profile.Capabilities.Links = false;
+        console.Profile.Width = UnwrappedWidth;
+        return console;
     }
 
     /// <summary>The stderr console: progress, warnings and failures, so stdout stays clean for output and <c>--json</c>.</summary>

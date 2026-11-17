@@ -70,12 +70,15 @@ public sealed class CliTests : IDisposable
         _b.Files().ShouldBe(_a.Files());
     }
 
-    [Fact]
-    public async Task Progress_Should_GoToStderr_AsPlainLines_WhenThereIsNoTerminal()
+    [Theory]
+    [InlineData("NOT_A_CI", "1")]
+    [InlineData("GITHUB_ACTIONS", "true")] // Spectre turns ANSI on for these unless told otherwise
+    [InlineData("TF_BUILD", "True")]
+    public async Task Progress_Should_GoToStderr_AsPlainLines_WhenThereIsNoTerminal_EvenInCi(string variable, string value)
     {
         _a.WriteFile("a.txt", "a");
 
-        CliResult created = await RunAsync(_a, "sync");
+        CliResult created = await RunAsync(_a, new Dictionary<string, string?> { [variable] = value }, "sync");
 
         created.StdErr.ShouldContain("Scanning the folder…");
         created.StdErr.ShouldContain("↑ Uploading 1 file");
