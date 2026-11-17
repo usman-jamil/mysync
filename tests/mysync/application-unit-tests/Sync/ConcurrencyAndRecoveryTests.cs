@@ -197,6 +197,26 @@ public class ConcurrencyAndRecoveryTests
     }
 
     [Fact]
+    public async Task ADirectoryTheScannerSkipped_Should_NotHaveItsContentsDeletedRemotely_OrOverwritten()
+    {
+        // An unreadable directory (or one replaced by a symlink) hides everything under it.
+        (SyncWorld world, Machine a, Machine b, ShareId shareId) = await TwoMachines(("private/a.txt", "a"), ("private/sub/b.txt", "b"), ("other.txt", "o"));
+        b.Folder.WriteFile("private/a.txt", "b's edit");
+        (await b.SyncAsync()).ShouldSucceed();
+        a.Folder.UnstablePaths.Add("private");
+
+        SyncReport report = (await a.SyncAsync()).ShouldSucceed();
+
+        report.Committed.ShouldBeFalse();
+        report.DeletedRemotely.ShouldBe(0);
+        report.Downloaded.Files.ShouldBe(0);
+        a.Folder.ReadText("private/a.txt").ShouldBe("a");
+        (await world.HeadAsync(shareId)).Entries.Keys.Select(path => path.Value)
+            .ShouldBe(["other.txt", "private/a.txt", "private/sub/b.txt"]);
+        a.State.State!.Base[ManifestBuilder.PathOf("private/a.txt")].ShouldBeOfType<FileEntry>().Sha256.ShouldBe(ManifestBuilder.HashOf("a"));
+    }
+
+    [Fact]
     public async Task Progress_Should_ReportPhasesPlansBytesAndFiles_InOrder()
     {
         (_, Machine a, Machine b, _) = await TwoMachines(("up.txt", "1"));

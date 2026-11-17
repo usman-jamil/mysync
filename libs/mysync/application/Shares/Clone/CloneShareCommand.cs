@@ -51,9 +51,8 @@ internal sealed class CloneShareCommandHandler(
     SyncOptions options)
     : ICommandHandler<CloneShareCommand, SyncReport>
 {
-    // OS clutter that doesn't make a folder "not empty" (CLAUDE.md §9).
-    private static readonly HashSet<string> Junk = new(
-        [".DS_Store", "Thumbs.db", "desktop.ini", .. StateFileNames.AlwaysIgnored], StringComparer.OrdinalIgnoreCase);
+    // mysync's own artifacts don't make a folder "not empty", and nor does OS clutter (CLAUDE.md §9).
+    private static readonly HashSet<string> OwnArtifacts = new(StateFileNames.AlwaysIgnored, StringComparer.OrdinalIgnoreCase);
 
     public async Task<Result<SyncReport>> Handle(CloneShareCommand command, CancellationToken cancellationToken)
     {
@@ -89,7 +88,7 @@ internal sealed class CloneShareCommandHandler(
                 return Result.Failure<SyncReport>(names.Error);
             }
 
-            if (names.Value.Any(name => !Junk.Contains(name)))
+            if (names.Value.Any(name => !OwnArtifacts.Contains(name) && !StateFileNames.IsOsClutter(name)))
             {
                 return Result.Failure<SyncReport>(ShareErrors.FolderNotEmpty(folder.RootPath));
             }

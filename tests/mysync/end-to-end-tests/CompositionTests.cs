@@ -18,7 +18,7 @@ namespace MySync.EndToEndTests;
 /// </summary>
 public class CompositionTests
 {
-    [Fact(Skip = "Infrastructure and Azure implementations of the step-4 abstractions (IFolderLock, ILocalFolder, IShareStore, ...) arrive in steps 6 and 7 (CLAUDE.md §18). Re-enable then.")]
+    [Fact(Skip = "IShareStore has no implementation until MySync.Storage.Azure lands in step 7 (CLAUDE.md §18); the local-machine side is checked by the infrastructure DependencyInjectionTests. Re-enable then.")]
     public void FullGraph_Should_ConstructEveryService()
     {
         using ServiceProvider provider = BuildServices(new Dictionary<string, string?>()).BuildServiceProvider(

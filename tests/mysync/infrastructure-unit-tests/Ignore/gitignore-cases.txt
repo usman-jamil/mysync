@@ -1,0 +1,198 @@
+# Each scenario: "=== name", rule lines, "---", then paths (trailing / = directory)
+=== simple-glob
+*.log
+---
+a.log
+dir/b.log
+a.logx
+dir.log/
+dir.log/x.txt
+=== anchored
+/build
+---
+build/
+build/out.bin
+src/build/
+src/build/x
+build
+=== dir-only
+build/
+---
+build/
+build/x
+src/build/
+src/build/y
+build.txt
+other/build
+=== negation
+*.log
+!keep.log
+---
+a.log
+keep.log
+sub/keep.log
+=== negation-under-excluded-dir
+logs/
+!logs/keep.log
+---
+logs/
+logs/keep.log
+logs/other.log
+=== middle-slash-anchored
+docs/*.md
+---
+docs/a.md
+docs/sub/b.md
+x/docs/a.md
+=== double-star-prefix
+**/foo
+---
+foo
+a/foo
+a/b/foo/
+a/b/foo/c
+foobar
+=== double-star-middle
+a/**/b
+---
+a/b
+a/x/b
+a/x/y/b
+a/xb
+b
+=== double-star-suffix
+abc/**
+---
+abc/
+abc/x
+abc/x/y
+abc
+=== char-class-and-question
+file[0-9].txt
+?.md
+---
+file1.txt
+filea.txt
+a.md
+ab.md
+=== escaped-hash-and-bang
+\#notes
+\!important
+---
+#notes
+!important
+=== trailing-space
+spaced.txt   
+---
+spaced.txt
+=== escaped-trailing-space
+x\ 
+---
+x 
+x
+=== comment-and-blank
+# a comment
+
+*.tmp
+---
+# a comment
+a.tmp
+=== star-does-not-cross-slash
+a*b
+---
+ab
+a/b
+axxb
+dir/axb
+=== dir-pattern-with-star
+build*/
+---
+build1/
+build1/x
+build2
+=== negate-dir-then-file
+/*
+!/keep/
+---
+top.txt
+keep/
+keep/x.txt
+other/
+other/y
+=== reinclude-under-wildcard
+/sub/*
+!/sub/keep
+---
+sub/a
+sub/keep
+sub/keep/inner
+=== case
+*.LOG
+---
+a.log
+a.LOG
+=== unicode
+café/
+---
+café/
+café/x
+=== range-negated
+[!a]*.txt
+---
+a.txt
+b.txt
+=== nested-anchor
+/a/b
+---
+a/b
+x/a/b
+=== double-star-only
+**
+!*.keep
+---
+a.txt
+a.keep
+d/b.keep
+=== posix-class
+[[:digit:]]*.dat
+---
+1.dat
+a.dat
+=== bracket-literal-close
+[]a].txt
+---
+].txt
+a.txt
+b.txt
+=== unclosed-bracket
+[abc
+---
+[abc
+a
+=== double-star-whole-dir
+docs/**/*.md
+---
+docs/a.md
+docs/x/y/b.md
+docs/x/c.txt
+=== negated-then-reignored
+*.txt
+!important.txt
+important.txt
+---
+important.txt
+other.txt
+=== star-in-middle-segment
+a/*/c
+---
+a/b/c
+a/b/x/c
+a/c
+=== dot-files
+.*
+!.mysyncignore
+---
+.env
+.mysyncignore
+dir/.hidden
+normal

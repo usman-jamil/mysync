@@ -161,7 +161,7 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | `SharedKernel` (`libs/shared/shared-kernel/SharedKernel.csproj`) | Building blocks | `Result` / `Result<T>`, `Error`, `ErrorType`, `ValidationError`, `IDateTimeProvider`. No dependencies. |
 | `MySync.Domain` (`libs/mysync/domain/MySync.Domain.csproj`) | Sync rules | Value objects (`ShareId`, `SharePath`, `ContentHash`, `Revision`), `Manifest` / `ManifestEntry`, `ShareState`, `MergePlanner`, `SyncPlan` / `SyncAction`, `Conflict` / `ConflictKind`, `MassDeleteGuard`, `ShareLayout` (blob key scheme, provider-agnostic), `ShareState` + `StorageLocation` + `HashCacheEntry`, `CaseCollision`, `StateFileNames`, `NfcNormalizer` (our own Unicode NFC, §8), and **static `*Errors` classes** (`ShareErrors`, `SyncErrors`, `PathErrors`, `LocalFileErrors`, `StateErrors`, `StorageErrors`, `ConfigurationErrors`). No I/O. |
 | `MySync.Application` (`libs/mysync/application/MySync.Application.csproj`) | Use cases | Command/query handlers, FluentValidation validators, **all abstractions** (`I...`), behaviors (decorators), response DTOs, the internal `SyncPipeline` that sequences the phases in §9. |
-| `MySync.Infrastructure` (`libs/mysync/infrastructure/MySync.Infrastructure.csproj`) | Local machine | `LocalFolder` / `FileScanner`, `Sha256ContentHasher`, `JsonShareStateStore` + `FolderLock`, `FileConflictLog`, `GitIgnoreRulesLoader`, `ManifestSerializer` + `MySyncJsonContext` (source-generated JSON), `MachineIdentity`, `DateTimeProvider`, `DependencyInjection.AddInfrastructure()`. |
+| `MySync.Infrastructure` (`libs/mysync/infrastructure/MySync.Infrastructure.csproj`) | Local machine | `ShareRoot` (the folder being synced), `LocalFolder` + `PathResolver` / `FileScanner`, `Sha256ContentHasher`, `JsonShareStateStore` + `FolderLock`, `FileConflictLog`, `GitIgnoreRulesLoader` + `GitIgnoreMatcher` (our own gitignore matcher), `ManifestSerializer` + `MySyncJsonContext` (source-generated JSON), `MachineIdentity`, `DateTimeProvider`, `DependencyInjection.AddInfrastructure()`. |
 | `MySync.Storage.Azure` (`libs/mysync/storage-azure/MySync.Storage.Azure.csproj`) | Azure Blob provider | `AzureBlobShareStore : IShareStore`, `AzureStorageOptions`, `AzureErrorMapper` (`RequestFailedException` → `StorageErrors`), `ConnectionStringRedactor`, `DependencyInjection.AddAzureBlobStorage()`. |
 | `MySync.Cli` (`apps/mysync/MySync.Cli.csproj`) | Presentation / composition root | `Program.cs`, `Commands/`, `Rendering/`, `ExitCodes.cs`. Selects the provider from `MYSYNC_PROVIDER`. |
 
@@ -262,7 +262,7 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 
 - **Use `Host.CreateEmptyApplicationBuilder(...)`, not `CreateApplicationBuilder`.** The default builder adds `appsettings.json` and user-secret sources from the content root, and for a CLI the content root is **the folder being synced**. A user's `appsettings.json` would then silently configure mysync. Add **only** `AddEnvironmentVariables()`.
 - Logging is **Serilog writing to stderr**. Default level is `Warning`, `--verbose` → `Debug`, `--quiet` → `Error`. Nothing logs to stdout, because stdout carries `--json` output.
-- Register `AddApplication()`, `AddInfrastructure()`, then the provider chosen by `MYSYNC_PROVIDER` (`azure-blob` → `AddAzureBlobStorage()`). An unknown provider is a configuration error (exit `2`), reported when a command needs storage, not at startup.
+- Register `AddApplication()`, `AddInfrastructure()`, then the provider chosen by `MYSYNC_PROVIDER` (`azure-blob` → `AddAzureBlobStorage()`). An unknown provider is a configuration error (exit `2`), reported when a command needs storage, not at startup. `AddInfrastructure()` takes the share root (`ShareRoot`) from the current directory unless one is registered first (tests register a temp folder).
 - Commands are registered with `consoleApp.Add<T>()`. Global options (`--verbose`, `--quiet`, `--json`, `--parallel`) use ConsoleAppFramework's global-options support.
 - **Don't use `builder.ToConsoleAppBuilder()`.** As soon as `ConfigureGlobalOptions` is called, ConsoleAppFramework builds its own (empty) service provider after parsing and replaces the host's, so no handler resolves. Instead `ConsoleApp.Create().ConfigureContainer(new HostServiceProviderFactory(builder))`: ConsoleAppFramework then builds the host itself, after global options are parsed, and the parsed `GlobalOptions` is registered into the same container via `ConfigureServices`.
 - `--verbose` / `--quiet` set a Serilog `LoggingLevelSwitch` from inside the `ConfigureGlobalOptions` callback. Write that lambda's parameter type out (`(ref ConsoleApp.GlobalOptionsBuilder options) => …`): with the inferred C# 14 form `(ref options)`, the ConsoleAppFramework 5.7.13 generator fails with a NullReferenceException (CS8785).
@@ -403,9 +403,11 @@ Owned by `IShareStateStore` (`JsonShareStateStore`). JSON, written **atomically*
     {
       "path": "reports/q3.xlsx",
       "kind": "modify/modify",
-      "base":   { "sha256": "aa11…", "size": 50211 },
-      "local":  { "sha256": "bb22…", "size": 51007, "mtimeUtc": "2026-11-16T08:55:10Z" },
-      "remote": { "sha256": "cc33…", "size": 50980, "mtimeUtc": "2026-11-16T07:12:41Z", "revision": 18, "updatedBy": "ali@SERVER01" },
+      "base":   { "type": "file", "sha256": "aa11…", "size": 50211, "mtimeUtc": "2026-11-15T18:31:02Z", "exec": false },
+      "local":  { "type": "file", "sha256": "bb22…", "size": 51007, "mtimeUtc": "2026-11-16T08:55:10Z", "exec": false },
+      "remote": { "type": "file", "sha256": "cc33…", "size": 50980, "mtimeUtc": "2026-11-16T07:12:41Z", "exec": false },
+      "remoteRevision": 18,
+      "remoteUpdatedBy": "ali@SERVER01",
       "firstDetectedUtc": "2026-11-16T09:02:55Z",
       "lastSeenUtc": "2026-11-16T09:02:55Z"
     }
@@ -416,6 +418,8 @@ Owned by `IShareStateStore` (`JsonShareStateStore`). JSON, written **atomically*
 - `base` uses the same `ManifestEntry` type as the manifest (so it carries `mtimeUtc` too): after a commit the new base is literally the committed manifest's entries.
 - `base` is the **last state this folder and the remote agreed on**. It drives the three-way merge (§9). Losing or corrupting it would make deletes look like additions, so treat it carefully.
 - `hashCache` avoids re-hashing unchanged files. A cached hash is reused only if size **and** mtime match exactly. **Racy-mtime rule:** if a file's mtime is within 2 seconds of the moment it was hashed, don't store it in the cache (coarse-resolution filesystems such as FAT can hide a same-second edit).
+- Each conflict side is a full entry (same shape as `base`), or `null` when that side has no entry (deleted). `remoteRevision` / `remoteUpdatedBy` are the HEAD the conflict was found against, so they're present even when `remote` is `null`. `JsonShareStateStoreTests` pins the exact JSON.
+- An unusable `hashCache` entry is dropped (the file is hashed again); anything else that doesn't validate is `StateErrors.Corrupt`. A newer `formatVersion` is checked first, so it's `UnsupportedFormat` even if the rest changed shape.
 - `conflicts` is rebuilt every sync from the merge plan. An entry disappears when the path is no longer in conflict. `kind` is one of `modify/modify`, `add/add`, `modify/delete`, `delete/modify`, `type`.
 - If `.mysynctool` is missing but other files exist, `sync` creates a new share. `RunSyncCommand` itself refuses with `ShareErrors.NotAShare`; the CLI picks the flow from `PreviewNewShareQuery.ExistingShareId`. If it's unreadable or corrupt, **stop** (`StateErrors.Corrupt`). Never fall back to creating a new share or treating everything as new.
 - The domain model is `MySync.Domain.State.ShareState`. The JSON shape lives only in Infrastructure.
@@ -434,9 +438,11 @@ Names are constants in `MySync.Domain.State.StateFileNames`.
 
 ### `.mysyncignore`
 
-- gitignore syntax, read from the share root only (v1), via `IIgnoreRulesLoader`.
+- gitignore syntax, read from the share root only (v1), via `IIgnoreRulesLoader`. UTF-8 (BOM fine), LF or CRLF, at most 1 MB.
 - **It is synced**, so the whole team shares the same rules.
-- Built-in excludes, always applied: the artifacts above, `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*` (macOS resource forks).
+- Built-in excludes, always applied: the artifacts above, `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*` (macOS resource forks; `StateFileNames.OsClutter` / `IsOsClutter`). They match a name **at any depth** (a nested share's `.mysynctool` must never sync) and **can't be re-included** with `!`.
+- **The matcher is our own** (`Infrastructure/Ignore`: `IgnoreRule` compiles one line, `GitIgnoreMatcher` applies them). Both NuGet candidates disagreed with git on real cases (`Ignore` 0.2.1: `?`, `[!a]`, case, re-including under `/sub/*`; `MAB.DotIgnore` 3.0.2: `\!`, escaped trailing spaces, `!/keep/`, and it drags in the netstandard1.3 package graph). **git is the reference**: `GitIgnoreMatcherTests` runs every case in `gitignore-cases.txt` against `git` itself on each CI OS. When the matcher and git disagree, the matcher is wrong; add the case to the corpus.
+- Semantics, as git: last matching rule wins; a path inside an ignored directory stays ignored whatever later rules say; `a/**` also matches the directory `a`; a malformed bracket expression matches nothing. **Case-sensitive on every OS**, so a rule means the same on every machine. Patterns are NFC-normalized like paths. Regexes are `NonBacktracking`, because the file comes from other machines and must not be able to make matching exponential.
 - An ignored path is neither uploaded nor downloaded, and **not deleted locally** even if the remote has no such entry.
 - If remote has an entry the local ignore rules match, skip it and show a warning in `status`. Don't download it.
 
@@ -451,7 +457,10 @@ Rules live in `MySync.Domain/Paths/` (`SharePath` value object, `PathRules`, `Pa
 - **Case collisions:** if the manifest has two entries that differ only in case (`Foo.txt` / `foo.txt`), then on case-insensitive filesystems (Windows, default macOS) download neither. Warn and list them. On Linux they're fine. When creating a share or uploading, warn if the local tree contains case-only collisions.
 - **Windows-invalid names** (`<>:"|?*`, trailing dot/space, reserved names `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`): on Windows, skip those entries with a warning. Never fail the whole sync.
 - Long paths: use the full paths .NET produces. Document that Windows needs long-path support enabled for >260 chars.
-- **Symlinks and junctions:** don't follow and don't sync. Skip with a warning (v1).
+- **Symlinks and junctions:** don't follow and don't sync. Skip with a warning (v1). `PathResolver` also refuses any path that goes *through* a symlink or junction (`escape/planted.txt` where `escape` links outside the root), and the scanner never enters one.
+- **Mapping a `SharePath` to disk** (`PathResolver`): if the NFC spelling isn't on disk, each segment is matched against the directory's entries by their NFC form, so an NFD name written by a Mac tool is found, not duplicated. On Windows a name Windows can't hold is refused there too (`a:b` would be an alternate data stream). The final path must be inside the root.
+- **Scanner details** (`FileScanner`): mysync's own artifacts in the root are skipped whatever the matcher says; two names in one directory that are equal after NFC (possible on Linux and NTFS) keep the first and skip the other as `InvalidName`; an unreadable directory is skipped as `Unreadable` (the pipeline then freezes everything under it, §9); a directory whose entries are all ignored counts as empty; an empty file is never opened (its hash is known, and FIFOs, sockets and devices report size 0, so they can't block a read). Hashing runs in parallel; results are sorted.
+- **Removing directories:** `DeleteDirectoryIfEmpty` treats a directory that holds only OS clutter as empty and deletes the clutter with it, so browsing a folder in Finder doesn't keep a remote delete from ever applying.
 - **Executable bit:** on Unix, record `exec: true` if any execute bit is set; on download, apply `u+x` (`File.SetUnixFileMode`). The bit **is part of the merge comparison** (§9), so a `chmod +x` (or `-x`) alone syncs. Applying an exec-only change transfers no bytes: locally it only changes the file mode, remotely only the manifest entry (the object already exists). On Windows the scanner can't see the bit, so it takes `exec` from the **base entry** for existing paths and uses `false` for new ones. A Windows machine then never reports an exec change of its own, a Windows edit doesn't strip the bit from a Linux script, and a remote exec change is a no-op on disk there.
 - **mtime:** after downloading, set the local file's last-write time to the manifest `mtimeUtc`, then record it in `hashCache`.
 - Content is synced byte-for-byte. **No line-ending conversion, ever.**
@@ -492,7 +501,7 @@ Rules live in `MySync.Domain/Paths/` (`SharePath` value object, `PathRules`, `Pa
 
 **Rules the pipeline adds on top of the merge** (all tested in `application-unit-tests/Sync`):
 
-- **Paths the sync can't see are frozen.** If the scan skipped a path (unstable, unreadable, symlink) or the local ignore rules match it, its local side is taken to be its base, and its action is deferred. A file that is absent from the scan because it is busy or ignored is never read as "deleted here", and nothing is downloaded over it. The manifest keeps its remote entry; a remote-only ignored entry is reported as `IgnoredLocally`.
+- **Paths the sync can't see are frozen.** If the scan skipped a path (unstable, unreadable, symlink) or the local ignore rules match it, its local side is taken to be its base, and its action is deferred. A skipped *directory* freezes everything under it too: an unreadable folder must not look like "all its files were deleted here". A file that is absent from the scan because it is busy or ignored is never read as "deleted here", and nothing is downloaded over it. The manifest keeps its remote entry; a remote-only ignored entry is reported as `IgnoredLocally`.
 - **Deferred means "keep the old base".** An upload the store rejects (`HashMismatch`, the file changed mid-upload), a file changed after the scan, a failed apply, a case-only collision on a case-insensitive filesystem, or a Windows-invalid name on Windows: the path is left out of this run (`SyncPlan.WithDeferred`), keeps its base entry, and is reported in `SyncReport.Skipped` with a `SkipCause`. The next run sees it again.
 - **Phase 8 deletes first**, deepest path first, then downloads, directory creations and mode changes in parallel, so a file can become a directory (and back) in one run. A directory that isn't empty when it should be deleted is deferred, not forced.
 - **A conflict's remote details** (`remote.revision`, `updatedBy`) come from the HEAD the plan was made against, not from this run's own commit. An unchanged conflict keeps them and its `firstDetectedUtc`.
@@ -676,7 +685,6 @@ public sealed record StoredObjectInfo(ContentHash Hash, long Size, DateTimeOffse
 | `FluentValidation`, `FluentValidation.DependencyInjectionExtensions` | `MySync.Application` | Command validators (`AddValidatorsFromAssembly`, including internal types) |
 | `Microsoft.Extensions.DependencyInjection.Abstractions`, `Microsoft.Extensions.Options`, `Microsoft.Extensions.Logging.Abstractions` | libraries | `DependencyInjection.cs` extensions, options, `ILogger<T>` |
 | `Azure.Storage.Blobs` | `MySync.Storage.Azure` **only** | Blob provider |
-| gitignore matcher (evaluate `Ignore` / `MAB.DotIgnore`) | `MySync.Infrastructure` | `.mysyncignore` semantics, wrapped behind `IIgnoreMatcher` |
 | `SonarAnalyzer.CSharp` | all (via `Directory.Build.props`) | Analyzers |
 | `xunit.v3` | tests | Test framework, on **Microsoft.Testing.Platform** |
 | `Shouldly` | tests | Assertions |
@@ -686,7 +694,7 @@ public sealed record StoredObjectInfo(ContentHash Hash, long Size, DateTimeOffse
 | `Microsoft.Extensions.DependencyInjection` | tests only | A concrete `ServiceCollection` for DI tests (the libraries reference only the abstractions) |
 | `NetArchTest.Rules` | architecture tests | Dependency rules (§3) |
 
-Don't add a package without a row here. Use the BCL (`IncrementalHash`, `System.Text.Json`, `File.SetUnixFileMode`) where it's enough.
+Don't add a package without a row here. Use the BCL (`IncrementalHash`, `System.Text.Json`, `File.SetUnixFileMode`) where it's enough. There is deliberately no gitignore package: neither candidate matched git (§7), so `.mysyncignore` matching is our own code, checked against git.
 
 ---
 
@@ -698,7 +706,7 @@ Every test project is xUnit v3 on the Microsoft Testing Platform with Shouldly, 
 |---|---|---|---|
 | `MySync.Domain.UnitTests` (`tests/mysync/domain-unit-tests/`) | `type:unit-test` | `MergePlanner`, `SharePath` / `PathRules`, `MassDeleteGuard`, `ShareLayout`, value objects | none (pure) |
 | `MySync.Application.UnitTests` (`tests/mysync/application-unit-tests/`) | `type:unit-test` | Handlers, validators, `SyncPipeline`, `RemoteCommitter`, decorators | `InMemoryShareStore`, `InMemoryLocalFolder`, NSubstitute for single-failure cases |
-| `MySync.Infrastructure.UnitTests` (`tests/mysync/infrastructure-unit-tests/`) | `type:unit-test` | `FileScanner`, `Sha256ContentHasher`, hash cache, `JsonShareStateStore`, `FolderLock`, `FileConflictLog` rotation, ignore loader, `ManifestSerializer` | real temp directories |
+| `MySync.Infrastructure.UnitTests` (`tests/mysync/infrastructure-unit-tests/`) | `type:unit-test` | `LocalFolderContractTests` on disk, `LocalFolder`, `FileScanner`, `Sha256ContentHasher`, hash cache, `JsonShareStateStore`, `FolderLock`, `FileConflictLog` rotation, `GitIgnoreMatcher` (against `git`), `ManifestSerializer` (exact JSON pinned), and `DiskSyncTests`: the real pipeline over two temp folders with `InMemoryShareStore` | real temp directories (`TempShareFolder`), `git` |
 | `MySync.Storage.Azure.IntegrationTests` (`tests/mysync/storage-azure-integration-tests/`) | `type:integration-test` | `AzureBlobShareStore` against **Azurite**, plus the `IShareStore` **contract suite** | Azurite |
 | `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + Azure) with two temp folders as two "machines" | Azurite |
 | `MySync.ArchitectureTests` (`tests/mysync/architecture-tests/`) | `type:architecture-test` | The dependency rules in §3 | none |
@@ -743,7 +751,8 @@ Both Azurite-backed suites use `Testcontainers.Azurite` with the image `mcr.micr
 **Infrastructure:**
 - Hash cache: reuse, invalidation on size/mtime change, racy-mtime rule.
 - State file: atomic write, corrupt file → `StateErrors.Corrupt` (never a new share), version-too-new → error.
-- Ignore matching including built-in excludes; `.mysyncignore` itself is synced.
+- Ignore matching including built-in excludes; `.mysyncignore` itself is synced; every corpus case agrees with `git`.
+- Paths: an NFD name on disk is found by its NFC path; a path through a symlink is refused; a skipped directory hides its contents.
 - Exec bit and mtime application on Unix (skipped on Windows runners).
 
 **Azurite suites:**

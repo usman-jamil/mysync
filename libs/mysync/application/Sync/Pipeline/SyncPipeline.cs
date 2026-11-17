@@ -203,6 +203,14 @@ internal sealed class SyncPipeline(
     {
         HashSet<SharePath> frozen = [.. scanSkipped];
 
+        // A skipped directory (unreadable, or a symlink now) hides everything under it: none of
+        // that is "deleted here".
+        List<SharePath> skippedRoots = [.. scanSkipped];
+        if (skippedRoots.Count > 0)
+        {
+            frozen.UnionWith(baseEntries.Keys.Concat(remote.Keys).Where(path => skippedRoots.Exists(path.IsUnder)));
+        }
+
         foreach (SharePath path in baseEntries.Keys.Concat(remote.Keys).Where(path => IsIgnored(ignore, path, remote, baseEntries)))
         {
             frozen.Add(path);

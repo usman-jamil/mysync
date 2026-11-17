@@ -51,7 +51,10 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
     /// </summary>
     public Func<FolderOperation, SharePath, Error?>? OnOperation { get; set; }
 
-    /// <summary>Paths the scanner reports as skipped (unstable) instead of scanning.</summary>
+    /// <summary>
+    /// Paths the scanner reports as skipped (unstable) instead of scanning. A directory here hides
+    /// everything under it, as an unreadable directory does on disk.
+    /// </summary>
     public HashSet<string> UnstablePaths { get; } = new(StringComparer.Ordinal);
 
     /// <summary>Staged downloads not yet placed or disposed.</summary>
@@ -340,6 +343,11 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
             foreach ((SharePath path, Node node) in _nodes)
             {
                 if (IsIgnored(request, path, node is DirectoryNode))
+                {
+                    continue;
+                }
+
+                if (UnstablePaths.Any(skippedPath => path.IsUnder(ManifestBuilder.PathOf(skippedPath))))
                 {
                     continue;
                 }
