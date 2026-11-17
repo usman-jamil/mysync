@@ -328,6 +328,33 @@ public class MergePlannerTests
     }
 
     [Fact]
+    public void WithDeferred_Should_TurnActionsIntoSkipsThatKeepBothSidesAndTheBase()
+    {
+        SyncPlan plan = Plan(
+            baseTree: [("up", V1), ("down", V1), ("conflict", V1)],
+            local: [("up", V2), ("down", V1), ("conflict", V2)],
+            remote: [("up", V1), ("down", V2), ("conflict", V1Exec)]);
+
+        SyncPlan deferred = plan.WithDeferred([Path("up"), Path("down"), Path("conflict")]);
+
+        Action(deferred, "up").Kind.ShouldBe(SyncActionKind.Skip);
+        Action(deferred, "up").SkipReason.ShouldBe(SkipReason.Deferred);
+        Action(deferred, "up").RemoteResult.ShouldBe(V1);
+        Action(deferred, "down").LocalResult.ShouldBe(V1);
+        Action(deferred, "conflict").Kind.ShouldBe(SyncActionKind.Conflict); // stays a conflict
+        deferred.NewBase().Values.ShouldAllBe(entry => entry == V1);
+        deferred.ChangesRemote.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void WithDeferred_Should_ReturnTheSamePlan_ForNoPaths()
+    {
+        SyncPlan plan = Plan(baseTree: [], local: [("a", V1)], remote: []);
+
+        plan.WithDeferred([]).ShouldBeSameAs(plan);
+    }
+
+    [Fact]
     public void Classify_Should_BeAvailableForResolveAndReporting()
     {
         MergePlanner.Classify(V1, V2, null).ShouldBe(ConflictKind.ModifyDelete);

@@ -1,0 +1,164 @@
+using MySync.Application.Abstractions.FileSystem;
+using MySync.Application.Abstractions.Hashing;
+using MySync.Application.Abstractions.Progress;
+using MySync.Application.Abstractions.Storage;
+using MySync.Application.Sync.Run;
+using MySync.Domain.Manifests;
+using MySync.Domain.Paths;
+using MySync.Domain.Shares;
+using SharedKernel;
+
+namespace MySync.Application.Sync.Pipeline;
+
+/// <summary>Moves file bytes between the local folder and the store, reporting progress in bytes.</summary>
+internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IContentHasher hasher)
+{
+    private const int BufferSize = 81920;
+
+    /// <summary>
+    /// Uploads files in parallel, skipping objects the store already has. Returns what was
+    /// transferred and the paths that couldn't be uploaded (left out of this commit).
+    /// </summary>
+    public async Task<UploadOutcome> UploadAsync(
+        ShareId shareId,
+        IReadOnlyList<(SharePath Path, FileEntry Entry)> files,
+        ISyncProgressReporter progress,
+        int parallelism,
+        CancellationToken cancellationToken)
+    {
+        if (files.Count == 0)
+        {
+            return new UploadOutcome(TransferTotals.None, new Dictionary<SharePath, SkippedPath>());
+        }
+
+        progress.PhaseStarted(SyncPhase.Uploading);
+        progress.TransfersPlanned(TransferDirection.Upload, files.Count, files.Sum(file => file.Entry.Size));
+
+        Lock gate = new();
+        int count = 0;
+        long bytes = 0;
+        Dictionary<SharePath, SkippedPath> failed = [];
+
+        await Parallel.ForEachAsync(
+            files,
+            new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+            async (file, ct) =>
+            {
+                Result<bool> uploaded = await UploadOneAsync(shareId, file.Path, file.Entry, progress, ct);
+
+                lock (gate)
+                {
+                    if (uploaded.IsFailure)
+                    {
+                        failed[file.Path] = Skip(file.Path, uploaded.Error);
+                    }
+                    else if (uploaded.Value)
+                    {
+                        count++;
+                        bytes += file.Entry.Size;
+                    }
+                }
+            });
+
+        return new UploadOutcome(new TransferTotals(count, bytes), failed);
+    }
+
+    /// <summary>
+    /// Downloads an object into a new staged file, verifying its SHA-256 while it streams. On a
+    /// mismatch the staged file is discarded and nothing reaches the folder.
+    /// </summary>
+    public async Task<Result<IStagedFile>> DownloadToStagingAsync(
+        ShareId shareId, SharePath path, FileEntry entry, ISyncProgressReporter progress, CancellationToken cancellationToken)
+    {
+        Result<Stream> opened = await store.OpenObjectReadAsync(shareId, entry.Sha256, cancellationToken);
+        if (opened.IsFailure)
+        {
+            return Result.Failure<IStagedFile>(opened.Error);
+        }
+
+        Result<IStagedFile> staging = await folder.CreateStagedFileAsync(cancellationToken);
+        if (staging.IsFailure)
+        {
+            await opened.Value.DisposeAsync();
+            return staging;
+        }
+
+        IStagedFile staged = staging.Value;
+        bool keep = false;
+
+        try
+        {
+            await using Stream source = opened.Value;
+            using IIncrementalContentHash hash = hasher.CreateIncremental();
+            byte[] buffer = new byte[BufferSize];
+            int read;
+
+            while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+            {
+                hash.Append(buffer.AsSpan(0, read));
+                await staged.Content.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                progress.BytesTransferred(TransferDirection.Download, read);
+            }
+
+            await staged.Content.FlushAsync(cancellationToken);
+
+            if (hash.Finish() != entry.Sha256)
+            {
+                return Result.Failure<IStagedFile>(LocalFileErrors.WriteFailed(path.Value, "the downloaded content does not match its hash"));
+            }
+
+            keep = true;
+            return Result.Success(staged);
+        }
+        finally
+        {
+            if (!keep)
+            {
+                await staged.DisposeAsync();
+            }
+        }
+    }
+
+    private async Task<Result<bool>> UploadOneAsync(
+        ShareId shareId, SharePath path, FileEntry entry, ISyncProgressReporter progress, CancellationToken cancellationToken)
+    {
+        Result<bool> exists = await store.ObjectExistsAsync(shareId, entry.Sha256, cancellationToken);
+        if (exists.IsFailure)
+        {
+            return exists;
+        }
+
+        if (exists.Value)
+        {
+            progress.BytesTransferred(TransferDirection.Upload, entry.Size);
+            progress.FileTransferred(TransferDirection.Upload, path);
+            return false;
+        }
+
+        Result<Stream> opened = await folder.OpenReadAsync(path, cancellationToken);
+        if (opened.IsFailure)
+        {
+            return Result.Failure<bool>(opened.Error);
+        }
+
+        await using ProgressReportingStream content = new(opened.Value, progress, TransferDirection.Upload);
+        Result uploaded = await store.UploadObjectAsync(shareId, entry.Sha256, content, content.Length, cancellationToken);
+
+        if (uploaded.IsFailure)
+        {
+            return Result.Failure<bool>(uploaded.Error);
+        }
+
+        progress.FileTransferred(TransferDirection.Upload, path);
+        return true;
+    }
+
+    private static SkippedPath Skip(SharePath path, Error error) => error.Code switch
+    {
+        "Storage.HashMismatch" => new SkippedPath(path.Value, SkipCause.Unstable, "it changed while it was being uploaded"),
+        "Local.Unreadable" => new SkippedPath(path.Value, SkipCause.Unreadable, error.Description),
+        _ => new SkippedPath(path.Value, SkipCause.ApplyFailed, error.Description),
+    };
+}
+
+internal sealed record UploadOutcome(TransferTotals Uploaded, IReadOnlyDictionary<SharePath, SkippedPath> Failed);

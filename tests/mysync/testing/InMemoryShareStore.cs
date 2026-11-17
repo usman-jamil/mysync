@@ -25,6 +25,15 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
     private readonly Dictionary<string, Blob> _blobs = new(StringComparer.Ordinal);
     private long _etagCounter;
 
+    /// <summary>
+    /// Runs just before a conditional replace is checked: lets a test commit as "another machine"
+    /// between this machine's read and its write.
+    /// </summary>
+    public Func<ShareId, Task>? BeforeReplaceManifest { get; set; }
+
+    /// <summary>Makes every history write fail (history is best-effort).</summary>
+    public bool FailHistoryWrites { get; set; }
+
     /// <summary>True once <see cref="EnsureReadyForNewShareAsync"/> has run (the create flow must call it).</summary>
     public bool IsReady { get; private set; }
 
@@ -79,19 +88,25 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
         }
     }
 
-    public Task<Result<string>> ReplaceManifestAsync(ShareId shareId, Manifest manifest, string ifMatchETag, CancellationToken cancellationToken)
+    public async Task<Result<string>> ReplaceManifestAsync(ShareId shareId, Manifest manifest, string ifMatchETag, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (BeforeReplaceManifest is { } hook)
+        {
+            await hook(shareId);
+        }
+
         string name = ShareLayout.For(shareId).Manifest;
 
         lock (_gate)
         {
             if (!_blobs.TryGetValue(name, out Blob? current) || !string.Equals(current.ETag, ifMatchETag, StringComparison.Ordinal))
             {
-                return Task.FromResult(Result.Failure<string>(StorageErrors.PreconditionFailed(name)));
+                return Result.Failure<string>(StorageErrors.PreconditionFailed(name));
             }
 
-            return Task.FromResult(Result.Success(Put(name, bytes: null, manifest).ETag));
+            return Result.Success(Put(name, bytes: null, manifest).ETag);
         }
     }
 
@@ -99,6 +114,11 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
     {
         cancellationToken.ThrowIfCancellationRequested();
         string name = ShareLayout.For(shareId).ManifestHistory(manifest.Revision);
+
+        if (FailHistoryWrites)
+        {
+            return Task.FromResult(Result.Failure(StorageErrors.Unreachable));
+        }
 
         lock (_gate)
         {

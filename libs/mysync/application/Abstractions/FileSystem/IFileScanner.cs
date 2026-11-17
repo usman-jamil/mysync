@@ -16,7 +16,12 @@ namespace MySync.Application.Abstractions.FileSystem;
 public interface IFileScanner
 {
     Task<Result<ScannedFolder>> ScanAsync(ScanRequest request, ISyncProgressReporter progress, CancellationToken cancellationToken);
+
+    /// <summary>File count and total size, without hashing (the create preview, CLAUDE.md §9).</summary>
+    Task<Result<FolderSummary>> SummarizeAsync(IIgnoreMatcher ignore, CancellationToken cancellationToken);
 }
+
+public sealed record FolderSummary(int FileCount, long TotalBytes);
 
 /// <param name="Ignore">Built-in excludes plus <c>.mysyncignore</c>.</param>
 /// <param name="HashCache">From <c>.mysynctool</c>; empty for a new share.</param>

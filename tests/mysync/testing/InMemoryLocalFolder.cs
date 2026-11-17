@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using MySync.Application.Abstractions.FileSystem;
+using MySync.Application.Abstractions.Ignore;
 using MySync.Application.Abstractions.Progress;
 using MySync.Domain.Content;
 using MySync.Domain.Manifests;
@@ -37,6 +38,21 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
     /// files are written without it.
     /// </summary>
     public bool ExecutableBitSupported { get; init; } = true;
+
+    /// <summary>Simulates a case-insensitive filesystem (Windows, default macOS) for the pipeline's collision rule.</summary>
+    public bool IsCaseSensitive { get; init; } = true;
+
+    /// <summary>Simulates Windows for the pipeline's Windows-name rule.</summary>
+    public bool RequiresWindowsCompatibleNames { get; init; }
+
+    /// <summary>
+    /// Runs before each operation on a path, outside the folder's lock. It may change the folder
+    /// (to simulate an edit racing the sync) and may return an error to make that operation fail.
+    /// </summary>
+    public Func<FolderOperation, SharePath, Error?>? OnOperation { get; set; }
+
+    /// <summary>Paths the scanner reports as skipped (unstable) instead of scanning.</summary>
+    public HashSet<string> UnstablePaths { get; } = new(StringComparer.Ordinal);
 
     /// <summary>Staged downloads not yet placed or disposed.</summary>
     public int StagedFileCount
@@ -143,6 +159,10 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
     public Task<Result<LocalFile?>> GetFileAsync(SharePath path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (Intercept(FolderOperation.GetFile, path) is { } error)
+        {
+            return Task.FromResult(Result.Failure<LocalFile?>(error));
+        }
 
         lock (_gate)
         {
@@ -157,6 +177,10 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
     public Task<Result<Stream>> OpenReadAsync(SharePath path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (Intercept(FolderOperation.OpenRead, path) is { } error)
+        {
+            return Task.FromResult(Result.Failure<Stream>(error));
+        }
 
         lock (_gate)
         {
@@ -187,6 +211,11 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
         if (staged is not StagedFile file || !ReferenceEquals(file.Owner, this))
         {
             throw new ArgumentException("Not a staged file of this folder.", nameof(staged));
+        }
+
+        if (Intercept(FolderOperation.PlaceStagedFile, target) is { } error)
+        {
+            return Task.FromResult(Result.Failure(error));
         }
 
         lock (_gate)
@@ -247,6 +276,10 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
     public Task<Result> DeleteFileAsync(SharePath path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (Intercept(FolderOperation.DeleteFile, path) is { } error)
+        {
+            return Task.FromResult(Result.Failure(error));
+        }
 
         lock (_gate)
         {
@@ -300,12 +333,20 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
         ImmutableSortedDictionary<SharePath, LocalFile>.Builder files = ImmutableSortedDictionary.CreateBuilder<SharePath, LocalFile>(SharePath.OrdinalComparer);
         ImmutableSortedDictionary<SharePath, HashCacheEntry>.Builder cache = ImmutableSortedDictionary.CreateBuilder<SharePath, HashCacheEntry>(SharePath.OrdinalComparer);
 
+        List<SkippedLocalPath> skipped = [];
+
         lock (_gate)
         {
             foreach ((SharePath path, Node node) in _nodes)
             {
                 if (IsIgnored(request, path, node is DirectoryNode))
                 {
+                    continue;
+                }
+
+                if (UnstablePaths.Contains(path.Value))
+                {
+                    skipped.Add(new SkippedLocalPath(path.Value, LocalSkipReason.Unstable, "it changed while it was being hashed"));
                     continue;
                 }
 
@@ -327,10 +368,31 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
             }
         }
 
-        return Task.FromResult(Result.Success(new ScannedFolder(entries.ToImmutable(), files.ToImmutable(), cache.ToImmutable(), [])));
+        return Task.FromResult(Result.Success(new ScannedFolder(entries.ToImmutable(), files.ToImmutable(), cache.ToImmutable(), [.. skipped])));
     }
 
-    // Internals (callers hold _gate)
+    public Task<Result<FolderSummary>> SummarizeAsync(IIgnoreMatcher ignore, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(ignore);
+        cancellationToken.ThrowIfCancellationRequested();
+        ScanRequest request = new(
+            ignore,
+            ImmutableSortedDictionary.Create<SharePath, HashCacheEntry>(SharePath.OrdinalComparer),
+            ImmutableSortedDictionary.Create<SharePath, ManifestEntry>(SharePath.OrdinalComparer));
+
+        lock (_gate)
+        {
+            List<FileNode> files = [.. _nodes
+                .Where(pair => pair.Value is FileNode && !IsIgnored(request, pair.Key, isDirectory: false))
+                .Select(pair => (FileNode)pair.Value)];
+
+            return Task.FromResult(Result.Success(new FolderSummary(files.Count, files.Sum(file => (long)file.Bytes.Length))));
+        }
+    }
+
+    // Internals (callers hold _gate, except Intercept)
+
+    private Error? Intercept(FolderOperation operation, SharePath path) => OnOperation?.Invoke(operation, path);
 
     private static bool IsIgnored(ScanRequest request, SharePath path, bool isDirectory)
     {
@@ -443,4 +505,13 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
             return ValueTask.CompletedTask;
         }
     }
+}
+
+/// <summary>The operations <see cref="InMemoryLocalFolder.OnOperation"/> can intercept.</summary>
+public enum FolderOperation
+{
+    GetFile = 0,
+    OpenRead = 1,
+    PlaceStagedFile = 2,
+    DeleteFile = 3,
 }

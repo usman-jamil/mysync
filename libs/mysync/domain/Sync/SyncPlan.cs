@@ -37,6 +37,28 @@ public sealed class SyncPlan
     public int RemoteEntryDeletes => Actions.Count(action => action.DeletesRemotely);
 
     /// <summary>
+    /// The same plan with the actions for <paramref name="paths"/> turned into
+    /// <see cref="SkipReason.Deferred"/> skips: both sides keep what they had and the path keeps
+    /// its old base, so the next run sees the change again. Conflicts stay conflicts.
+    /// </summary>
+    public SyncPlan WithDeferred(IReadOnlyCollection<SharePath> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        if (paths.Count == 0)
+        {
+            return this;
+        }
+
+        HashSet<SharePath> deferred = [.. paths];
+
+        return new SyncPlan([.. Actions.Select(action =>
+            deferred.Contains(action.Path) && action.Kind is not (SyncActionKind.Conflict or SyncActionKind.NoChange)
+                ? action with { Kind = SyncActionKind.Skip, SkipReason = SkipReason.Deferred }
+                : action)]);
+    }
+
+    /// <summary>
     /// The entries of the manifest to commit: the remote manifest with every local-wins change
     /// applied. Conflicted and skipped paths keep their remote entry.
     /// </summary>

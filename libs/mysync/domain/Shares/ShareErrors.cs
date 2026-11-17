@@ -21,6 +21,10 @@ public static class ShareErrors
         "Shares.AlreadyAShare",
         $"This folder is already share {existingShareId}. Run 'mysync sync' without an ID.");
 
+    public static Error NotAShare() => Error.Problem(
+        "Shares.NotAShare",
+        "This folder is not a share yet. Run 'mysync sync' to create one, or 'mysync sync <id>' to clone one.");
+
     public static Error UnsafeRoot(string folder) => Error.Problem(
         "Shares.UnsafeRoot",
         $"Refusing to share '{folder}' (home directory or drive root). Pass --force if you really mean it.");

@@ -222,7 +222,9 @@ libs/mysync/application/
   Sync/
     Run/            RunSyncCommand(.cs|Handler|Validator), SyncReport
     Plan/           GetSyncPlanQuery(.cs|Handler), SyncPlanResponse                    # `status`, `--dry-run`
-    Pipeline/       SyncPipeline, RemoteCommitter (412 retry loop)                     # internal, shared by Run/Clone/Resolve
+    Pipeline/       SyncPipeline, RemoteCommitter (412 retry loop), ObjectTransfers,   # internal, shared by Run/Clone/Resolve
+                    LocalApplier (phase 8), ConflictTracker, ProgressReportingStream
+    SyncOptions     max parallelism (MYSYNC_PARALLELISM), commit attempts, back-off base
   Conflicts/
     List/           ListConflictsQuery(.cs|Handler), ConflictListResponse
     Resolve/        ResolveConflictsCommand(.cs|Handler|Validator), ResolveReport
@@ -415,7 +417,7 @@ Owned by `IShareStateStore` (`JsonShareStateStore`). JSON, written **atomically*
 - `base` is the **last state this folder and the remote agreed on**. It drives the three-way merge (§9). Losing or corrupting it would make deletes look like additions, so treat it carefully.
 - `hashCache` avoids re-hashing unchanged files. A cached hash is reused only if size **and** mtime match exactly. **Racy-mtime rule:** if a file's mtime is within 2 seconds of the moment it was hashed, don't store it in the cache (coarse-resolution filesystems such as FAT can hide a same-second edit).
 - `conflicts` is rebuilt every sync from the merge plan. An entry disappears when the path is no longer in conflict. `kind` is one of `modify/modify`, `add/add`, `modify/delete`, `delete/modify`, `type`.
-- If `.mysynctool` is missing but other files exist, `sync` creates a new share. If it's unreadable or corrupt, **stop** (`StateErrors.Corrupt`). Never fall back to creating a new share or treating everything as new.
+- If `.mysynctool` is missing but other files exist, `sync` creates a new share. `RunSyncCommand` itself refuses with `ShareErrors.NotAShare`; the CLI picks the flow from `PreviewNewShareQuery.ExistingShareId`. If it's unreadable or corrupt, **stop** (`StateErrors.Corrupt`). Never fall back to creating a new share or treating everything as new.
 - The domain model is `MySync.Domain.State.ShareState`. The JSON shape lives only in Infrastructure.
 
 ### Other local artifacts (all always ignored, never synced)
@@ -487,6 +489,14 @@ Rules live in `MySync.Domain/Paths/` (`SharePath` value object, `PathRules`, `Pa
    - Before overwriting or deleting a local file, **re-check it still matches what the scan saw** (size + mtime). If it changed meanwhile, skip that path; it gets picked up next run.
    - Local deletes remove the file, then remove parent directories that became empty (unless the manifest has them as `dir` entries).
 9. **Update state:** new `base` = committed manifest, **except** paths whose local apply failed or was skipped keep their *old* base entry, so the next run sees that change again. Write `.mysynctool` atomically. Release the lock.
+
+**Rules the pipeline adds on top of the merge** (all tested in `application-unit-tests/Sync`):
+
+- **Paths the sync can't see are frozen.** If the scan skipped a path (unstable, unreadable, symlink) or the local ignore rules match it, its local side is taken to be its base, and its action is deferred. A file that is absent from the scan because it is busy or ignored is never read as "deleted here", and nothing is downloaded over it. The manifest keeps its remote entry; a remote-only ignored entry is reported as `IgnoredLocally`.
+- **Deferred means "keep the old base".** An upload the store rejects (`HashMismatch`, the file changed mid-upload), a file changed after the scan, a failed apply, a case-only collision on a case-insensitive filesystem, or a Windows-invalid name on Windows: the path is left out of this run (`SyncPlan.WithDeferred`), keeps its base entry, and is reported in `SyncReport.Skipped` with a `SkipCause`. The next run sees it again.
+- **Phase 8 deletes first**, deepest path first, then downloads, directory creations and mode changes in parallel, so a file can become a directory (and back) in one run. A directory that isn't empty when it should be deleted is deferred, not forced.
+- **A conflict's remote details** (`remote.revision`, `updatedBy`) come from the HEAD the plan was made against, not from this run's own commit. An unchanged conflict keeps them and its `firstDetectedUtc`.
+- Upload progress counts an object the store already had as transferred, so the bar completes; `SyncReport.Uploaded` counts only bytes actually sent.
 
 This order makes a crash at any point safe to re-run. If it dies after the commit but before the downloads, the next run sees local == base for those paths and remote changed, so it just downloads them. If both sides changed a path to the same hash, that's a no-op.
 
@@ -646,7 +656,7 @@ public sealed record StoredObjectInfo(ContentHash Hash, long Size, DateTimeOffse
 - `async` all the way down, with a `CancellationToken` on every async method. Because commits are atomic, a cancelled run is always safe to re-run: stop new transfers, never commit a half-planned manifest, clean the staging dir.
 - Stream everything. Hash with an 81920-byte (or larger) buffer. Never `File.ReadAllBytes` a user file.
 - Bounded parallelism with `Parallel.ForEachAsync` / `Channel<T>`. Hash and transfer in parallel, but keep the manifest build single-threaded and deterministic.
-- No static mutable state. Time comes from `IDateTimeProvider`; the disk from `ILocalFolder`.
+- No static mutable state. Time comes from `IDateTimeProvider`; the disk from `ILocalFolder`. Waits (the commit back-off) go through the BCL `TimeProvider`, which tests replace with `InstantTimeProvider` (fires at once, records each delay).
 - All JSON (manifest, state, `--json` output) goes through **source-generated** `JsonSerializerContext`s. No reflection serialization.
 - Ordinal string comparison (`StringComparer.Ordinal`) for manifest keys, everywhere.
 - Locked or unreadable local files (common on Windows): skip that path with a warning, report it in `SyncReport.Skipped` (exit `9`), and keep its base entry unchanged. Never abort the whole run for one file.
@@ -692,10 +702,11 @@ Every test project is xUnit v3 on the Microsoft Testing Platform with Shouldly, 
 | `MySync.Storage.Azure.IntegrationTests` (`tests/mysync/storage-azure-integration-tests/`) | `type:integration-test` | `AzureBlobShareStore` against **Azurite**, plus the `IShareStore` **contract suite** | Azurite |
 | `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + Azure) with two temp folders as two "machines" | Azurite |
 | `MySync.ArchitectureTests` (`tests/mysync/architecture-tests/`) | `type:architecture-test` | The dependency rules in §3 | none |
-| `MySync.Testing` (`tests/mysync/testing/`) | `type:lib` | **Not a test project.** Shared fakes and builders: `InMemoryShareStore`, `InMemoryLocalFolder` (also a simple `IFileScanner`; `ExecutableBitSupported = false` simulates Windows), `PathListIgnoreMatcher`, `ManifestBuilder` (real hashes + their bytes), `ManifestAssertions.ShouldMatchManifest`, `TempShareFolder`, `FixedDateTimeProvider`, `RecordingSyncProgressReporter`, and the abstract contract suites `Contracts/ShareStoreContractTests` and `Contracts/LocalFolderContractTests` | |
+| `MySync.Testing` (`tests/mysync/testing/`) | `type:lib` | **Not a test project.** Shared fakes and builders: `InMemoryShareStore`, `InMemoryLocalFolder` (also a simple `IFileScanner`; `ExecutableBitSupported = false` simulates Windows), `PathListIgnoreMatcher`, `ManifestBuilder` (real hashes + their bytes), `ManifestAssertions.ShouldMatchManifest`, `TempShareFolder`, `FixedDateTimeProvider`, `InstantTimeProvider`, `RecordingSyncProgressReporter`, `InMemoryShareStateStore`, `InMemoryFolderLock`, `RecordingConflictLog`, `FixedMachineIdentity`, `FixedIgnoreRulesLoader`, `TestContentHasher`, and the abstract contract suites `Contracts/ShareStoreContractTests` and `Contracts/LocalFolderContractTests` | |
 
 ### Conventions
 
+- **Pipeline tests use two "machines".** `application-unit-tests/TestSupport/SyncWorld` gives one shared `InMemoryShareStore` and clock; each `Machine` has its own folder, state, lock and conflict log and resolves the real handlers (with decorators) from `AddApplication()`. Races and crashes are injected through `InMemoryShareStore.BeforeReplaceManifest` and `InMemoryLocalFolder.OnOperation`.
 - **Handler tests never touch real storage or disk.** Use `InMemoryShareStore` / `InMemoryLocalFolder` for behaviour, and NSubstitute when a test is about one failing call.
 - **Progress is asserted as a sequence**, not as counters. `RecordingSyncProgressReporter` writes each call down as a line, so a test pins the whole order. Nothing in `apps/mysync/Rendering` is unit-tested, so this is where the reporting contract is held.
 - **One contract suite per abstraction, run against the fake and the real thing.** `LocalFolderContractTests` does for `ILocalFolder` what `ShareStoreContractTests` does for storage: it runs against `InMemoryLocalFolder` (as Unix and as Windows) in the application tests, and against the real folder in the infrastructure tests.

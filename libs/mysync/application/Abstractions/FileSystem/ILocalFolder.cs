@@ -16,6 +16,15 @@ public interface ILocalFolder
     /// <summary>The home directory, a drive or volume root, or <c>/</c>: refuse to create a share here without <c>--force</c>.</summary>
     bool IsUnsafeRoot { get; }
 
+    /// <summary>
+    /// False on case-insensitive filesystems (Windows, default macOS): there, entries that differ
+    /// only in case are not downloaded (CLAUDE.md §8).
+    /// </summary>
+    bool IsCaseSensitive { get; }
+
+    /// <summary>True on Windows: entries whose names Windows can't hold are skipped with a warning.</summary>
+    bool RequiresWindowsCompatibleNames { get; }
+
     /// <summary>Names directly in the root (for the clone "folder must be empty" check).</summary>
     Task<Result<IReadOnlyList<string>>> ListTopLevelNamesAsync(CancellationToken cancellationToken);
 

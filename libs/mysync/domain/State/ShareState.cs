@@ -64,6 +64,22 @@ public sealed class ShareState
             []);
     }
 
+    /// <summary>The state to save after a sync: the agreed base, the new hash cache and the open conflicts.</summary>
+    public static ShareState Create(
+        StorageLocation location,
+        ShareId shareId,
+        Revision baseRevision,
+        IEnumerable<KeyValuePair<SharePath, ManifestEntry>> baseEntries,
+        IEnumerable<KeyValuePair<SharePath, HashCacheEntry>> hashCache,
+        IEnumerable<Conflict> conflicts)
+    {
+        Result<ShareState> state = Restore(CurrentFormatVersion, location, shareId, baseRevision, baseEntries, hashCache, conflicts);
+
+        return state.IsSuccess
+            ? state.Value
+            : throw new ArgumentException(state.Error.Description, nameof(baseEntries));
+    }
+
     /// <summary>
     /// Rebuilds state read from <c>.mysynctool</c>. A newer format is refused; two conflicts for
     /// the same path mean the file is damaged. Never fall back to "new share" on failure.

@@ -1,7 +1,10 @@
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using MySync.Application.Abstractions.Behaviors;
 using MySync.Application.Abstractions.Messaging;
+using MySync.Application.Sync;
+using MySync.Application.Sync.Pipeline;
 
 namespace MySync.Application;
 
@@ -30,6 +33,14 @@ public static class DependencyInjection
         services.TryDecorate(typeof(ICommandHandler<>), typeof(LoggingDecorator.CommandBaseHandler<>));
 
         services.AddValidatorsFromAssembly(typeof(DependencyInjection).Assembly, includeInternalTypes: true);
+
+        // The sync pipeline (CLAUDE.md §9). Options and the delay clock can be replaced by the host.
+        services.TryAddSingleton(new SyncOptions());
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddScoped<RemoteCommitter>();
+        services.AddScoped<ObjectTransfers>();
+        services.AddScoped<LocalApplier>();
+        services.AddScoped<SyncPipeline>();
 
         return services;
     }

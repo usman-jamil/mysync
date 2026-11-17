@@ -48,6 +48,12 @@ public enum SkipReason
 {
     /// <summary><c>--no-delete</c>: the action would delete something, or depends on such a delete.</summary>
     NoDelete = 0,
+
+    /// <summary>
+    /// The sync couldn't do it this run (upload rejected, local file changed meanwhile, apply
+    /// failed, path ignored or not representable here). The caller reports why.
+    /// </summary>
+    Deferred = 1,
 }
 
 /// <summary>
