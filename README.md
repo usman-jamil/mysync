@@ -1,5 +1,29 @@
 # mysync
 
+[![Release](https://img.shields.io/github/v/release/usman-jamil/mysync?display_name=release&label=release)](https://github.com/usman-jamil/mysync/releases/latest)
+[![CI](https://github.com/usman-jamil/mysync/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/usman-jamil/mysync/actions/workflows/ci.yml)
+[![Release build](https://github.com/usman-jamil/mysync/actions/workflows/release-mysync.yml/badge.svg)](https://github.com/usman-jamil/mysync/actions/workflows/release-mysync.yml)
+[![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)](https://dotnet.microsoft.com/)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-informational)](#install)
+
+```text
+   _ __ ___   _   _  ___  _   _  _ __    ___
+  | '_ ` _ \ | | | |/ __|| | | || '_ \  / __|
+  | | | | | || |_| |\__ \| |_| || | | || (__
+  |_| |_| |_| \__, ||___/ \__, ||_| |_| \___|
+              |___/       |___/
+
+    laptop                                                        server
+   ~/report                                                      ~/report
+      │               ┌──────────────────────────────┐               │
+      │  mysync sync  │ Azure Blob container         │  mysync sync  │
+      ├── local ↑ ───▶│ shares/<id>/manifest.json    │◀─── local ↑ ──┤
+      │◀─ remote ↓ ───┤ shares/<id>/objects/ab/…     ├─── remote ↓ ─▶│
+      │               └──────────────────────────────┘               │
+
+         no server · hash-based · conflicts are never overwritten
+```
+
 Sync folders between machines through an Azure Blob Storage container. There is no server: shared
 state lives in the container, and each folder's own state lives in a `.mysynctool` file inside it.
 
