@@ -110,6 +110,11 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
             keep = true;
             return Result.Success(staged);
         }
+        catch (IOException exception)
+        {
+            // The network or the disk failed mid-download: skip this path, keep syncing the rest.
+            return Result.Failure<IStagedFile>(LocalFileErrors.WriteFailed(path.Value, exception.Message));
+        }
         finally
         {
             if (!keep)
@@ -142,7 +147,16 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
         }
 
         await using ProgressReportingStream content = new(opened.Value, progress, TransferDirection.Upload);
-        Result uploaded = await store.UploadObjectAsync(shareId, entry.Sha256, content, content.Length, cancellationToken);
+        Result uploaded;
+        try
+        {
+            uploaded = await store.UploadObjectAsync(shareId, entry.Sha256, content, content.Length, cancellationToken);
+        }
+        catch (IOException exception)
+        {
+            // Reading the local file failed mid-upload (e.g. locked or removed): skip it this run.
+            return Result.Failure<bool>(LocalFileErrors.Unreadable(path.Value, exception.Message));
+        }
 
         if (uploaded.IsFailure)
         {

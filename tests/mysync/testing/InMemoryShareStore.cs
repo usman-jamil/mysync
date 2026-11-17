@@ -31,6 +31,9 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
     /// </summary>
     public Func<ShareId, Task>? BeforeReplaceManifest { get; set; }
 
+    /// <summary>Replaces the stream a download gets, e.g. with a <see cref="FailingStream"/> to simulate a network drop.</summary>
+    public Func<ContentHash, byte[], Stream>? DownloadStream { get; set; }
+
     /// <summary>Makes every history write fail (history is best-effort).</summary>
     public bool FailHistoryWrites { get; set; }
 
@@ -222,7 +225,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
         lock (_gate)
         {
             return Task.FromResult(_blobs.TryGetValue(name, out Blob? blob)
-                ? Result.Success<Stream>(new MemoryStream(blob.Bytes!, writable: false))
+                ? Result.Success<Stream>(DownloadStream?.Invoke(hash, blob.Bytes!) ?? new MemoryStream(blob.Bytes!, writable: false))
                 : Result.Failure<Stream>(StorageErrors.NotFound(name)));
         }
     }

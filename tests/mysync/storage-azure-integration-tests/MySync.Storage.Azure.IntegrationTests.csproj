@@ -14,6 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Shouldly" />
     <PackageReference Include="Testcontainers.Azurite" />
     <PackageReference Include="xunit.v3.mtp-v2" />
@@ -21,6 +22,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\libs\mysync\storage-azure\MySync.Storage.Azure.csproj" />
+    <!-- Tests only: the store needs Infrastructure's manifest serializer, which the CLI also wires in. -->
+    <ProjectReference Include="..\..\..\libs\mysync\infrastructure\MySync.Infrastructure.csproj" />
     <ProjectReference Include="..\testing\MySync.Testing.csproj" />
   </ItemGroup>
 

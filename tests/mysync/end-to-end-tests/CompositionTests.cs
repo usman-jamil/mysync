@@ -13,12 +13,12 @@ using Xunit;
 namespace MySync.EndToEndTests;
 
 /// <summary>
-/// The full DI graph, wired the way the CLI wires it. Two-machine sync scenarios against
-/// Azurite land here once the sync slices exist.
+/// The full DI graph, wired the way the CLI wires it. Two-machine sync against Azurite is in
+/// <see cref="AzureSyncTests"/>.
 /// </summary>
 public class CompositionTests
 {
-    [Fact(Skip = "IShareStore has no implementation until MySync.Storage.Azure lands in step 7 (CLAUDE.md §18); the local-machine side is checked by the infrastructure DependencyInjectionTests. Re-enable then.")]
+    [Fact]
     public void FullGraph_Should_ConstructEveryService()
     {
         using ServiceProvider provider = BuildServices(new Dictionary<string, string?>()).BuildServiceProvider(

@@ -51,6 +51,9 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
     /// </summary>
     public Func<FolderOperation, SharePath, Error?>? OnOperation { get; set; }
 
+    /// <summary>Replaces the stream <see cref="OpenReadAsync"/> returns, e.g. with a <see cref="FailingStream"/> to simulate a file locked mid-upload.</summary>
+    public Func<SharePath, byte[], Stream>? ReadStream { get; set; }
+
     /// <summary>
     /// Paths the scanner reports as skipped (unstable) instead of scanning. A directory here hides
     /// everything under it, as an unreadable directory does on disk.
@@ -188,7 +191,7 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
         lock (_gate)
         {
             return Task.FromResult(_nodes.TryGetValue(path, out Node? node) && node is FileNode file
-                ? Result.Success<Stream>(new MemoryStream([.. file.Bytes], writable: false))
+                ? Result.Success<Stream>(ReadStream?.Invoke(path, [.. file.Bytes]) ?? new MemoryStream([.. file.Bytes], writable: false))
                 : Result.Failure<Stream>(LocalFileErrors.Unreadable(path.Value, "no such file")));
         }
     }

@@ -46,6 +46,7 @@ public class ErrorCatalogTests
         ShareErrors.InvalidId().Type.ShouldBe(ErrorType.Validation);
         PathErrors.Empty().Type.ShouldBe(ErrorType.Validation);
         ConfigurationErrors.Missing("AZURE_STORAGE_CONNECTION_STRING").Type.ShouldBe(ErrorType.Validation);
+        ConfigurationErrors.Invalid("MYSYNC_CONTAINER", "too short").Type.ShouldBe(ErrorType.Validation);
     }
 
     [Fact]

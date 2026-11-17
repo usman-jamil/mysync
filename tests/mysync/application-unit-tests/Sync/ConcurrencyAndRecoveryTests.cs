@@ -1,5 +1,6 @@
 using MySync.Application.Sync.Run;
 using MySync.Application.UnitTests.TestSupport;
+using MySync.Domain.Content;
 using MySync.Domain.Manifests;
 using MySync.Domain.Paths;
 using MySync.Domain.Shares;
@@ -214,6 +215,42 @@ public class ConcurrencyAndRecoveryTests
         (await world.HeadAsync(shareId)).Entries.Keys.Select(path => path.Value)
             .ShouldBe(["other.txt", "private/a.txt", "private/sub/b.txt"]);
         a.State.State!.Base[ManifestBuilder.PathOf("private/a.txt")].ShouldBeOfType<FileEntry>().Sha256.ShouldBe(ManifestBuilder.HashOf("a"));
+    }
+
+    [Fact]
+    public async Task ADownloadThatFailsMidStream_Should_SkipThatPath_AndApplyTheRest()
+    {
+        (SyncWorld world, Machine a, Machine b, _) = await TwoMachines(("flaky.bin", "v1"), ("fine.txt", "v1"));
+        b.Folder.WriteFile("flaky.bin", "b's long new version").WriteFile("fine.txt", "b's edit");
+        (await b.SyncAsync()).ShouldSucceed();
+        ContentHash flaky = ManifestBuilder.HashOf("b's long new version");
+        world.Store.DownloadStream = (hash, bytes) => hash == flaky ? new FailingStream(bytes, failAfter: 5) : new MemoryStream(bytes);
+
+        SyncReport report = (await a.SyncAsync()).ShouldSucceed();
+
+        report.Skipped.Single().ShouldBe(report.Skipped.Single() with { Path = "flaky.bin", Cause = SkipCause.ApplyFailed });
+        a.Folder.ReadText("flaky.bin").ShouldBe("v1");
+        a.Folder.ReadText("fine.txt").ShouldBe("b's edit");
+        a.Folder.StagedFileCount.ShouldBe(0);
+
+        world.Store.DownloadStream = null;
+        (await a.SyncAsync()).ShouldSucceed().Downloaded.Files.ShouldBe(1);
+        a.Folder.ReadText("flaky.bin").ShouldBe("b's long new version");
+    }
+
+    [Fact]
+    public async Task AnUploadWhoseFileFailsMidRead_Should_SkipThatPath_AndCommitTheRest()
+    {
+        (SyncWorld world, Machine a, _, ShareId shareId) = await TwoMachines(("locked.db", "v1"), ("fine.txt", "v1"));
+        a.Folder.WriteFile("locked.db", "a's long new version").WriteFile("fine.txt", "a's edit");
+        a.Folder.ReadStream = (path, bytes) => path.Value == "locked.db" ? new FailingStream(bytes, failAfter: 5) : new MemoryStream(bytes);
+
+        SyncReport report = (await a.SyncAsync()).ShouldSucceed();
+
+        report.Skipped.Single().ShouldBe(report.Skipped.Single() with { Path = "locked.db", Cause = SkipCause.Unreadable });
+        Manifest head = await world.HeadAsync(shareId);
+        head.Entries[ManifestBuilder.PathOf("locked.db")].ShouldBeOfType<FileEntry>().Sha256.ShouldBe(ManifestBuilder.HashOf("v1"));
+        head.Entries[ManifestBuilder.PathOf("fine.txt")].ShouldBeOfType<FileEntry>().Sha256.ShouldBe(ManifestBuilder.HashOf("a's edit"));
     }
 
     [Fact]

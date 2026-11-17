@@ -12,6 +12,11 @@ public static class ConfigurationErrors
         "Configuration.Missing",
         $"The environment variable {variableName} is not set.");
 
+    /// <summary>The variable is set but unusable. <paramref name="reason"/> must not contain the value.</summary>
+    public static Error Invalid(string variableName, string reason) => Error.Validation(
+        "Configuration.Invalid",
+        $"The environment variable {variableName} is not valid: {reason}");
+
     public static Error UnknownProvider(string provider) => Error.Validation(
         "Configuration.UnknownProvider",
         $"MYSYNC_PROVIDER '{provider}' is not a supported storage provider. Supported: azure-blob.");
