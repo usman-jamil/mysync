@@ -83,7 +83,36 @@ jobs:
       - name: Build
         run: dotnet build mysync.slnx --configuration Release
 
+      # The Azurite image (pinned in tests/mysync/testing/AzuriteImage.cs) comes from the cache
+      # rather than MCR on every run.
+      - name: Find the pinned Azurite image
+        id: azurite
+        run: echo "image=$(grep -oE 'mcr\.microsoft\.com/azure-storage/azurite:[^"]+' tests/mysync/testing/AzuriteImage.cs)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Azurite image
+        id: azurite-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/azurite-image.tar
+          key: azurite-image-${{ steps.azurite.outputs.image }}
+
+      - name: Load the Azurite image
+        env:
+          IMAGE: ${{ steps.azurite.outputs.image }}
+          CACHED: ${{ steps.azurite-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [ "$CACHED" = "true" ]; then
+            docker load --input ~/.cache/azurite-image.tar
+          else
+            docker pull "$IMAGE"
+            mkdir -p ~/.cache
+            docker save "$IMAGE" --output ~/.cache/azurite-image.tar
+          fi
+
       - name: Test everything (Azurite suites included; Docker is available here)
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
         run: dotnet test --solution mysync.slnx --configuration Release --no-build
 
   build:
@@ -234,7 +263,9 @@ jobs:
 
           notes="$RUNNER_TEMP/notes.md"
           cat > "$notes" <<'NOTES'
-          Self-contained builds of the `mysync` CLI. No .NET runtime or SDK is required.
+          `mysync` syncs folders between machines through an Azure Blob Storage container, with no
+          server of its own. These are self-contained builds: no .NET runtime or SDK is needed.
+          Full guide: [README](https://github.com/REPOSITORY/blob/TAG/README.md).
 
           | Platform | Download |
           | --- | --- |
@@ -254,29 +285,42 @@ jobs:
           mysync --version
           ```
 
-          The binary is unsigned, so macOS quarantines downloads. Clear it with
-          `xattr -d com.apple.quarantine /usr/local/bin/mysync`.
+          The binary is unsigned, so macOS quarantines it. Clear that once with
+          `xattr -d com.apple.quarantine /usr/local/bin/mysync`. On Alpine, install the C++ runtime
+          first: `apk add libstdc++ libgcc`.
 
           ### Install — Windows
 
-          Unzip and put `mysync.exe` somewhere on your `PATH`. SmartScreen warns about unsigned
-          executables the first time; choose *More info* → *Run anyway*.
-
-          ### Configure
-
-          ```bash
-          export AZURE_STORAGE_CONNECTION_STRING="<connection string>"
-          export MYSYNC_CONTAINER=mysync   # optional
-          ```
+          Unzip and put `mysync.exe` in a folder on your `PATH`. SmartScreen warns about unsigned
+          executables the first time; choose *More info* → *Run anyway*. For paths longer than 260
+          characters, enable long-path support in Windows.
 
           ### Verify the download
 
           ```bash
-          sha256sum -c --ignore-missing SHA256SUMS.txt
+          sha256sum -c --ignore-missing SHA256SUMS.txt          # Linux
+          shasum -a 256 -c --ignore-missing SHA256SUMS.txt      # macOS
           ```
+
+          On Windows: `(Get-FileHash mysync-VERSION-win-x64.zip).Hash` and compare with `SHA256SUMS.txt`.
+
+          ### Quick start
+
+          ```bash
+          export AZURE_STORAGE_CONNECTION_STRING="<connection string>"   # never typed into a prompt
+          export MYSYNC_CONTAINER=mysync                                  # optional
+
+          cd ~/projects/report && mysync sync          # creates a share and prints: mysync sync <id>
+          cd ~/elsewhere/report && mysync sync <id>    # on another machine, in an empty folder: clone it
+          mysync sync                                  # from then on, in either folder: two-way sync
+          ```
+
+          `mysync status` shows what a sync would do, `mysync conflicts` lists what both sides changed,
+          `mysync resolve <path> --keep local|remote` decides one, `mysync info` describes the share and
+          `mysync gc` removes stored files no recent revision uses. Every command takes `--json`.
           NOTES
 
-          sed -i "s/VERSION/$VERSION/g" "$notes"
+          sed -i -e "s/VERSION/$VERSION/g" -e "s|REPOSITORY|$GITHUB_REPOSITORY|g" -e "s|/TAG/|/$TAG/|g" "$notes"
 
           generated=$(gh api \
             --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \

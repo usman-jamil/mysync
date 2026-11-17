@@ -750,13 +750,14 @@ Every test project is xUnit v3 on the Microsoft Testing Platform with Shouldly, 
 
 Both Azurite-backed suites use `Testcontainers.Azurite` with the image `mcr.microsoft.com/azure-storage/azurite`, **pinned to a specific tag** in one place (`MySync.Testing/AzuriteImage.cs`).
 
-- **One container per test assembly** (an xUnit v3 assembly fixture). Each test uses **its own blob container** (`t-<guid-without-dashes>`, lowercase, ≤ 63 chars), so tests are isolated and can run in parallel.
+- **One container per test assembly** (an xUnit v3 assembly fixture). Each test uses **its own blob container** (`AzuriteEnvironment.NewContainerName()`: `t-<8-hex run prefix>-<24 hex>`, 35 chars), so tests are isolated and can run in parallel. Always take names from there: tests must never assume Azurite's account name (use the fixture's `AccountName`) or leave containers behind.
 - Run the blob service only.
 - The Azure SDK can send an `x-ms-version` newer than the pinned Azurite knows. **Chosen:** Azurite starts with `--skipApiVersionCheck` (`MySync.Testing/AzuriteEnvironment.cs`).
 - `AzuriteEnvironment` (in `MySync.Testing`) starts the container or picks up the bring-your-own instance and hands out container names. Each Azurite suite wraps it in its own small `AzuriteFixture : IAsyncLifetime`, registered with `[assembly: AssemblyFixture(...)]`.
-- **Bring-your-own Azurite:** if `MYSYNC_TEST_AZURITE_CONNECTION_STRING` is set, the fixture uses that running instance instead of starting a container (for machines without Docker, or faster local loops).
-- Docker is required otherwise. CI runs the Azurite suites on the Ubuntu runner only.
-- Azurite isn't Azure. Anything only real Azure can prove (throughput, real auth failures) can go in an optional, manually triggered workflow against a real account. It isn't part of v1.
+- **Bring-your-own storage:** if `MYSYNC_TEST_AZURITE_CONNECTION_STRING` is set, the fixture uses that storage instead of starting a container: a running Azurite (no Docker, faster local loops) or a real, test-only account. Supplied storage outlives the run, so each fixture deletes every container with this run's `AzuriteEnvironment.RunPrefix` when it is disposed.
+- Docker is required otherwise. CI runs the Azurite suites on the Ubuntu runner only, with the pinned image cached (`actions/cache`, keyed on the tag in `AzuriteImage.cs`) and Testcontainers' reaper off (`TESTCONTAINERS_RYUK_DISABLED`: the runner is discarded anyway).
+- Azurite isn't Azure. **`.github/workflows/real-azure.yml`** (manual only) runs the storage and end-to-end suites against a real account from the repository secret `MYSYNC_REAL_AZURE_CONNECTION_STRING`, which must be an account-key connection string for a test-only account. It fails at once with instructions if the secret is missing.
+- **Large-share tests** (`end-to-end-tests/LargeShareTests`: a 300 MB file, a 5,000-file share) skip unless `MYSYNC_TEST_LARGE=1`, which that workflow sets when its *large* input is ticked. Regular CI stays at 5 MB.
 
 ### What must be covered
 
@@ -854,6 +855,7 @@ The tag is the version. `mysync-` and an optional `v` are stripped; the rest mus
 - Archives are `mysync-<version>-<rid>.tar.gz` (Unix) / `.zip` (Windows), plus a collected `SHA256SUMS.txt`.
 - **Smoke tests:** a step runs the `linux-x64` binary inside a stock `ubuntu:24.04` container and the `linux-musl-x64` binary inside `alpine`, asserts each prints the tagged version, and runs the NFC-normalization self-check (§8). That's the self-containment claim tested rather than assumed. Keep it.
 - Binaries are unsigned. Release notes tell macOS users about `xattr -d com.apple.quarantine ./mysync` and Windows users about SmartScreen. Signing is the next step if that becomes a problem.
+- **Release notes** are the heredoc in the *Create the release* step: what mysync is, a link to the README at that tag, the download table, install and checksum steps per OS (Alpine needs `libstdc++ libgcc`), a quick start and the command list, then GitHub's generated change list. `VERSION`, `REPOSITORY` and `/TAG/` are substituted by `sed`; keep those placeholders unique. The README is the full user guide: keep its commands, options and exit codes in step with §10.
 
 ---
 

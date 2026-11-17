@@ -71,7 +71,37 @@ jobs:
       - name: Build
         run: dotnet build mysync.slnx --configuration Release
 
+      # The Azurite image (pinned in tests/mysync/testing/AzuriteImage.cs) comes from the cache
+      # rather than MCR on every run.
+      - name: Find the pinned Azurite image
+        id: azurite
+        run: echo "image=$(grep -oE 'mcr\.microsoft\.com/azure-storage/azurite:[^"]+' tests/mysync/testing/AzuriteImage.cs)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Azurite image
+        id: azurite-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/azurite-image.tar
+          key: azurite-image-${{ steps.azurite.outputs.image }}
+
+      - name: Load the Azurite image
+        env:
+          IMAGE: ${{ steps.azurite.outputs.image }}
+          CACHED: ${{ steps.azurite-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [ "$CACHED" = "true" ]; then
+            docker load --input ~/.cache/azurite-image.tar
+          else
+            docker pull "$IMAGE"
+            mkdir -p ~/.cache
+            docker save "$IMAGE" --output ~/.cache/azurite-image.tar
+          fi
+
       - name: Storage integration + end-to-end tests
+        env:
+          # The runner is thrown away after the job, so Testcontainers' reaper (another image to pull) isn't needed.
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
         run: |
           set -euo pipefail
           dotnet test --project tests/mysync/storage-azure-integration-tests/MySync.Storage.Azure.IntegrationTests.csproj --configuration Release --no-build

@@ -324,7 +324,7 @@ public sealed class CliTests : IDisposable
         info.ExitCode.ShouldBe(0, info.ToString());
         using var described = JsonDocument.Parse(info.StdOut);
         described.RootElement.GetProperty("openConflicts").GetInt32().ShouldBe(1);
-        described.RootElement.GetProperty("accountName").GetString().ShouldBe("devstoreaccount1");
+        described.RootElement.GetProperty("accountName").GetString().ShouldBe(_azurite.AccountName);
         described.RootElement.GetProperty("remoteRevision").GetInt64().ShouldBe(2);
         _b.ReadText(StateFileNames.State).ShouldBe(stateBefore);
     }

@@ -167,7 +167,7 @@ public class AzureBlobShareStoreTests(AzuriteFixture azurite)
 
         StorageLocation location = store.GetLocation().Value;
 
-        location.ShouldBe(new StorageLocation("azure-blob", "devstoreaccount1", "team-share"));
+        location.ShouldBe(new StorageLocation("azure-blob", azurite.AccountName, "team-share"));
     }
 
     [Fact]

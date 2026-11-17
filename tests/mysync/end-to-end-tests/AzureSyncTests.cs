@@ -61,7 +61,7 @@ public sealed class AzureSyncTests : IDisposable
 
         string state = _a.Folder.ReadText(StateFileNames.State);
         state.ShouldContain("\"provider\": \"azure-blob\"");
-        state.ShouldContain("\"accountName\": \"devstoreaccount1\"");
+        state.ShouldContain($"\"accountName\": \"{_azurite.AccountName}\"");
         state.ShouldContain($"\"container\": \"{_a.Container}\"");
         state.ShouldNotContain("AccountKey", Case.Insensitive);
         state.ShouldNotContain(AccountKeyOf(_azurite.ConnectionString));
