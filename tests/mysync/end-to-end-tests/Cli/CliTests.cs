@@ -305,10 +305,119 @@ public sealed class CliTests : IDisposable
         _a.Exists(StateFileNames.State).ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task StatusConflictsAndInfo_Should_ShowTheConflict_WithoutChangingAnything()
+    {
+        await ConflictOnBAsync();
+        string stateBefore = _b.ReadText(StateFileNames.State);
+
+        CliResult status = await RunAsync(_b, "status");
+        CliResult conflicts = await RunAsync(_b, "conflicts", "--json");
+        CliResult info = await RunAsync(_b, "info", "--json");
+
+        status.ExitCode.ShouldBe(3, status.ToString());
+        status.StdOut.ShouldContain("Status");
+        status.StdOut.ShouldContain("report.txt");
+        conflicts.ExitCode.ShouldBe(0, conflicts.ToString());
+        using var listed = JsonDocument.Parse(conflicts.StdOut);
+        listed.RootElement.GetProperty("conflicts").EnumerateArray().Single().GetProperty("path").GetString().ShouldBe("report.txt");
+        info.ExitCode.ShouldBe(0, info.ToString());
+        using var described = JsonDocument.Parse(info.StdOut);
+        described.RootElement.GetProperty("openConflicts").GetInt32().ShouldBe(1);
+        described.RootElement.GetProperty("accountName").GetString().ShouldBe("devstoreaccount1");
+        described.RootElement.GetProperty("remoteRevision").GetInt64().ShouldBe(2);
+        _b.ReadText(StateFileNames.State).ShouldBe(stateBefore);
+    }
+
+    [Fact]
+    public async Task ResolveKeepLocal_Should_ExitZero_AndTheOtherMachineGetsThatVersion()
+    {
+        await ConflictOnBAsync();
+
+        CliResult resolved = await RunAsync(_b, "resolve", "./report.txt", "--keep", "local");
+        CliResult pulled = await RunAsync(_a, "sync");
+        CliResult conflicts = await RunAsync(_b, "conflicts");
+
+        resolved.ExitCode.ShouldBe(0, resolved.ToString());
+        resolved.StdOut.ShouldContain("Resolved 1 conflict");
+        pulled.ExitCode.ShouldBe(0, pulled.ToString());
+        _a.ReadText("report.txt").ShouldBe("b's edit");
+        conflicts.StdOut.ShouldContain("No open conflicts");
+        _b.ReadText(StateFileNames.ConflictLog).ShouldContain("RESOLVED keep-local report.txt");
+    }
+
+    [Fact]
+    public async Task ResolveAllKeepRemote_Should_TakeTheSharesVersion_AsJson()
+    {
+        await ConflictOnBAsync();
+
+        CliResult resolved = await RunAsync(_b, "resolve", "--all", "--keep", "remote", "--json");
+
+        resolved.ExitCode.ShouldBe(0, resolved.ToString());
+        using var json = JsonDocument.Parse(resolved.StdOut);
+        json.RootElement.GetProperty("command").GetString().ShouldBe("resolve");
+        json.RootElement.GetProperty("resolved").EnumerateArray().Select(path => path.GetString()).ShouldBe(["report.txt"]);
+        _b.ReadText("report.txt").ShouldBe("a's edit");
+    }
+
+    [Theory]
+    [InlineData("resolve", "report.txt")]                                // no --keep
+    [InlineData("resolve", "--keep", "both", "report.txt")]
+    [InlineData("resolve", "--keep", "local")]                           // no path, no --all
+    [InlineData("resolve", "notes.txt", "--keep", "local")]              // not in conflict
+    [InlineData("gc", "--keep-revisions", "0")]
+    [InlineData("gc", "--grace-hours", "0")]
+    public async Task BadResolveAndGcArguments_Should_ExitTwo(params string[] arguments)
+    {
+        await ConflictOnBAsync();
+
+        CliResult result = await RunAsync(_b, arguments);
+
+        result.ExitCode.ShouldBe(2, result.ToString());
+        result.StdErr.ShouldNotBeEmpty();
+    }
+
+    [Fact]
+    public async Task Gc_Should_ListWhatItWouldDelete_AndDeleteNothingOnADryRun()
+    {
+        await CreateAndCloneAsync(("a.txt", "a"));
+
+        CliResult dryRun = await RunAsync(_a, "gc", "--dry-run", "--json");
+
+        dryRun.ExitCode.ShouldBe(0, dryRun.ToString());
+        using var json = JsonDocument.Parse(dryRun.StdOut);
+        json.RootElement.GetProperty("dryRun").GetBoolean().ShouldBeTrue();
+        json.RootElement.GetProperty("deletedObjects").GetArrayLength().ShouldBe(0);
+        json.RootElement.GetProperty("keptObjects").GetInt32().ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData("status")]
+    [InlineData("info")]
+    [InlineData("conflicts")]
+    [InlineData("gc")]
+    public async Task ShareCommands_Should_ExitFour_InAFolderThatIsNotAShare(string command)
+    {
+        CliResult result = await RunAsync(_a, command);
+
+        result.ExitCode.ShouldBe(4, result.ToString());
+        result.StdErr.ShouldContain("not a share");
+    }
+
     public void Dispose()
     {
         _a.Dispose();
         _b.Dispose();
+    }
+
+    // a and b both edit report.txt; a syncs first, so b holds the conflict. notes.txt is not in conflict.
+    private async Task ConflictOnBAsync()
+    {
+        await CreateAndCloneAsync(("report.txt", "base"), ("notes.txt", "n"));
+        _a.WriteFile("report.txt", "a's edit");
+        (await RunAsync(_a, "sync")).ExitCode.ShouldBe(0);
+        _b.WriteFile("report.txt", "b's edit");
+        (await RunAsync(_b, "sync")).ExitCode.ShouldBe(3);
     }
 
     private const int SyncThreshold = 1000;

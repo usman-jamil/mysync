@@ -32,8 +32,8 @@ internal static class ExitCodes
         return error.Code switch
         {
             _ when error.Code.StartsWith("Configuration.", StringComparison.Ordinal) => UsageOrConfiguration,
-            "Shares.FolderNotEmpty" or "Shares.AlreadyAShare" or "Shares.UnsafeRoot" => FolderPrecondition,
-            "Sync.CommitRetriesExhausted" => CommitRetriesExhausted,
+            "Shares.FolderNotEmpty" or "Shares.AlreadyAShare" or "Shares.NotAShare" or "Shares.UnsafeRoot" => FolderPrecondition,
+            "Sync.CommitRetriesExhausted" or "Sync.ShareChangedDuringGc" => CommitRetriesExhausted,
             "State.FolderLocked" => FolderLocked,
             "Sync.MassDeleteBlocked" => MassDeleteBlocked,
             "Shares.NotFound" or "Storage.Unauthorized" => NotFoundOrUnauthorized,

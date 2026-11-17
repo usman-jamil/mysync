@@ -40,6 +40,41 @@ internal static class SyncReportView
         RenderSkipped(created.Skipped);
     }
 
+    /// <summary><c>mysync resolve</c>: what was settled, and what is still open because the remote moved on.</summary>
+    public static void RenderResolve(SyncReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        RenderWarnings(report.Warnings);
+        string verb = report.DryRun ? "Would resolve" : "Resolved";
+        if (report.Resolved.IsEmpty && report.Conflicts.IsEmpty)
+        {
+            AnsiConsole.MarkupLine("[green]No open conflicts[/] — nothing to resolve.");
+        }
+        else if (!report.Resolved.IsEmpty)
+        {
+            AnsiConsole.MarkupLine($"[green]{verb} {report.Resolved.Length} {(report.Resolved.Length == 1 ? "conflict" : "conflicts")}[/]{(report.DryRun ? " (dry run — nothing was changed)" : string.Empty)}:");
+            foreach (Domain.Paths.SharePath path in report.Resolved)
+            {
+                AnsiConsole.MarkupLine($"  {ConsoleOutput.Value(PathErrors.Display(path.Value))}");
+            }
+        }
+
+        if (!report.DryRun && !report.Resolved.IsEmpty)
+        {
+            AnsiConsole.MarkupLine(Totals(report));
+        }
+
+        if (!report.Conflicts.IsEmpty)
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[yellow]Still in conflict[/] — the remote changed again since the conflict was recorded, so nothing was forced:");
+        }
+
+        RenderConflicts(report.Conflicts);
+        RenderSkipped(report.Skipped);
+    }
+
     public static void RenderConflicts(IReadOnlyCollection<Conflict> conflicts)
     {
         ArgumentNullException.ThrowIfNull(conflicts);
@@ -63,7 +98,7 @@ internal static class SyncReportView
         }
 
         AnsiConsole.Write(table);
-        AnsiConsole.MarkupLine(ConsoleOutput.Muted("Make both sides the same, put the local file back as it was, or (soon) run: mysync resolve <path> --keep local|remote"));
+        AnsiConsole.MarkupLine(ConsoleOutput.Muted("Decide with: mysync resolve <path> --keep local|remote (or --all). Making both sides the same, or putting the local file back, also clears it."));
     }
 
     public static void RenderSkipped(IReadOnlyCollection<SkippedPath> skipped)

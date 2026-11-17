@@ -2,7 +2,10 @@ using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MySync.Application.Conflicts.List;
+using MySync.Application.Maintenance.CollectGarbage;
 using MySync.Application.Shares.Create;
+using MySync.Application.Shares.GetInfo;
 using MySync.Application.Shares.Preview;
 using MySync.Application.Sync.Run;
 using MySync.Domain.Manifests;
@@ -42,6 +45,7 @@ internal static class JsonOutput
             [.. report.Skipped.Select(skip => new SkippedJson(skip.Path, CauseCode(skip.Cause), skip.Detail))],
             [.. report.Warnings],
             report.DryRun ? [.. report.Plan.Actions.Where(action => action.Kind != SyncActionKind.NoChange).Select(action => new PlannedJson(action.Path.Value, ActionCode(action.Kind)))] : null,
+            command == "resolve" ? [.. report.Resolved.Select(path => path.Value)] : null,
             exitCode);
 
         Emit(json, Context.SyncJson);
@@ -73,6 +77,60 @@ internal static class JsonOutput
 
         Emit(new PreviewJson("create", DryRun: true, preview.RootPath, preview.FileCount, preview.TotalBytes, preview.IsUnsafeRoot, ExitCodes.Success), Context.PreviewJson);
         return ExitCodes.Success;
+    }
+
+    public static int Write(ConflictListResponse listed, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(listed);
+
+        Emit(new ConflictListJson("conflicts", listed.ShareId.ToString(), [.. listed.Conflicts.Select(Conflict)], exitCode), Context.ConflictListJson);
+        return exitCode;
+    }
+
+    public static int Write(ShareInfoResponse info, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+
+        Emit(
+            new InfoJson(
+                "info",
+                info.ShareId.ToString(),
+                info.RootPath,
+                info.Location.Provider,
+                info.Location.AccountName,
+                info.Location.Container,
+                info.BaseRevision.Value,
+                info.RemoteRevision.Value,
+                info.RemoteUpdatedBy,
+                Utc(info.RemoteUpdatedUtc),
+                Utc(info.CreatedUtc),
+                info.FileCount,
+                info.TotalBytes,
+                info.OpenConflicts,
+                exitCode),
+            Context.InfoJson);
+        return exitCode;
+    }
+
+    public static int Write(GarbageReport report, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        Emit(
+            new GcJson(
+                "gc",
+                report.ShareId.ToString(),
+                report.DryRun,
+                report.Head.Value,
+                [.. report.KeptRevisions.Select(revision => revision.Value)],
+                [.. report.DeletedObjects.Select(item => new GcObjectJson(item.Hash.Value, item.Size, Utc(item.LastModifiedUtc)))],
+                report.DeletedBytes,
+                report.KeptObjects,
+                report.ProtectedByGrace,
+                [.. report.DeletedHistory.Select(revision => revision.Value)],
+                exitCode),
+            Context.GcJson);
+        return exitCode;
     }
 
     public static int Write(Error error, int exitCode)
@@ -184,6 +242,41 @@ internal sealed record SyncJson(
     List<SkippedJson> Skipped,
     List<string> Warnings,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<PlannedJson>? Plan,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<string>? Resolved,
+    int ExitCode);
+
+internal sealed record ConflictListJson(string Command, string ShareId, List<ConflictJson> Conflicts, int ExitCode);
+
+internal sealed record InfoJson(
+    string Command,
+    string ShareId,
+    string RootPath,
+    string Provider,
+    string AccountName,
+    string Container,
+    long BaseRevision,
+    long RemoteRevision,
+    string RemoteUpdatedBy,
+    string RemoteUpdatedUtc,
+    string CreatedUtc,
+    int FileCount,
+    long TotalBytes,
+    int OpenConflicts,
+    int ExitCode);
+
+internal sealed record GcObjectJson(string Sha256, long Size, string LastModifiedUtc);
+
+internal sealed record GcJson(
+    string Command,
+    string ShareId,
+    bool DryRun,
+    long HeadRevision,
+    List<long> KeptRevisions,
+    List<GcObjectJson> DeletedObjects,
+    long DeletedBytes,
+    int KeptObjects,
+    int ProtectedByGrace,
+    List<long> DeletedHistory,
     int ExitCode);
 
 internal sealed record CreateJson(
@@ -211,4 +304,7 @@ internal sealed record FailureJson(ErrorJson Error, int ExitCode);
 [JsonSerializable(typeof(CreateJson))]
 [JsonSerializable(typeof(PreviewJson))]
 [JsonSerializable(typeof(FailureJson))]
+[JsonSerializable(typeof(ConflictListJson))]
+[JsonSerializable(typeof(InfoJson))]
+[JsonSerializable(typeof(GcJson))]
 internal sealed partial class CliJsonContext : JsonSerializerContext;

@@ -2,6 +2,7 @@ using ConsoleAppFramework;
 using MySync.Application.Shares.Clone;
 using MySync.Application.Shares.Create;
 using MySync.Application.Shares.Preview;
+using MySync.Application.Sync.Plan;
 using MySync.Application.Sync.Run;
 using MySync.Cli.Rendering;
 using MySync.Domain.Shares;
@@ -70,6 +71,34 @@ internal sealed class SyncCommands(CommandRunner runner)
             return preview.Value.ExistingShareId is null
                 ? await CreateAsync(preview.Value, dryRun, yes, force, cancellationToken)
                 : await RunSyncAsync(dryRun, noDelete, allowMassDelete, cancellationToken);
+        }, cancellationToken);
+
+    /// <summary>Show what 'mysync sync' would do now, without changing anything here or in the share.</summary>
+    /// <param name="cancellationToken">Ctrl+C.</param>
+    [Command("status")]
+    public Task<int> Status(CancellationToken cancellationToken = default) =>
+        runner.RunAsync(async () =>
+        {
+            Result settings = runner.CheckStorage();
+            if (settings.IsFailure)
+            {
+                return runner.Fail(settings.Error);
+            }
+
+            Result<SyncReport> planned = await runner.QueryAsync<GetSyncPlanQuery, SyncReport>(new GetSyncPlanQuery(), cancellationToken);
+            if (planned.IsFailure)
+            {
+                return runner.Fail(planned.Error);
+            }
+
+            int exitCode = ExitCodeOf(planned.Value);
+            if (runner.Options.Json)
+            {
+                return JsonOutput.Write(planned.Value, "status", exitCode);
+            }
+
+            PlanView.Render(planned.Value, runner.Options.Verbose, status: true);
+            return exitCode;
         }, cancellationToken);
 
     /// <summary>Exit code for a finished run: conflicts (3) win over skipped paths (9).</summary>

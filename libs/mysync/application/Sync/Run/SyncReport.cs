@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using MySync.Domain.Manifests;
+using MySync.Domain.Paths;
 using MySync.Domain.Shares;
 using MySync.Domain.Sync;
 
@@ -24,7 +25,11 @@ public sealed record SyncReport(
     ImmutableArray<Conflict> Conflicts,
     ImmutableArray<SkippedPath> Skipped,
     ImmutableArray<string> Warnings,
-    SyncPlan Plan);
+    SyncPlan Plan)
+{
+    /// <summary><c>resolve</c> only: the named conflicts it settled. The ones still open are in <see cref="Conflicts"/>.</summary>
+    public ImmutableArray<SharePath> Resolved { get; init; } = [];
+}
 
 public sealed record TransferTotals(int Files, long Bytes)
 {

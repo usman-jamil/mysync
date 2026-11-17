@@ -27,6 +27,7 @@ internal sealed class SyncPipeline(
     IFileScanner scanner,
     IIgnoreRulesLoader ignoreRules,
     IShareStateStore stateStore,
+    IShareStore store,
     IConflictLog conflictLog,
     IMachineIdentity machine,
     IDateTimeProvider clock,
@@ -44,35 +45,14 @@ internal sealed class SyncPipeline(
         await CleanStagingAsync(warnings, cancellationToken);
 
         // Phase 2: scan.
-        Result<IIgnoreMatcher> ignore = await ignoreRules.LoadAsync(cancellationToken);
-        if (ignore.IsFailure)
-        {
-            return Result.Failure<SyncReport>(ignore.Error);
-        }
-
-        progress.PhaseStarted(SyncPhase.Scanning);
-        Result<ScannedFolder> scanned = await scanner.ScanAsync(
-            new ScanRequest(ignore.Value, session.HashCache, session.Base), progress, cancellationToken);
+        Result<LocalScan> scanned = await ScanAsync(session, warnings, cancellationToken);
         if (scanned.IsFailure)
         {
             return Result.Failure<SyncReport>(scanned.Error);
         }
 
-        ScannedFolder scan = scanned.Value;
-        // Keyed by path text: a skipped local path may not be a valid SharePath (that may be why it was skipped).
-        Dictionary<string, SkippedPath> skipped = new(StringComparer.Ordinal);
-        List<SharePath> scanSkipped = [];
-        foreach (SkippedLocalPath local in scan.Skipped)
-        {
-            skipped[local.Path] = new SkippedPath(local.Path, Map(local.Reason), local.Detail);
-            if (SharePath.Create(local.Path) is { IsSuccess: true } valid)
-            {
-                scanSkipped.Add(valid.Value);
-            }
-        }
-
-        warnings.AddRange(PathRules.FindCaseCollisions(scan.Entries.Keys).Select(collision =>
-            $"These local paths differ only in case and will clash on Windows and macOS: {string.Join(", ", collision.Spellings.Select(PathErrors.Display))}"));
+        (ScannedFolder scan, Dictionary<string, SkippedPath> skipped) = (scanned.Value.Folder, scanned.Value.Skipped);
+        HashSet<SharePath> stillInConflict = [];
 
         // Phases 3–7: read remote, plan, guard, upload, commit (re-planned if someone else commits first).
         SyncPlan plan = null!;
@@ -83,11 +63,7 @@ internal sealed class SyncPipeline(
             session.ShareId,
             async (snapshot, ct) =>
             {
-                ImmutableSortedDictionary<SharePath, ManifestEntry> remote = snapshot.Manifest.Entries;
-                (IReadOnlyDictionary<SharePath, ManifestEntry> local, HashSet<SharePath> frozen) =
-                    FreezeUnscannable(session.Base, scan, scanSkipped, remote, ignore.Value, skipped);
-
-                plan = MergePlanner.Plan(session.Base, local, remote, session.Merge).WithDeferred(frozen);
+                (plan, stillInConflict) = PlanAgainst(session, scanned.Value, snapshot.Manifest.Entries);
 
                 Result guard = MassDeleteGuard.Check(plan, session.AllowMassDelete);
                 if (guard.IsFailure)
@@ -143,8 +119,18 @@ internal sealed class SyncPipeline(
 
         if (session.DryRun)
         {
-            return Report(session, outcome.Remote.Manifest.Revision, committed: false, plan, uploaded, TransferTotals.None, 0, skipped, warnings,
-                ConflictTracker.Track(plan, session.PreviousConflicts, outcome.Remote.Manifest, Now()).Open);
+            ImmutableArray<Conflict> planned = ConflictTracker.Track(plan, session.PreviousConflicts, outcome.Remote.Manifest, Now()).Open;
+            if (session.Resolve is { } preview)
+            {
+                ImmutableArray<SharePath> wouldResolve = [.. preview.Keep.Keys
+                    .Where(path => !stillInConflict.Contains(path) && !planned.Any(conflict => conflict.Path == path) && !plan.Skipped.Any(action => action.Path == path))
+                    .Order(SharePath.OrdinalComparer)];
+                return Report(session, outcome.Remote.Manifest.Revision, committed: false, plan, uploaded, TransferTotals.None, 0,
+                    new Dictionary<string, SkippedPath>(skipped.Where(skip => preview.Keep.Keys.Any(path => path.Value == skip.Key)), StringComparer.Ordinal),
+                    warnings, [.. planned.Where(conflict => preview.Keep.ContainsKey(conflict.Path))], wouldResolve);
+            }
+
+            return Report(session, outcome.Remote.Manifest.Revision, committed: false, plan, uploaded, TransferTotals.None, 0, skipped, warnings, planned, []);
         }
 
         // Phase 8: apply remote changes locally.
@@ -163,6 +149,21 @@ internal sealed class SyncPipeline(
         // Phase 9: record conflicts and the new base.
         // The remote side of a conflict is what was planned against, not this run's own commit.
         (ImmutableArray<Conflict> conflicts, IReadOnlyList<Conflict> toLog) = ConflictTracker.Track(plan, session.PreviousConflicts, outcome.Remote.Manifest, Now());
+        ImmutableArray<SharePath> resolved = [];
+        if (session.Resolve is { } resolve)
+        {
+            // Resolve touches only the named paths: every other open conflict stays exactly as it
+            // was recorded (and isn't logged again), whatever this run's plan says about it.
+            conflicts = [.. conflicts.Where(conflict => resolve.Keep.ContainsKey(conflict.Path))
+                .Concat(session.PreviousConflicts.Where(conflict => !resolve.Keep.ContainsKey(conflict.Path)))
+                .OrderBy(conflict => conflict.Path, SharePath.OrdinalComparer)];
+            toLog = [.. toLog.Where(conflict => resolve.Keep.ContainsKey(conflict.Path))];
+            resolved = [.. resolve.Keep.Keys
+                .Where(path => !stillInConflict.Contains(path) && !conflicts.Any(conflict => conflict.Path == path) && !plan.Skipped.Any(action => action.Path == path))
+                .Order(SharePath.OrdinalComparer)];
+            await LogResolvedAsync(resolved, resolve, warnings, cancellationToken);
+        }
+
         foreach (Conflict conflict in toLog)
         {
             Result logged = await conflictLog.RecordDetectedAsync(conflict, cancellationToken);
@@ -184,7 +185,148 @@ internal sealed class SyncPipeline(
 
         await CleanStagingAsync(warnings, cancellationToken);
 
-        return Report(session, head.Revision, outcome.Committed is not null, plan, uploaded, applied.Downloaded, applied.DeletedLocally, skipped, warnings, conflicts);
+        if (session.Resolve is { } named)
+        {
+            // The report is about the named paths; .mysynctool keeps every open conflict.
+            Dictionary<string, SkippedPath> namedSkips = new(skipped.Where(skip => named.Keep.Keys.Any(path => path.Value == skip.Key)), StringComparer.Ordinal);
+            return Report(session, head.Revision, outcome.Committed is not null, plan, uploaded, applied.Downloaded, applied.DeletedLocally, namedSkips, warnings,
+                [.. conflicts.Where(conflict => named.Keep.ContainsKey(conflict.Path))], resolved);
+        }
+
+        return Report(session, head.Revision, outcome.Committed is not null, plan, uploaded, applied.Downloaded, applied.DeletedLocally, skipped, warnings, conflicts, resolved);
+    }
+
+    /// <summary>
+    /// What a sync would do now, without doing any of it (<c>mysync status</c>): no lock, no
+    /// staging clean-up, no upload, no commit, no state or log written. A tripped mass-delete
+    /// guard is a warning here, since nothing is being deleted.
+    /// </summary>
+    public async Task<Result<SyncReport>> PreviewAsync(SyncSession session, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        List<string> warnings = [];
+
+        Result<LocalScan> scanned = await ScanAsync(session, warnings, cancellationToken);
+        if (scanned.IsFailure)
+        {
+            return Result.Failure<SyncReport>(scanned.Error);
+        }
+
+        Result<ManifestSnapshot?> remote = await store.GetManifestAsync(session.ShareId, cancellationToken);
+        if (remote.IsFailure)
+        {
+            return Result.Failure<SyncReport>(remote.Error);
+        }
+
+        if (remote.Value is not { } head)
+        {
+            return Result.Failure<SyncReport>(ShareErrors.NotFound(session.ShareId));
+        }
+
+        (SyncPlan plan, _) = PlanAgainst(session, scanned.Value, head.Manifest.Entries);
+        Result guard = MassDeleteGuard.Check(plan, session.AllowMassDelete);
+        if (guard.IsFailure)
+        {
+            warnings.Add($"{guard.Error.Description} A sync would stop here.");
+        }
+
+        ImmutableArray<Conflict> conflicts = ConflictTracker.Track(plan, session.PreviousConflicts, head.Manifest, Now()).Open;
+        return Report(session with { DryRun = true }, head.Manifest.Revision, committed: false, plan, TransferTotals.None, TransferTotals.None, 0, scanned.Value.Skipped, warnings, conflicts, []);
+    }
+
+    // Phase 2: ignore rules and the scan, with what was skipped and why. Writes nothing.
+    private async Task<Result<LocalScan>> ScanAsync(SyncSession session, List<string> warnings, CancellationToken cancellationToken)
+    {
+        Result<IIgnoreMatcher> ignore = await ignoreRules.LoadAsync(cancellationToken);
+        if (ignore.IsFailure)
+        {
+            return Result.Failure<LocalScan>(ignore.Error);
+        }
+
+        session.Progress.PhaseStarted(SyncPhase.Scanning);
+        Result<ScannedFolder> scanned = await scanner.ScanAsync(
+            new ScanRequest(ignore.Value, session.HashCache, session.Base), session.Progress, cancellationToken);
+        if (scanned.IsFailure)
+        {
+            return Result.Failure<LocalScan>(scanned.Error);
+        }
+
+        ScannedFolder scan = scanned.Value;
+        // Keyed by path text: a skipped local path may not be a valid SharePath (that may be why it was skipped).
+        Dictionary<string, SkippedPath> skipped = new(StringComparer.Ordinal);
+        List<SharePath> scanSkipped = [];
+        foreach (SkippedLocalPath local in scan.Skipped)
+        {
+            skipped[local.Path] = new SkippedPath(local.Path, Map(local.Reason), local.Detail);
+            if (SharePath.Create(local.Path) is { IsSuccess: true } valid)
+            {
+                scanSkipped.Add(valid.Value);
+            }
+        }
+
+        warnings.AddRange(PathRules.FindCaseCollisions(scan.Entries.Keys).Select(collision =>
+            $"These local paths differ only in case and will clash on Windows and macOS: {string.Join(", ", collision.Spellings.Select(PathErrors.Display))}"));
+
+        return new LocalScan(ignore.Value, scan, skipped, scanSkipped);
+    }
+
+    /// <summary>
+    /// Phase 4 against one remote manifest. For <c>resolve</c>, a named path's base is moved to the
+    /// side being given up (the remote for <c>--keep local</c>, the local for <c>--keep remote</c>), so
+    /// the ordinary merge rows carry the kept side across; every other path is deferred. A named path
+    /// whose remote changed since its conflict was recorded is left a conflict: it is never forced.
+    /// </summary>
+    private static (SyncPlan Plan, HashSet<SharePath> StillInConflict) PlanAgainst(
+        SyncSession session, LocalScan scan, ImmutableSortedDictionary<SharePath, ManifestEntry> remote)
+    {
+        (IReadOnlyDictionary<SharePath, ManifestEntry> local, HashSet<SharePath> frozen) =
+            FreezeUnscannable(session.Base, scan.Folder, scan.ScanSkipped, remote, scan.Ignore, scan.Skipped);
+
+        if (session.Resolve is not { } resolve)
+        {
+            return (MergePlanner.Plan(session.Base, local, remote, session.Merge).WithDeferred(frozen), []);
+        }
+
+        Dictionary<SharePath, ManifestEntry> planBase = new(session.Base);
+        HashSet<SharePath> stillInConflict = [];
+        foreach ((SharePath path, KeepSide keep) in resolve.Keep)
+        {
+            Conflict recorded = session.PreviousConflicts.Single(conflict => conflict.Path == path);
+            ManifestEntry? remoteNow = remote.GetValueOrDefault(path);
+            if (!ManifestEntry.AreEquivalent(remoteNow, recorded.Remote) || frozen.Contains(path))
+            {
+                stillInConflict.Add(path);
+                continue;
+            }
+
+            ManifestEntry? givenUp = keep == KeepSide.Local ? remoteNow : local.GetValueOrDefault(path);
+            if (givenUp is null)
+            {
+                planBase.Remove(path);
+            }
+            else
+            {
+                planBase[path] = givenUp;
+            }
+        }
+
+        SyncPlan plan = MergePlanner.Plan(planBase, local, remote, session.Merge);
+        HashSet<SharePath> untouched = [.. plan.Actions.Select(action => action.Path).Where(path => !resolve.Keep.ContainsKey(path))];
+        untouched.UnionWith(frozen);
+        return (plan.WithDeferred(untouched), stillInConflict);
+    }
+
+    private async Task LogResolvedAsync(IEnumerable<SharePath> resolved, ResolveRequest resolve, List<string> warnings, CancellationToken cancellationToken)
+    {
+        foreach (SharePath path in resolved)
+        {
+            Result logged = await conflictLog.RecordResolvedAsync(path, resolve.Keep[path], Now(), cancellationToken);
+            if (logged.IsFailure)
+            {
+                logger.LogWarning("Could not write the conflict log: {Error}", logged.Error.Code);
+                warnings.Add($"Could not write {StateFileNames.ConflictLog}: {logged.Error.Description}");
+            }
+        }
     }
 
     /// <summary>
@@ -287,7 +429,8 @@ internal sealed class SyncPipeline(
         int deletedLocally,
         Dictionary<string, SkippedPath> skipped,
         List<string> warnings,
-        ImmutableArray<Conflict> conflicts) =>
+        ImmutableArray<Conflict> conflicts,
+        ImmutableArray<SharePath> resolved) =>
         new(
             session.ShareId,
             revision,
@@ -300,7 +443,10 @@ internal sealed class SyncPipeline(
             conflicts,
             [.. skipped.Values.OrderBy(skip => skip.Path, StringComparer.Ordinal)],
             [.. warnings],
-            plan);
+            plan)
+        {
+            Resolved = resolved,
+        };
 
     private static SkipCause Map(LocalSkipReason reason) => reason switch
     {
@@ -333,4 +479,11 @@ internal sealed record SyncSession(
     bool AllowMassDelete,
     bool DryRun,
     ISyncProgressReporter Progress,
-    int Parallelism);
+    int Parallelism,
+    ResolveRequest? Resolve = null);
+
+/// <summary><c>mysync resolve</c>: which side to keep for each named conflicted path.</summary>
+internal sealed record ResolveRequest(IReadOnlyDictionary<SharePath, KeepSide> Keep);
+
+/// <summary>The scan as the planner needs it.</summary>
+internal sealed record LocalScan(IIgnoreMatcher Ignore, ScannedFolder Folder, Dictionary<string, SkippedPath> Skipped, IReadOnlyList<SharePath> ScanSkipped);

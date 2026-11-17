@@ -9,10 +9,15 @@ using MySync.Application.Abstractions.Logging;
 using MySync.Application.Abstractions.Messaging;
 using MySync.Application.Abstractions.State;
 using MySync.Application.Abstractions.Storage;
+using MySync.Application.Conflicts.List;
+using MySync.Application.Conflicts.Resolve;
+using MySync.Application.Maintenance.CollectGarbage;
 using MySync.Application.Shares.Clone;
 using MySync.Application.Shares.Create;
+using MySync.Application.Shares.GetInfo;
 using MySync.Application.Shares.Preview;
 using MySync.Application.Sync;
+using MySync.Application.Sync.Plan;
 using MySync.Application.Sync.Run;
 using MySync.Domain.Manifests;
 using MySync.Domain.Shares;
@@ -118,6 +123,20 @@ internal sealed class Machine
     public Task<Result<SyncReport>> CloneAsync(CloneShareCommand command) => Send<CloneShareCommand, SyncReport>(command);
 
     public Task<Result<SyncReport>> SyncAsync(RunSyncCommand? command = null) => Send<RunSyncCommand, SyncReport>(command ?? new RunSyncCommand());
+
+    public Task<Result<SyncReport>> StatusAsync() => Query<GetSyncPlanQuery, SyncReport>(new GetSyncPlanQuery());
+
+    public Task<Result<ShareInfoResponse>> InfoAsync() => Query<GetShareInfoQuery, ShareInfoResponse>(new GetShareInfoQuery());
+
+    public Task<Result<ConflictListResponse>> ConflictsAsync() => Query<ListConflictsQuery, ConflictListResponse>(new ListConflictsQuery());
+
+    public Task<Result<SyncReport>> ResolveAsync(string keep, params string[] paths) =>
+        Send<ResolveConflictsCommand, SyncReport>(new ResolveConflictsCommand(paths, All: false, keep));
+
+    public Task<Result<SyncReport>> ResolveAsync(ResolveConflictsCommand command) => Send<ResolveConflictsCommand, SyncReport>(command);
+
+    public Task<Result<GarbageReport>> GcAsync(CollectGarbageCommand? command = null) =>
+        Send<CollectGarbageCommand, GarbageReport>(command ?? new CollectGarbageCommand());
 
     /// <summary>Text of every file in the folder, by path.</summary>
     public IReadOnlyDictionary<string, string> Files() =>

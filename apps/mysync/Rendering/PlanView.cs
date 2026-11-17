@@ -12,21 +12,32 @@ internal static class PlanView
     /// <summary>Paths shown per kind of change before "… and N more" (all of them with <c>--verbose</c>).</summary>
     private const int PathsPerKind = 20;
 
-    public static void Render(SyncReport report, bool verbose)
+    public static void Render(SyncReport report, bool verbose, bool status = false)
     {
         ArgumentNullException.ThrowIfNull(report);
+
+        foreach (string warning in report.Warnings)
+        {
+            ConsoleOutput.Warn(warning);
+        }
 
         List<IGrouping<string, SyncAction>> groups = [.. report.Plan.Actions
             .Where(action => action.Kind is not (SyncActionKind.NoChange or SyncActionKind.Conflict or SyncActionKind.Skip))
             .GroupBy(action => Describe(action.Kind))];
 
+        string heading = status
+            ? $"[bold]Status[/] {ConsoleOutput.Muted($"(share at revision {report.Revision.Value})")}"
+            : "[bold]Dry run[/] — nothing was changed.";
+
         if (groups.Count == 0)
         {
-            AnsiConsole.MarkupLine("[green]Nothing to do[/] — this folder and the share agree.");
+            AnsiConsole.MarkupLine(report.Conflicts.IsEmpty
+                ? $"{heading} [green]Nothing to sync[/]: this folder and the share agree."
+                : $"{heading} Nothing to sync apart from the conflicts below.");
         }
         else
         {
-            AnsiConsole.MarkupLine("[bold]Dry run[/] — nothing was changed. A sync would:");
+            AnsiConsole.MarkupLine($"{heading} A sync would:");
             foreach (IGrouping<string, SyncAction> group in groups)
             {
                 List<SyncAction> actions = [.. group];

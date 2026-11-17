@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MySync.Application.Abstractions.Behaviors;
 using MySync.Application.Abstractions.Messaging;
+using MySync.Application.Shares;
 using MySync.Application.Sync;
 using MySync.Application.Sync.Pipeline;
 
@@ -41,6 +42,7 @@ public static class DependencyInjection
         services.AddScoped<ObjectTransfers>();
         services.AddScoped<LocalApplier>();
         services.AddScoped<SyncPipeline>();
+        services.AddScoped<ShareFolder>();
 
         return services;
     }

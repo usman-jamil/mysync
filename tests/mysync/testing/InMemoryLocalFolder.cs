@@ -316,9 +316,13 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
         }
     }
 
+    /// <summary>How many times staging was cleaned: a read-only command must leave this at 0.</summary>
+    public int StagingCleans { get; private set; }
+
     public Task<Result> CleanStagingAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        StagingCleans++;
 
         lock (_gate)
         {

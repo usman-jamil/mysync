@@ -215,19 +215,20 @@ Group by feature, then by use case:
 libs/mysync/application/
   Abstractions/{Messaging,Behaviors,Storage,FileSystem,Hashing,State,Logging,Ignore,Environment,Progress}/
   Shares/
+    ShareFolder     "this folder is a share and the environment points at its storage" (status, info, resolve, gc)
     Preview/        PreviewNewShareQuery(.cs|Handler|Validator), NewSharePreview       # counts + size, no hashing
     Create/         CreateShareCommand(.cs|Handler|Validator), CreateShareResponse
     Clone/          CloneShareCommand(.cs|Handler|Validator), CloneShareResponse
     GetInfo/        GetShareInfoQuery(.cs|Handler), ShareInfoResponse
   Sync/
     Run/            RunSyncCommand(.cs|Handler|Validator), SyncReport
-    Plan/           GetSyncPlanQuery(.cs|Handler), SyncPlanResponse                    # `status`, `--dry-run`
+    Plan/           GetSyncPlanQuery(.cs|Handler) → SyncReport (DryRun)                # `status`: SyncPipeline.PreviewAsync
     Pipeline/       SyncPipeline, RemoteCommitter (412 retry loop), ObjectTransfers,   # internal, shared by Run/Clone/Resolve
                     LocalApplier (phase 8), ConflictTracker, ProgressReportingStream
     SyncOptions     max parallelism (MYSYNC_PARALLELISM), commit attempts, back-off base
   Conflicts/
     List/           ListConflictsQuery(.cs|Handler), ConflictListResponse
-    Resolve/        ResolveConflictsCommand(.cs|Handler|Validator), ResolveReport
+    Resolve/        ResolveConflictsCommand(.cs|Handler|Validator) → SyncReport (+ Resolved)
   Maintenance/
     CollectGarbage/ CollectGarbageCommand(.cs|Handler|Validator), GarbageReport
   Diagnostics/
@@ -293,10 +294,10 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 |---|---|
 | `ConsoleOutput` | The one way to write: `Fail` / `Warn` / `Success`, `Value` / `Muted` / `Label` (escaped), byte and count formatting, `IsInteractive`, `CanRedraw` |
 | `SyncProgressDisplay` | `ISyncProgressReporter` for `sync`, `clone` and `resolve`, **on stderr**: live bars when stderr can redraw, one line per phase and planned transfer otherwise, nothing with `--quiet` / `--json` |
-| `SyncReportView` | End-of-run summary: transferred, deleted, **conflicts**, skipped (with reasons) |
+| `SyncReportView` | End-of-run summary: transferred, deleted, **conflicts**, skipped (with reasons); `RenderConflicts` is also the `conflicts` table (path, kind, local vs remote hash/size/mtime, remote `updatedBy` and revision); `RenderResolve` for `resolve` |
 | `PlanView` | `status` / `--dry-run` output |
-| `ConflictView` | `conflicts` table (path, kind, local vs remote hash/size/mtime, remote `updatedBy` and revision) |
 | `ShareInfoView` | `info` field list |
+| `GarbageView` | `gc`: what was (or would be) deleted, and what was kept and why |
 | `JsonOutput` | `--json`: one JSON document on stdout per command, source-generated serializer |
 
 - **Escape everything user-supplied** before it goes into markup (`ConsoleOutput.Value`, or `Markup.Escape`). A file path containing `[` would otherwise be read as a style tag and vanish or throw. Synced paths are user-supplied by definition.
@@ -598,9 +599,25 @@ Runs the normal pipeline (lock → scan → read remote → plan), but for the n
 - Sets the base entry for the path to the resolved state, removes it from `conflicts`, and writes a `RESOLVED` line to `.mysynctool.log`.
 - A path that isn't currently in conflict → error for that path, exit `2`. `resolve` touches only the named conflicted paths. It doesn't run a full sync of other paths.
 
+How it's built (`SyncSession.Resolve`, `SyncPipeline.PlanAgainst`): for each named path the planner's **base is moved to the side being given up**, the remote entry for `--keep local` and the local one for `--keep remote`. Then the ordinary rows carry the kept side across: row 3 uploads or removes, row 2 downloads or deletes. Every other path is deferred. A named path whose remote no longer matches the remote recorded in its conflict (or that the scan couldn't see) keeps its real base, so it stays a conflict. Every other open conflict is carried over exactly as recorded and isn't logged again. The report lists only the named paths: `Resolved`, and in `Conflicts` the ones still open, so an unrelated open conflict doesn't make a successful `resolve` exit `3`. Mass-delete isn't guarded: the user named every path.
+
+`--keep` accepts `local` / `remote` in any case. The CLI moves `resolve`'s options in front of its paths before parsing (`KnownCommands.ArrangeForParsing`), because ConsoleAppFramework's `params` argument would otherwise swallow `--keep local`. On Windows `\` in a typed path becomes `/`; a leading `./` is dropped.
+
+### `status`, `info`, `conflicts`
+
+- `status` (`SyncPipeline.PreviewAsync`): scan, read HEAD, plan, exactly as a sync would, and **write nothing**: no lock (it runs during a sync), no staging clean-up, no state (not even the hash cache), no log. A mass-delete that would stop a sync is a warning. Exit codes as for a sync: `3` with conflicts, `9` with skipped paths.
+- `info`: state plus HEAD, so it needs storage. Shows base revision against HEAD revision, who changed HEAD last, file count and size, open conflicts.
+- `conflicts`: `.mysynctool` alone, offline, no lock. Exit `0` whether or not any are open; scripts read `--json`.
+- All of them, like `sync` and `gc`, fail outside a share with `ShareErrors.NotAShare` → exit `4`.
+
 ### `gc` (never automatic)
 
 Deletes object blobs in the share that are **not referenced** by HEAD or by any of the last `--keep-revisions` history manifests, **and** whose `LastModified` is older than `--grace-hours`. The grace period protects objects uploaded by another client's sync that hasn't committed yet. Prune history manifests older than the kept window. Always print what will be (or was) deleted.
+
+- `--keep-revisions` ≥ 1 and `--grace-hours` ≥ 1 (validator; a zero grace could delete what another machine is about to commit).
+- Anything unreadable (a history manifest, the object listing) stops gc **before** it deletes anything: it never guesses what is referenced.
+- HEAD is read again just before deleting; if it moved, nothing is deleted (`SyncErrors.ShareChangedDuringGc` → exit `5`). Objects are deleted first, then history.
+- **Known risk:** a sync that starts *after* that check and finds an old, unreferenced object still present reuses it instead of uploading, and gc may delete it a moment later. Run gc when no one else is syncing. Objects an interrupted *create* uploaded sit under a share ID with no manifest; gc (per share) doesn't see them.
 
 ### Exit codes (`apps/mysync/ExitCodes.cs`)
 
@@ -612,8 +629,8 @@ Mapped from `Error.Code` (failures) or from the report (partial successes). Noth
 | 1 | Unexpected error | unhandled exception |
 | 2 | Usage or configuration error | `ValidationError`, `ConfigurationErrors.*`, `resolve` on a non-conflicted path |
 | 3 | Completed, but one or more conflicts were dropped and logged (still open) | `SyncReport.Conflicts` non-empty (takes precedence over 9) |
-| 4 | Folder precondition failed | `ShareErrors.FolderNotEmpty`, `AlreadyAShare`, `UnsafeRoot` |
-| 5 | Remote concurrency retries exhausted | `SyncErrors.CommitRetriesExhausted` |
+| 4 | Folder precondition failed | `ShareErrors.FolderNotEmpty`, `AlreadyAShare`, `NotAShare`, `UnsafeRoot` |
+| 5 | Remote concurrency retries exhausted | `SyncErrors.CommitRetriesExhausted`, `SyncErrors.ShareChangedDuringGc` |
 | 6 | Another mysync process holds the lock for this folder | `StateErrors.FolderLocked` |
 | 7 | Safety guard tripped (mass delete) | `SyncErrors.MassDeleteBlocked` |
 | 8 | Share not found / storage auth failure | `ShareErrors.NotFound`, `StorageErrors.Unauthorized` |

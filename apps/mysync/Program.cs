@@ -96,9 +96,12 @@ app.ConfigureGlobalOptions((ref ConsoleApp.GlobalOptionsBuilder options) =>
 });
 
 app.Add<SyncCommands>();
+app.Add<ConflictCommands>();
+app.Add<ShareCommands>();
+app.Add<MaintenanceCommands>();
 app.Add<DiagnosticsCommands>();
 
-await app.RunAsync(args);
+await app.RunAsync(KnownCommands.ArrangeForParsing(args));
 
 return usageError && Environment.ExitCode == ExitCodes.Unexpected
     ? ExitCodes.UsageOrConfiguration

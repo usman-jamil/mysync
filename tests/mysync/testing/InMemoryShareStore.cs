@@ -34,6 +34,12 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
     /// <summary>Replaces the stream a download gets, e.g. with a <see cref="FailingStream"/> to simulate a network drop.</summary>
     public Func<ContentHash, byte[], Stream>? DownloadStream { get; set; }
 
+    /// <summary>Runs before objects are listed: lets a test commit as "another machine" while gc is planning.</summary>
+    public Func<ShareId, Task>? BeforeListObjects { get; set; }
+
+    /// <summary>History revisions that list as unreadable (a damaged blob), as a real store would report them.</summary>
+    public HashSet<long> UnreadableHistory { get; } = [];
+
     /// <summary>Makes every history write fail (history is best-effort).</summary>
     public bool FailHistoryWrites { get; set; }
 
@@ -153,11 +159,13 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
         history.Sort((x, y) => x.Revision.CompareTo(y.Revision));
 
-        foreach ((_, Manifest manifest) in history)
+        foreach ((Revision revision, Manifest manifest) in history)
         {
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            yield return manifest;
+            yield return UnreadableHistory.Contains(revision.Value)
+                ? Result.Failure<Manifest>(ShareErrors.InvalidManifest($"history {revision} is damaged"))
+                : manifest;
         }
     }
 
@@ -233,6 +241,11 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
     public async IAsyncEnumerable<Result<StoredObjectInfo>> ListObjectsAsync(
         ShareId shareId, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        if (BeforeListObjects is { } hook)
+        {
+            await hook(shareId);
+        }
+
         var layout = ShareLayout.For(shareId);
         List<StoredObjectInfo> objects = [];
 
