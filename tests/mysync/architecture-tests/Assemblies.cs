@@ -12,7 +12,7 @@ internal static class Assemblies
     public static readonly Assembly ApplicationAssembly = typeof(ICommand).Assembly;
     public static readonly Assembly InfrastructureAssembly = typeof(MySync.Infrastructure.DependencyInjection).Assembly;
     public static readonly Assembly StorageAzureAssembly = typeof(MySync.Storage.Azure.AzureStorageOptions).Assembly;
-    public static readonly Assembly CliAssembly = typeof(MySync.Cli.Commands.DiagnosticsCommands).Assembly;
+    public static readonly Assembly CliAssembly = Assembly.Load("mysync"); // every CLI type is internal; the assembly is named after the executable
 
     public const string SharedKernelNamespace = "SharedKernel";
     public const string DomainNamespace = "MySync.Domain";

@@ -1,5 +1,4 @@
 using ConsoleAppFramework;
-using Microsoft.Extensions.DependencyInjection;
 using MySync.Application.Abstractions.Messaging;
 using MySync.Application.Diagnostics.SelfCheck;
 using MySync.Cli.Rendering;
@@ -7,21 +6,16 @@ using SharedKernel;
 
 namespace MySync.Cli.Commands;
 
-public class DiagnosticsCommands(IServiceProvider serviceProvider)
+internal sealed class DiagnosticsCommands(CommandRunner runner)
 {
     /// <summary>
     /// Verify this binary's runtime can do what mysync relies on (used by release smoke tests).
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     [Command("self-check")]
-    public async Task<int> SelfCheck(CancellationToken cancellationToken)
+    public Task<int> SelfCheck(CancellationToken cancellationToken) => runner.RunAsync(async () =>
     {
-        using IServiceScope scope = serviceProvider.CreateScope();
-
-        IQueryHandler<RunSelfCheckQuery, SelfCheckResponse> handler =
-            scope.ServiceProvider.GetRequiredService<IQueryHandler<RunSelfCheckQuery, SelfCheckResponse>>();
-
-        Result<SelfCheckResponse> result = await handler.Handle(new RunSelfCheckQuery(), cancellationToken);
+        Result<SelfCheckResponse> result = await runner.QueryAsync<RunSelfCheckQuery, SelfCheckResponse>(new RunSelfCheckQuery(), cancellationToken);
 
         if (result.IsFailure)
         {
@@ -41,5 +35,5 @@ public class DiagnosticsCommands(IServiceProvider serviceProvider)
         }
 
         return result.Value.Passed ? ExitCodes.Success : ExitCodes.Unexpected;
-    }
+    }, cancellationToken);
 }

@@ -266,12 +266,16 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 - Commands are registered with `consoleApp.Add<T>()`. Global options (`--verbose`, `--quiet`, `--json`, `--parallel`) use ConsoleAppFramework's global-options support.
 - **Don't use `builder.ToConsoleAppBuilder()`.** As soon as `ConfigureGlobalOptions` is called, ConsoleAppFramework builds its own (empty) service provider after parsing and replaces the host's, so no handler resolves. Instead `ConsoleApp.Create().ConfigureContainer(new HostServiceProviderFactory(builder))`: ConsoleAppFramework then builds the host itself, after global options are parsed, and the parsed `GlobalOptions` is registered into the same container via `ConfigureServices`.
 - `--verbose` / `--quiet` set a Serilog `LoggingLevelSwitch` from inside the `ConfigureGlobalOptions` callback. Write that lambda's parameter type out (`(ref ConsoleApp.GlobalOptionsBuilder options) => …`): with the inferred C# 14 form `(ref options)`, the ConsoleAppFramework 5.7.13 generator fails with a NullReferenceException (CS8785).
-- Ctrl+C cancels the token passed to every handler. The process exits `130`.
+- Ctrl+C cancels the token passed to every handler. The process exits `130` (ConsoleAppFramework maps `OperationCanceledException`). Nothing half-done is committed; uploaded objects of an interrupted *create* stay in the container without a manifest.
+- `CliEnvironment` parses `MYSYNC_PROVIDER` and `MYSYNC_PARALLELISM` once at startup and registers `SyncOptions`; a bad value is reported (exit `2`) by the first command that needs storage, so `--help` still works.
+- **Usage errors exit `2`**, not ConsoleAppFramework's defaults: `KnownCommands` rejects an unknown command before routing (otherwise it prints the help and exits `0`), and `ConsoleApp.LogError` writes to **stderr** (its default is stdout) and marks the run as a usage error. That only works because every command catches its own exceptions through `CommandRunner`; keep it that way.
+- `ConsoleOutput.Configure()` stops Spectre wrapping at 80 columns when stdout or stderr is redirected, so a long path never splits across lines in a pipe or a log.
 
 ### `apps/mysync/Commands/`
 
 | File | Commands |
 |---|---|
+| `CommandRunner.cs` | Not a command: scope per handler, `CheckStorage()` (settings before any work or prompt), failures to stderr (and one JSON document with `--json`), unexpected exceptions → exit `1`, redacted, stack trace only with `--verbose` |
 | `SyncCommands.cs` | `sync [<shareId>]`, `status` |
 | `ConflictCommands.cs` | `conflicts`, `resolve` |
 | `ShareCommands.cs` | `info` |
@@ -280,14 +284,15 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 - **Keep commands thin:** resolve the handler from a scope, invoke it, render the result, return the exit code.
 - `sync` with no argument and no `.mysynctool` is the **create** flow. The command first runs `PreviewNewShareQuery` (file count and size, no hashing), asks for confirmation if needed (§9), then runs `CreateShareCommand`.
 - **Confirmation lives in the command, never in a handler.** `--yes` never reaches the Application layer. A non-interactive stdin without `--yes` above the thresholds fails instead of assuming consent.
-- **A command given all its arguments never prompts.** No credentials are ever prompted. The only prompt in the whole tool is the large-share `y/N`.
+- **A command given all its arguments never prompts.** No credentials are ever prompted. The only prompt in the whole tool is the large-share `y/N` (more than `SyncCommands.LargeFileCount` = 1,000 files or `LargeTotalBytes` = 1 GB), on stderr. Declining exits `130` with nothing uploaded. Without a terminal (or with `--json`) and without `--yes` it fails with `Cli.ConfirmationRequired` (exit `2`). An unsafe root is refused *before* asking.
+- `sync --dry-run` in a folder that isn't a share previews the create (count and size, nothing uploaded). `--dry-run` with a share ID is a usage error: cloning only downloads.
 
 ### `apps/mysync/Rendering/` — everything the user sees
 
 | Piece | What it is |
 |---|---|
 | `ConsoleOutput` | The one way to write: `Fail` / `Warn` / `Success`, `Value` / `Muted` / `Label` (escaped), byte and count formatting, `IsInteractive`, `CanRedraw` |
-| `SyncProgressDisplay` | `ISyncProgressReporter` for `sync`, `clone` and `resolve` (upload and download bars) |
+| `SyncProgressDisplay` | `ISyncProgressReporter` for `sync`, `clone` and `resolve`, **on stderr**: live bars when stderr can redraw, one line per phase and planned transfer otherwise, nothing with `--quiet` / `--json` |
 | `SyncReportView` | End-of-run summary: transferred, deleted, **conflicts**, skipped (with reasons) |
 | `PlanView` | `status` / `--dry-run` output |
 | `ConflictView` | `conflicts` table (path, kind, local vs remote hash/size/mtime, remote `updatedBy` and revision) |
@@ -617,7 +622,8 @@ Mapped from `Error.Code` (failures) or from the report (partial successes). Noth
 
 ### Output
 
-- Default: concise progress (`↑ 12 files 4.1 MB  ↓ 3 files 220 KB  ✗ 0`) and a final summary listing conflicts and skipped paths with reasons.
+- Default: concise progress (`↑ 12 files 4.1 MB  ↓ 3 files 220 KB  ✗ 0`) and a final summary listing conflicts and skipped paths with reasons. The summary goes to stdout; progress, warnings and failures go to stderr.
+- `--json` documents (`Rendering/JsonOutput`, source-generated `CliJsonContext`) all end with `exitCode`. `sync` / `clone`: `command`, `shareId`, `revision`, `committed`, `dryRun`, `uploaded` / `downloaded` `{files, bytes}`, `deletedLocally`, `deletedRemotely`, `conflicts` (full entries, like `.mysynctool`), `skipped` `{path, cause, detail}` (cause in kebab-case, e.g. `changed-since-scan`), `warnings`, and with `--dry-run` a `plan` of `{path, action}`. Create: `shareId`, `fileCount`, `totalBytes`, `uploaded`, `skipped`, `warnings`, `cloneCommand`. A failure: `{ "error": { code, description, details? }, exitCode }`.
 - When the terminal can't redraw, no animated progress (see §4).
 - Messages say what happened and what to do next. No stack traces unless `--verbose`.
 
@@ -710,7 +716,7 @@ Every test project is xUnit v3 on the Microsoft Testing Platform with Shouldly, 
 | `MySync.Application.UnitTests` (`tests/mysync/application-unit-tests/`) | `type:unit-test` | Handlers, validators, `SyncPipeline`, `RemoteCommitter`, decorators | `InMemoryShareStore`, `InMemoryLocalFolder`, NSubstitute for single-failure cases |
 | `MySync.Infrastructure.UnitTests` (`tests/mysync/infrastructure-unit-tests/`) | `type:unit-test` | `LocalFolderContractTests` on disk, `LocalFolder`, `FileScanner`, `Sha256ContentHasher`, hash cache, `JsonShareStateStore`, `FolderLock`, `FileConflictLog` rotation, `GitIgnoreMatcher` (against `git`), `ManifestSerializer` (exact JSON pinned), and `DiskSyncTests`: the real pipeline over two temp folders with `InMemoryShareStore` | real temp directories (`TempShareFolder`), `git` |
 | `MySync.Storage.Azure.IntegrationTests` (`tests/mysync/storage-azure-integration-tests/`) | `type:integration-test` | `AzureBlobShareStore` against **Azurite**, plus the `IShareStore` **contract suite** | Azurite |
-| `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + Azure) with two temp folders as two "machines" | Azurite |
+| `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + Azure) with two temp folders as two "machines"; `Cli/CliTests` runs the **built `mysync` as a process** (`CliProcess`, fresh environment, stdin closed) for exit codes, stdout/stderr, `--json` and the no-terminal prompt rule | Azurite |
 | `MySync.ArchitectureTests` (`tests/mysync/architecture-tests/`) | `type:architecture-test` | The dependency rules in §3 | none |
 | `MySync.Testing` (`tests/mysync/testing/`) | `type:lib` | **Not a test project.** Shared fakes and builders: `InMemoryShareStore`, `InMemoryLocalFolder` (also a simple `IFileScanner`; `ExecutableBitSupported = false` simulates Windows), `PathListIgnoreMatcher`, `ManifestBuilder` (real hashes + their bytes), `ManifestAssertions.ShouldMatchManifest`, `TempShareFolder`, `FixedDateTimeProvider`, `InstantTimeProvider`, `RecordingSyncProgressReporter`, `InMemoryShareStateStore`, `InMemoryFolderLock`, `RecordingConflictLog`, `FixedMachineIdentity`, `FixedIgnoreRulesLoader`, `TestContentHasher`, `FailingStream` (throws `IOException` partway), and the abstract contract suites `Contracts/ShareStoreContractTests` and `Contracts/LocalFolderContractTests` | |
 

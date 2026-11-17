@@ -25,6 +25,8 @@
     <ProjectReference Include="..\..\..\libs\mysync\infrastructure\MySync.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\libs\mysync\storage-azure\MySync.Storage.Azure.csproj" />
     <ProjectReference Include="..\testing\MySync.Testing.csproj" />
+    <!-- Not referenced as a library: the CLI tests run the built mysync as a process, so it only has to be built first. -->
+    <ProjectReference Include="..\..\..\apps\mysync\MySync.Cli.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 
 </Project>

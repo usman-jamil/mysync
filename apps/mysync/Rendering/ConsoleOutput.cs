@@ -21,6 +21,32 @@ internal static class ConsoleOutput
     private static readonly IAnsiConsole Stderr = AnsiConsole.Create(
         new AnsiConsoleSettings { Out = new AnsiConsoleOutput(Console.Error) });
 
+    /// <summary>Lines are never wrapped when they go to a file or a pipe: a path split in two breaks grep and scripts.</summary>
+    private const int UnwrappedWidth = 4096;
+
+    /// <summary>Call once at startup, before anything is written.</summary>
+    public static void Configure()
+    {
+        if (Console.IsOutputRedirected)
+        {
+            AnsiConsole.Profile.Width = UnwrappedWidth;
+        }
+
+        if (Console.IsErrorRedirected)
+        {
+            Stderr.Profile.Width = UnwrappedWidth;
+        }
+    }
+
+    /// <summary>The stderr console: progress, warnings and failures, so stdout stays clean for output and <c>--json</c>.</summary>
+    public static IAnsiConsole Errors => Stderr;
+
+    /// <summary>
+    /// Whether progress bars can be drawn on stderr: someone is there, stderr is a terminal and it
+    /// understands ANSI. Otherwise progress is a few plain lines, or nothing.
+    /// </summary>
+    public static bool CanRedrawErrors => IsInteractive && !Console.IsErrorRedirected && Stderr.Profile.Capabilities.Ansi;
+
     /// <summary>
     /// Whether there is somebody to answer a question: a keyboard on one end, a terminal on
     /// the other. False under a pipe, in CI, and whenever input is redirected — which is
@@ -68,6 +94,10 @@ internal static class ConsoleOutput
     /// </summary>
     public static void Warn(string message) =>
         Stderr.MarkupLine($"[yellow]{Markup.Escape(message)}[/]");
+
+    /// <summary>Progress and other notes for a human, on stderr.</summary>
+    public static void Info(string message) =>
+        Stderr.MarkupLine($"[dim]{Markup.Escape(message)}[/]");
 
     public static void Success(string message) =>
         AnsiConsole.MarkupLine($"[green]{Markup.Escape(message)}[/]");

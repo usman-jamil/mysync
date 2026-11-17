@@ -7,6 +7,7 @@ using MySync.Application;
 using MySync.Cli;
 using MySync.Cli.Commands;
 using MySync.Cli.Hosting;
+using MySync.Cli.Rendering;
 using MySync.Infrastructure;
 using MySync.Storage.Azure;
 using Serilog;
@@ -33,16 +34,43 @@ builder.Services.AddSerilog(logger => logger
 // ConsoleAppFramework owns Ctrl+C and the process lifetime; the host's banner is noise.
 builder.Services.Configure<ConsoleLifetimeOptions>(options => options.SuppressStatusMessages = true);
 
+ConsoleOutput.Configure();
+
+// A typo ("mysync snyc") would otherwise print the help and exit 0.
+if (KnownCommands.FindUnknown(args) is { } unknown)
+{
+    await Console.Error.WriteLineAsync($"'{unknown}' is not a mysync command. Run 'mysync --help' to see them.");
+    return ExitCodes.UsageOrConfiguration;
+}
+
+// MYSYNC_PROVIDER and MYSYNC_PARALLELISM, parsed once; a bad value is reported by the first
+// command that needs it, not here (CLAUDE.md §5).
+var environment = new CliEnvironment(builder.Configuration);
+builder.Services.AddSingleton(environment);
+builder.Services.AddSingleton(environment.SyncOptions);
+builder.Services.AddTransient<CommandRunner>();
+
 builder.Services
     .AddApplication()
     .AddInfrastructure();
 
 // An unknown provider registers nothing here; it is reported as ConfigurationErrors.UnknownProvider
 // (exit 2) by the first command that needs storage, so --help and --version still work.
-if (StorageProviderResolver.Resolve(builder.Configuration) == StorageProvider.AzureBlob)
+if (environment.Provider == StorageProvider.AzureBlob)
 {
     builder.Services.AddAzureBlobStorage();
 }
+
+// ConsoleAppFramework writes its own messages (unknown option, missing argument) to stdout by
+// default; they are errors, and stdout belongs to output and --json.
+// Every command catches its own exceptions (CommandRunner), so anything ConsoleAppFramework
+// reports itself is a usage error: exit 2, not its default 1 (CLAUDE.md §10).
+bool usageError = false;
+ConsoleApp.LogError = message =>
+{
+    usageError = true;
+    Console.Error.WriteLine(message);
+};
 
 await using var serviceProviderFactory = new HostServiceProviderFactory(builder);
 
@@ -67,6 +95,11 @@ app.ConfigureGlobalOptions((ref ConsoleApp.GlobalOptionsBuilder options) =>
     return new GlobalOptions(verbose, quiet, json, parallel);
 });
 
+app.Add<SyncCommands>();
 app.Add<DiagnosticsCommands>();
 
 await app.RunAsync(args);
+
+return usageError && Environment.ExitCode == ExitCodes.Unexpected
+    ? ExitCodes.UsageOrConfiguration
+    : Environment.ExitCode;
