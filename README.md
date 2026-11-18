@@ -469,6 +469,8 @@ None of these is synced, and none contains credentials.
 
 ## Develop
 
+Contributions are welcome: [`CONTRIBUTING.md`](CONTRIBUTING.md) covers setup, tests, where a change goes, and pull requests.
+
 Requires the .NET 10 SDK, Node (for Nx; see `.nvmrc`) and Docker for the Azurite suites. `CLAUDE.md` describes the architecture and the rules for changing it.
 
 ```bash
