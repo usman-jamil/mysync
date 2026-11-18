@@ -112,9 +112,9 @@ public class ManifestTests
     [Fact]
     public void Restore_Should_RefuseANewerFormat_AndTellTheUserToUpgrade()
     {
-        Error error = Manifest.Restore(2, Share(), Rev(17), Created, Updated, "x", []).Error;
+        Error error = Manifest.Restore(Manifest.MaxReadableFormatVersion + 1, Share(), Rev(17), Created, Updated, "x", []).Error;
 
-        error.ShouldBe(ShareErrors.UnsupportedFormat(2));
+        error.ShouldBe(ShareErrors.UnsupportedFormat(Manifest.MaxReadableFormatVersion + 1));
         error.Description.ShouldContain("Upgrade mysync");
     }
 

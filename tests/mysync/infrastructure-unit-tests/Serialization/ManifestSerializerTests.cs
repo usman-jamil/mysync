@@ -57,6 +57,52 @@ public class ManifestSerializerTests
     }
 
     [Fact]
+    public void ADeletedSharesMarker_Should_BeFormatTwo_WithNoEntries_AndWhoDeletedIt()
+    {
+        Manifest marker = Sample().CreateDeletedRevision(new DateTimeOffset(2026, 11, 18, 14, 2, 0, TimeSpan.Zero), "usman@DEV-LAPTOP").Value;
+
+        string json = Encoding.UTF8.GetString(_serializer.Serialize(marker));
+
+        json.ShouldBe("""
+            {
+              "formatVersion": 2,
+              "shareId": "0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10",
+              "revision": 18,
+              "createdUtc": "2026-11-15T18:40:12Z",
+              "updatedUtc": "2026-11-18T14:02:00Z",
+              "updatedBy": "usman@DEV-LAPTOP",
+              "entries": {},
+              "deleted": {
+                "deletedUtc": "2026-11-18T14:02:00Z",
+                "deletedBy": "usman@DEV-LAPTOP"
+              }
+            }
+            """.ReplaceLineEndings("\n"));
+        Manifest read = _serializer.Deserialize(Encoding.UTF8.GetBytes(json)).Value;
+        read.IsDeleted.ShouldBeTrue();
+        read.Deletion.ShouldBe(marker.Deletion);
+    }
+
+    [Fact]
+    public void AnOrdinaryManifest_Should_StayFormatOne_WithNoDeletedProperty()
+    {
+        string json = Encoding.UTF8.GetString(_serializer.Serialize(Sample()));
+
+        json.ShouldStartWith("{\n  \"formatVersion\": 1,");
+        json.ShouldNotContain("deleted");
+    }
+
+    [Fact]
+    public void AFormatTwoManifestWithEntries_Should_BeInvalid()
+    {
+        string json = WithEntries("\"a.txt\": { \"type\": \"dir\" }")
+            .Replace("\"formatVersion\": 1", "\"formatVersion\": 2", StringComparison.Ordinal)
+            .Replace("\"entries\":", "\"deleted\": { \"deletedUtc\": \"2026-11-18T14:02:00Z\", \"deletedBy\": \"x\" }, \"entries\":", StringComparison.Ordinal);
+
+        Read(json).Error.Code.ShouldBe("Shares.InvalidManifest");
+    }
+
+    [Fact]
     public void Serialize_Should_BeDeterministic_UTF8WithoutABom_AndLfOnly()
     {
         byte[] first = _serializer.Serialize(Sample());
@@ -94,9 +140,9 @@ public class ManifestSerializerTests
     [Fact]
     public void ANewerFormat_Should_BeUnsupported_EvenIfTheRestOfItIsUnreadable()
     {
-        Error error = Read("""{ "formatVersion": 2, "somethingNew": [1, 2, 3] }""").Error;
+        Error error = Read("""{ "formatVersion": 3, "somethingNew": [1, 2, 3] }""").Error;
 
-        error.ShouldBe(ShareErrors.UnsupportedFormat(2));
+        error.ShouldBe(ShareErrors.UnsupportedFormat(3));
     }
 
     [Theory]

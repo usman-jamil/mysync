@@ -8,6 +8,7 @@ using MySync.Application.Abstractions.Progress;
 using MySync.Application.Abstractions.State;
 using MySync.Application.Abstractions.Storage;
 using MySync.Application.Sync.Run;
+using MySync.Domain.Content;
 using MySync.Domain.Manifests;
 using MySync.Domain.Paths;
 using MySync.Domain.Shares;
@@ -58,6 +59,7 @@ internal sealed class SyncPipeline(
         SyncPlan plan = null!;
         Dictionary<SharePath, SkippedPath> uploadFailures = [];
         TransferTotals uploaded = TransferTotals.None;
+        HashSet<ContentHash> sent = [];
 
         Result<CommitOutcome> commit = await committer.CommitAsync(
             session.ShareId,
@@ -82,6 +84,7 @@ internal sealed class SyncPipeline(
 
                 UploadOutcome upload = await transfers.UploadAsync(session.ShareId, toUpload, progress, session.Parallelism, ct);
                 uploaded = new TransferTotals(uploaded.Files + upload.Uploaded.Files, uploaded.Bytes + upload.Uploaded.Bytes);
+                sent.UnionWith(upload.Sent);
                 foreach ((SharePath path, SkippedPath failure) in upload.Failed)
                 {
                     uploadFailures[path] = failure;
@@ -102,6 +105,11 @@ internal sealed class SyncPipeline(
 
         if (commit.IsFailure)
         {
+            if (commit.Error.Code == ShareDeletedCode)
+            {
+                await RemoveSentAsync(session.ShareId, sent, cancellationToken);
+            }
+
             return Result.Failure<SyncReport>(commit.Error);
         }
 
@@ -223,6 +231,11 @@ internal sealed class SyncPipeline(
             return Result.Failure<SyncReport>(ShareErrors.NotFound(session.ShareId));
         }
 
+        if (head.Manifest.Deletion is { } deletion)
+        {
+            return Result.Failure<SyncReport>(ShareErrors.Deleted(session.ShareId, deletion));
+        }
+
         (SyncPlan plan, _) = PlanAgainst(session, scanned.Value, head.Manifest.Entries);
         Result guard = MassDeleteGuard.Check(plan, session.AllowMassDelete);
         if (guard.IsFailure)
@@ -232,6 +245,24 @@ internal sealed class SyncPipeline(
 
         ImmutableArray<Conflict> conflicts = ConflictTracker.Track(plan, session.PreviousConflicts, head.Manifest, Now()).Open;
         return Report(session with { DryRun = true }, head.Manifest.Revision, committed: false, plan, TransferTotals.None, TransferTotals.None, 0, scanned.Value.Skipped, warnings, conflicts, []);
+    }
+
+    private const string ShareDeletedCode = "Shares.Deleted";
+
+    /// <summary>
+    /// The share was deleted while this run was uploading: what this run stored would otherwise be
+    /// left in the container after <c>mysync delete</c> had swept it. Best effort; nothing else is touched.
+    /// </summary>
+    private async Task RemoveSentAsync(ShareId shareId, IEnumerable<ContentHash> sent, CancellationToken cancellationToken)
+    {
+        foreach (ContentHash hash in sent)
+        {
+            Result removed = await store.DeleteObjectAsync(shareId, hash, cancellationToken);
+            if (removed.IsFailure)
+            {
+                logger.LogWarning("Could not remove an object uploaded to the deleted share: {Error}", removed.Error.Code);
+            }
+        }
     }
 
     // Phase 2: ignore rules and the scan, with what was skipped and why. Writes nothing.

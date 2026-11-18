@@ -5,6 +5,7 @@ using MySync.Application.Abstractions.Messaging;
 using MySync.Application.Abstractions.Storage;
 using MySync.Application.Shares.Clone;
 using MySync.Application.Shares.Create;
+using MySync.Application.Shares.Delete;
 using MySync.Application.Sync.Run;
 using MySync.Domain.Shares;
 using MySync.Infrastructure;
@@ -36,6 +37,9 @@ internal sealed class AzureMachine(string connectionString, string container) : 
     public Task<Result<SyncReport>> CloneAsync(ShareId shareId) => SendAsync<CloneShareCommand, SyncReport>(new CloneShareCommand(shareId.ToString()));
 
     public Task<Result<SyncReport>> SyncAsync() => SendAsync<RunSyncCommand, SyncReport>(new RunSyncCommand());
+
+    public Task<Result<DeleteShareResponse>> DeleteAsync(string? shareId = null) =>
+        SendAsync<DeleteShareCommand, DeleteShareResponse>(new DeleteShareCommand(shareId));
 
     /// <summary>The store this machine's commands use, for looking at the remote side directly.</summary>
     public async Task<T> WithStoreAsync<T>(Func<IShareStore, Task<T>> look)

@@ -404,6 +404,65 @@ public sealed class CliTests : IDisposable
         result.StdErr.ShouldContain("not a share");
     }
 
+    [Fact]
+    public async Task Delete_Should_RefuseWithoutYes_AndChangeNothing()
+    {
+        string shareId = await CreateAndCloneAsync(("a.txt", "a"));
+
+        CliResult refused = await RunAsync(_a, "delete");
+
+        refused.ExitCode.ShouldBe(2, refused.ToString());
+        refused.StdErr.ShouldContain("--yes");
+        _a.Exists(StateFileNames.State).ShouldBeTrue();
+        (await RunAsync(_b, "sync")).ExitCode.ShouldBe(0);
+        ShareIdOf(_b).ShouldBe(shareId);
+    }
+
+    [Fact]
+    public async Task Delete_Should_RemoveTheShare_AndOtherMachinesExitEight_SayingItWasDeleted()
+    {
+        await CreateAndCloneAsync(("secret.txt", "s3cr3t"));
+
+        CliResult deleted = await RunAsync(_a, "delete", "--yes");
+        CliResult synced = await RunAsync(_b, "sync");
+        CliResult json = await RunAsync(_b, "status", "--json");
+
+        deleted.ExitCode.ShouldBe(0, deleted.ToString());
+        deleted.StdOut.ShouldContain("Deleted share");
+        deleted.StdOut.ShouldContain("ordinary folder again");
+        _a.Exists(StateFileNames.State).ShouldBeFalse();
+        _a.ReadText("secret.txt").ShouldBe("s3cr3t");
+        synced.ExitCode.ShouldBe(8, synced.ToString());
+        synced.StdErr.ShouldContain("was deleted by");
+        _b.ReadText("secret.txt").ShouldBe("s3cr3t");
+        using var document = JsonDocument.Parse(json.StdOut);
+        document.RootElement.GetProperty("error").GetProperty("code").GetString().ShouldBe("Shares.Deleted");
+        document.RootElement.GetProperty("exitCode").GetInt32().ShouldBe(8);
+    }
+
+    [Fact]
+    public async Task DeleteById_Should_Work_FromAnyFolder_AsJson()
+    {
+        string shareId = await CreateAndCloneAsync(("a.txt", "a"));
+        TempShareFolder elsewhere = new();
+        try
+        {
+            CliResult deleted = await RunAsync(elsewhere, "delete", shareId, "--yes", "--json");
+
+            deleted.ExitCode.ShouldBe(0, deleted.ToString());
+            using var json = JsonDocument.Parse(deleted.StdOut);
+            json.RootElement.GetProperty("command").GetString().ShouldBe("delete");
+            json.RootElement.GetProperty("shareId").GetString().ShouldBe(shareId);
+            json.RootElement.GetProperty("objectsDeleted").GetInt32().ShouldBe(1);
+            json.RootElement.GetProperty("localStateRemoved").GetBoolean().ShouldBeFalse();
+            (await RunAsync(_b, "info")).ExitCode.ShouldBe(8);
+        }
+        finally
+        {
+            elsewhere.Dispose();
+        }
+    }
+
     public void Dispose()
     {
         _a.Dispose();

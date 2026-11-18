@@ -1,4 +1,7 @@
 using System.Security.Cryptography;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using MySync.Application.Shares.Delete;
 using MySync.Application.Sync.Run;
 using MySync.Domain.Manifests;
 using MySync.Domain.Shares;
@@ -141,6 +144,36 @@ public sealed class AzureSyncTests : IDisposable
         _a.Container = AzuriteEnvironment.NewContainerName();
 
         (await _a.SyncAsync()).Error.Code.ShouldBe("State.StorageMismatch");
+    }
+
+    [Fact]
+    public async Task DeletingAShare_Should_LeaveOnlyTheMarkerInTheContainer_AndStopTheOtherMachine()
+    {
+        _a.Folder.WriteFile("secret/report.txt", "sensitive", OldMtime).WriteFile("notes.txt", "n", OldMtime);
+        ShareId shareId = await _a.CreateAsync();
+        Ok(await _b.CloneAsync(shareId));
+        _a.Folder.WriteFile("notes.txt", "edited");
+        Ok(await _a.SyncAsync());
+
+        DeleteShareResponse deleted = Ok(await _a.DeleteAsync());
+
+        deleted.ObjectsDeleted.ShouldBe(3);
+        deleted.RecoverableCopies.ShouldBe(0);
+        BlobContainerClient container = new(_azurite.ConnectionString, _a.Container);
+        List<string> left = [];
+        await foreach (BlobItem blob in container.GetBlobsAsync(BlobTraits.None, BlobStates.None, $"shares/{shareId}/", TestContext.Current.CancellationToken))
+        {
+            left.Add(blob.Name);
+        }
+
+        left.ShouldBe([$"shares/{shareId}/manifest.json"]);
+        _a.Folder.Exists(StateFileNames.State).ShouldBeFalse();
+        _a.Folder.Exists(StateFileNames.Lock).ShouldBeFalse();
+        _a.Folder.ReadText("secret/report.txt").ShouldBe("sensitive");
+
+        Result<SyncReport> other = await _b.SyncAsync();
+        other.Error.Code.ShouldBe("Shares.Deleted");
+        _b.Folder.ReadText("secret/report.txt").ShouldBe("sensitive");
     }
 
     [Fact]

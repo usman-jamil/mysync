@@ -14,6 +14,7 @@ using MySync.Application.Conflicts.Resolve;
 using MySync.Application.Maintenance.CollectGarbage;
 using MySync.Application.Shares.Clone;
 using MySync.Application.Shares.Create;
+using MySync.Application.Shares.Delete;
 using MySync.Application.Shares.GetInfo;
 using MySync.Application.Shares.Preview;
 using MySync.Application.Sync;
@@ -134,6 +135,9 @@ internal sealed class Machine
         Send<ResolveConflictsCommand, SyncReport>(new ResolveConflictsCommand(paths, All: false, keep));
 
     public Task<Result<SyncReport>> ResolveAsync(ResolveConflictsCommand command) => Send<ResolveConflictsCommand, SyncReport>(command);
+
+    public Task<Result<DeleteShareResponse>> DeleteAsync(string? shareId = null) =>
+        Send<DeleteShareCommand, DeleteShareResponse>(new DeleteShareCommand(shareId));
 
     public Task<Result<GarbageReport>> GcAsync(CollectGarbageCommand? command = null) =>
         Send<CollectGarbageCommand, GarbageReport>(command ?? new CollectGarbageCommand());

@@ -127,6 +127,7 @@ Each `mysync sync` uploads what changed here and downloads what changed there. I
 | `mysync conflicts` | List open conflicts: path, kind, both versions, and who changed the share. Works offline. |
 | `mysync resolve <path>... --keep local\|remote` | Decide conflicts. `--all` instead of paths decides every one. |
 | `mysync gc` | Delete stored files no recent revision uses, and old history. |
+| `mysync delete [<shareId>] --yes` | Delete a share for every machine: its stored files and history. Local files stay. |
 | `mysync self-check` | Check this binary works on this machine. |
 
 Options for `sync`:
@@ -174,6 +175,22 @@ mysync resolve --all --keep remote              # every open conflict at once
 - you make both sides identical;
 - you put your file back as it was, and the share's version then downloads.
 
+## Deleting a share
+
+When the work is done, for example to remove sensitive data from the storage account:
+
+```bash
+mysync delete --yes                    # in the share's folder
+mysync delete <shareId> --yes          # or from anywhere
+```
+
+- **Everything is removed from storage:** every stored file and the share's history. What stays is a small marker saying who deleted the share and when.
+- **Other machines are told.** Their next `sync` (or `status`, `info`, `resolve`, `gc`) stops with "Share … was deleted by … on …" and exit code 8. **Their files are left alone**: whoever has a copy decides what to do with it. Running `mysync delete --yes` in such a folder removes its `.mysynctool`, making it an ordinary folder again.
+- **This folder keeps its files.** Its `.mysynctool` and `.mysynctool.log` are removed, so it's an ordinary folder again.
+- **Interrupted?** Run it again: it finishes the job.
+- `--yes` is required: deleting can't be undone, and mysync never asks.
+- **Soft delete and blob versioning:** if the storage account has either turned on, Azure keeps deleted data until its retention period ends. `mysync delete` warns when it finds such copies. Purge them in Azure, or turn those features off, if the data must be gone immediately. Clients older than 0.3 can't read the marker and stop with "upgrade mysync"; they don't delete anything either.
+
 ## Ignoring files
 
 A `.mysyncignore` file in the share root uses [gitignore syntax](https://git-scm.com/docs/gitignore):
@@ -213,7 +230,7 @@ With `--json`, every command prints exactly one JSON document on stdout, even wh
 | 5 | Another machine kept committing; try again |
 | 6 | Another mysync is working in this folder |
 | 7 | The mass-delete safety check stopped the sync |
-| 8 | Share not found, or the storage account rejected the credentials |
+| 8 | Share not found or deleted, or the storage account rejected the credentials |
 | 9 | Finished, but some paths were skipped (busy, unreadable, invalid name) |
 | 130 | Cancelled (Ctrl+C) |
 

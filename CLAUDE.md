@@ -220,6 +220,7 @@ libs/mysync/application/
     Create/         CreateShareCommand(.cs|Handler|Validator), CreateShareResponse
     Clone/          CloneShareCommand(.cs|Handler|Validator), CloneShareResponse
     GetInfo/        GetShareInfoQuery(.cs|Handler), ShareInfoResponse
+    Delete/         DeleteShareCommand(.cs|Handler|Validator), DeleteShareResponse     # `delete`: marker, sweep, local state
   Sync/
     Run/            RunSyncCommand(.cs|Handler|Validator), SyncReport
     Plan/           GetSyncPlanQuery(.cs|Handler) → SyncReport (DryRun)                # `status`: SyncPipeline.PreviewAsync
@@ -279,7 +280,7 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 | `CommandRunner.cs` | Not a command: scope per handler, `CheckStorage()` (settings before any work or prompt), failures to stderr (and one JSON document with `--json`), unexpected exceptions → exit `1`, redacted, stack trace only with `--verbose` |
 | `SyncCommands.cs` | `sync [<shareId>]`, `status` |
 | `ConflictCommands.cs` | `conflicts`, `resolve` |
-| `ShareCommands.cs` | `info` |
+| `ShareCommands.cs` | `info`, `delete` |
 | `MaintenanceCommands.cs` | `gc` |
 
 - **Keep commands thin:** resolve the handler from a scope, invoke it, render the result, return the exit code.
@@ -371,6 +372,7 @@ Everything for a share lives under one prefix in the container. Key building is 
 - A higher revision only comes from `manifest.CreateNextRevision(...)`, so "+1 per commit" holds by construction.
 - `revision` goes up by exactly 1 per commit.
 - Readers **must refuse** a manifest with `formatVersion` higher than they support (`ShareErrors.UnsupportedFormat` → "upgrade mysync").
+- **Format 1 is every ordinary manifest; format 2 is only the deleted marker** (`Manifest.DeletedFormatVersion`), written by `mysync delete`: no entries, plus `"deleted": { "deletedUtc", "deletedBy" }`. Keep ordinary manifests at 1 so older clients keep working. The marker *must* stay above it: a client that predates `delete` would otherwise read "no entries" as "everything was deleted remotely" and delete its local copies (the mass-delete guard only catches > 10 files). A deleted manifest refuses `CreateNextRevision`, so nothing can be committed on top of it. `ManifestSerializerTests` pins the marker JSON.
 - Plain JSON for v1, for easy debugging. If manifests get large (>~10 MB), gzip them in a later format version.
 - Serialized only by `IManifestSerializer` (Infrastructure, source-generated `MySyncJsonContext`), so every provider writes byte-identical manifests.
 
@@ -584,6 +586,7 @@ mysync conflicts         # list open conflicts with local vs remote hash/size/mt
 mysync resolve <path>... --keep local|remote [--dry-run]
 mysync resolve --all     --keep local|remote [--dry-run]
 mysync gc [--dry-run] [--keep-revisions 20] [--grace-hours 24]
+mysync delete [<shareId>] --yes   # delete a share for every machine; local files stay
 mysync --version
 mysync self-check       # runtime checks inside the shipped binary (Unicode normalization); exit 1 if any fail
 ```
@@ -610,6 +613,20 @@ How it's built (`SyncSession.Resolve`, `SyncPipeline.PlanAgainst`): for each nam
 - `conflicts`: `.mysynctool` alone, offline, no lock. Exit `0` whether or not any are open; scripts read `--json`.
 - All of them, like `sync` and `gc`, fail outside a share with `ShareErrors.NotAShare` → exit `4`.
 
+### `delete` (removing a share, e.g. sensitive data after a work session)
+
+`DeleteShareCommand`, in this order so every machine learns at once and an interruption is safe to re-run:
+
+1. **The marker first.** HEAD is replaced, conditionally (`If-Match`, retried with back-off like a commit), by `manifest.CreateDeletedRevision(now, machine)`: the next revision, format 2, no entries. Any sync in progress elsewhere then fails its commit, re-reads and stops.
+2. **Then the sweep:** every object, then the history copies of every revision up to the marker (missing = success; history lists file paths, which can be sensitive). The marker itself stays as HEAD for good.
+3. **Recoverable copies:** `IShareStore.CountRecoverableCopiesAsync` (Azure: soft-deleted blobs and old versions under the share's prefix). A non-zero count is a warning: the data can be restored until the account's retention ends.
+4. **This folder**, if it is that share: `.mysynctool`, `.mysynctool.log` and the staging directory are removed (`IShareStateStore.DeleteAsync`, `IConflictLog.DeleteAsync`); **files are kept**, and the folder is an ordinary folder again (a new `sync` creates a new share). With a share ID from another folder, that folder isn't touched.
+
+- Already marked deleted → it sweeps again and succeeds (`WasAlreadyDeleted`). So re-running finishes an interrupted delete, and on another machine `mysync delete --yes` in the deleted share's folder just drops that folder's state.
+- **Every other command** that reads HEAD (`sync`, clone, `status`, `info`, `resolve`, `gc`) fails with `ShareErrors.Deleted` (who and when) → exit `8`, and changes nothing: other machines' files are **never** deleted because of it. `conflicts` (offline) still lists what `.mysynctool` recorded.
+- A sync that uploaded objects and then finds the marker at commit time deletes the objects *it* stored (`UploadOutcome.Sent`), so nothing lingers after the sweep.
+- **No prompt:** `--yes` is required (`Cli.DeleteNeedsYes` → exit `2`), so the large-share `y/N` stays mysync's only prompt.
+
 ### `gc` (never automatic)
 
 Deletes object blobs in the share that are **not referenced** by HEAD or by any of the last `--keep-revisions` history manifests, **and** whose `LastModified` is older than `--grace-hours`. The grace period protects objects uploaded by another client's sync that hasn't committed yet. Prune history manifests older than the kept window. Always print what will be (or was) deleted.
@@ -633,7 +650,7 @@ Mapped from `Error.Code` (failures) or from the report (partial successes). Noth
 | 5 | Remote concurrency retries exhausted | `SyncErrors.CommitRetriesExhausted`, `SyncErrors.ShareChangedDuringGc` |
 | 6 | Another mysync process holds the lock for this folder | `StateErrors.FolderLocked` |
 | 7 | Safety guard tripped (mass delete) | `SyncErrors.MassDeleteBlocked` |
-| 8 | Share not found / storage auth failure | `ShareErrors.NotFound`, `StorageErrors.Unauthorized` |
+| 8 | Share not found, deleted, or storage auth failure | `ShareErrors.NotFound`, `ShareErrors.Deleted`, `StorageErrors.Unauthorized` |
 | 9 | Completed, but some paths were skipped (locked, unstable, invalid name) | `SyncReport.Skipped` non-empty |
 | 130 | Cancelled (Ctrl+C) | `OperationCanceledException` from the caller's token |
 
@@ -664,6 +681,7 @@ public interface IShareStore
     Task<Result> UploadObjectAsync(ShareId shareId, ContentHash hash, Stream content, long length, CancellationToken ct); // verifies SHA-256 (HashMismatch); existing = success
     Task<Result<Stream>> OpenObjectReadAsync(ShareId shareId, ContentHash hash, CancellationToken ct);      // NotFound
     IAsyncEnumerable<Result<StoredObjectInfo>> ListObjectsAsync(ShareId shareId, CancellationToken ct);     // canonical object names only
+    Task<Result<int>> CountRecoverableCopiesAsync(ShareId shareId, CancellationToken ct);                  // after delete: soft-deleted / versioned copies left
     Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken ct);                // missing = success
 }
 
@@ -893,5 +911,4 @@ The tag is the version. `mysync-` and an optional `v` are stripped; the rest mus
 - Share codes with an embedded, scoped, expiring SAS so recipients need no env credentials. Needs either one container per share or an ADLS Gen2 (hierarchical namespace) account for directory SAS. Keep `ShareLayout` flexible for this.
 - `mysync update` self-update from GitHub releases, reusing the archive naming and `SHA256SUMS.txt` from §16 (keep that naming in one domain class when it lands).
 - `mysync restore --revision <n>` using history manifests.
-- `mysync destroy <shareId>` (with confirmation).
 - `watch` mode, client-side encryption, gzip manifests, chunk-level dedupe for large, slowly-changing files.

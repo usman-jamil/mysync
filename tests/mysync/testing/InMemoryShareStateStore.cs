@@ -29,4 +29,10 @@ public sealed class InMemoryShareStateStore : IShareStateStore
         Saves++;
         return Task.FromResult(Result.Success());
     }
+
+    public Task<Result> DeleteAsync(CancellationToken cancellationToken)
+    {
+        State = null;
+        return Task.FromResult(Result.Success());
+    }
 }

@@ -3,6 +3,7 @@ using MySync.Application.Abstractions.Hashing;
 using MySync.Application.Abstractions.Progress;
 using MySync.Application.Abstractions.Storage;
 using MySync.Application.Sync.Run;
+using MySync.Domain.Content;
 using MySync.Domain.Manifests;
 using MySync.Domain.Paths;
 using MySync.Domain.Shares;
@@ -28,7 +29,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
     {
         if (files.Count == 0)
         {
-            return new UploadOutcome(TransferTotals.None, new Dictionary<SharePath, SkippedPath>());
+            return new UploadOutcome(TransferTotals.None, new Dictionary<SharePath, SkippedPath>(), []);
         }
 
         progress.PhaseStarted(SyncPhase.Uploading);
@@ -38,6 +39,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
         int count = 0;
         long bytes = 0;
         Dictionary<SharePath, SkippedPath> failed = [];
+        HashSet<ContentHash> sent = [];
 
         await Parallel.ForEachAsync(
             files,
@@ -56,11 +58,12 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
                     {
                         count++;
                         bytes += file.Entry.Size;
+                        sent.Add(file.Entry.Sha256);
                     }
                 }
             });
 
-        return new UploadOutcome(new TransferTotals(count, bytes), failed);
+        return new UploadOutcome(new TransferTotals(count, bytes), failed, sent);
     }
 
     /// <summary>
@@ -175,4 +178,5 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
     };
 }
 
-internal sealed record UploadOutcome(TransferTotals Uploaded, IReadOnlyDictionary<SharePath, SkippedPath> Failed);
+/// <param name="Sent">Objects this run actually stored (not ones the store already had): removed again if the share turns out to be deleted.</param>
+internal sealed record UploadOutcome(TransferTotals Uploaded, IReadOnlyDictionary<SharePath, SkippedPath> Failed, IReadOnlyCollection<ContentHash> Sent);

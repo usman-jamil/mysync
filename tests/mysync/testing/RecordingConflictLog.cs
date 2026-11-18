@@ -27,6 +27,16 @@ public sealed class RecordingConflictLog : IConflictLog
         return Record($"RESOLVED {(kept == KeepSide.Local ? "keep-local" : "keep-remote")} {path.Value}");
     }
 
+    /// <summary>True once <see cref="DeleteAsync"/> removed the log.</summary>
+    public bool Deleted { get; private set; }
+
+    public Task<Result> DeleteAsync(CancellationToken cancellationToken)
+    {
+        _lines.Clear();
+        Deleted = true;
+        return Task.FromResult(Result.Success());
+    }
+
     private Task<Result> Record(string line)
     {
         if (FailWith is { } error)

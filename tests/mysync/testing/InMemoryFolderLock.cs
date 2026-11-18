@@ -29,6 +29,15 @@ public sealed class InMemoryFolderLock : IFolderLock
 #pragma warning restore CA2000
     }
 
+    /// <summary>True once <see cref="RemoveAsync"/> removed the (simulated) lock file.</summary>
+    public bool Removed { get; private set; }
+
+    public Task RemoveAsync(CancellationToken cancellationToken)
+    {
+        Removed = !IsHeld;
+        return Task.CompletedTask;
+    }
+
     /// <summary>Simulates another mysync process holding the lock until the returned handle is disposed.</summary>
     public IAsyncDisposable HoldElsewhere()
     {

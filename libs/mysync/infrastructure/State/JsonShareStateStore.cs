@@ -82,6 +82,21 @@ internal sealed class JsonShareStateStore(ShareRoot root) : IShareStateStore
         }
     }
 
+    public Task<Result> DeleteAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            File.Delete(TempPath);
+            File.Delete(StatePath);
+            return Task.FromResult(Result.Success());
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return Task.FromResult(Result.Failure(LocalFileErrors.WriteFailed(StateFileNames.State, exception.Message)));
+        }
+    }
+
     internal static Result<ShareState> Parse(ReadOnlySpan<byte> bytes)
     {
         ShareStateJson? json;

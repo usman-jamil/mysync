@@ -52,6 +52,24 @@ internal sealed class FileConflictLog(ShareRoot root, long maxBytes) : IConflict
         return AppendAsync($"{Timestamp(resolvedUtc)} RESOLVED {keep} {PathErrors.Display(path.Value)}", cancellationToken);
     }
 
+    public Task<Result> DeleteAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            try
+            {
+                File.Delete(root.Combine(StateFileNames.ConflictLog));
+                File.Delete(root.Combine(StateFileNames.RotatedConflictLog));
+                return Task.FromResult(Result.Success());
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return Task.FromResult(Result.Failure(LocalFileErrors.WriteFailed(StateFileNames.ConflictLog, exception.Message)));
+            }
+        }
+    }
+
     private static string Timestamp(DateTimeOffset value) =>
         value.UtcDateTime.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'", CultureInfo.InvariantCulture);
 

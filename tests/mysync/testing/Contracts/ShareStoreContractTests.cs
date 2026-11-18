@@ -283,6 +283,37 @@ public abstract class ShareStoreContractTests
     }
 
     [Fact]
+    public async Task ADeletedMarker_Should_RoundTrip_AsHead()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        Manifest manifest = new ManifestBuilder().WithFile("a.txt", "a").Build();
+        string etag = Unwrap(await store.CreateManifestAsync(manifest.ShareId, manifest, Ct));
+        Manifest marker = Unwrap(manifest.CreateDeletedRevision(DateTimeOffset.UnixEpoch.AddYears(57), "deleter@HOST"));
+
+        Unwrap(await store.ReplaceManifestAsync(manifest.ShareId, marker, etag, Ct));
+
+        Manifest head = Unwrap(await store.GetManifestAsync(manifest.ShareId, Ct))!.Manifest;
+        head.IsDeleted.ShouldBeTrue();
+        head.Deletion.ShouldBe(marker.Deletion);
+        head.Revision.ShouldBe(marker.Revision);
+        head.Entries.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task CountRecoverableCopies_Should_BeZero_WhenTheStoreKeepsNone()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        byte[] content = Encoding.UTF8.GetBytes("gone");
+        ContentHash hash = ManifestBuilder.HashOf(content);
+        Unwrap(await store.UploadObjectAsync(shareId, hash, new MemoryStream(content), content.Length, Ct));
+        Unwrap(await store.DeleteObjectAsync(shareId, hash, Ct));
+
+        Unwrap(await store.CountRecoverableCopiesAsync(shareId, Ct)).ShouldBe(0);
+        Unwrap(await store.CountRecoverableCopiesAsync(ShareId.New(), Ct)).ShouldBe(0);
+    }
+
+    [Fact]
     public async Task DeleteObject_Should_Succeed_ForAMissingObject()
     {
         IShareStore store = await ReadyStoreAsync();

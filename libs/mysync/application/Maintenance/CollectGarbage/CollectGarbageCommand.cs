@@ -196,6 +196,14 @@ internal sealed class CollectGarbageCommandHandler(IFolderLock folderLock, Share
             return Result.Failure<Manifest>(head.Error);
         }
 
-        return head.Value is { } snapshot ? snapshot.Manifest : Result.Failure<Manifest>(ShareErrors.NotFound(shareId));
+        if (head.Value is not { } snapshot)
+        {
+            return Result.Failure<Manifest>(ShareErrors.NotFound(shareId));
+        }
+
+        // A deleted share is swept by 'mysync delete' itself; gc has nothing to keep it against.
+        return snapshot.Manifest.Deletion is { } deletion
+            ? Result.Failure<Manifest>(ShareErrors.Deleted(shareId, deletion))
+            : snapshot.Manifest;
     }
 }

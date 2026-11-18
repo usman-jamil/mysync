@@ -14,4 +14,7 @@ public interface IConflictLog
     Task<Result> RecordDetectedAsync(Conflict conflict, CancellationToken cancellationToken);
 
     Task<Result> RecordResolvedAsync(SharePath path, KeepSide kept, DateTimeOffset resolvedUtc, CancellationToken cancellationToken);
+
+    /// <summary>Removes the log and its rotated copy: it lists file paths, which a deleted share may not want left behind. Missing = success.</summary>
+    Task<Result> DeleteAsync(CancellationToken cancellationToken);
 }

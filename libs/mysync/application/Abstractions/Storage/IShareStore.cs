@@ -64,6 +64,13 @@ public interface IShareStore
     IAsyncEnumerable<Result<StoredObjectInfo>> ListObjectsAsync(ShareId shareId, CancellationToken cancellationToken);
 
     /// <summary>Deletes one object (gc). A missing one counts as success.</summary>
+    /// <summary>
+    /// After <c>mysync delete</c>: how many deleted blobs of this share the provider can still bring
+    /// back (Azure soft delete, blob versions). 0 when it keeps none. The data is only really gone
+    /// once these expire, so the command warns about them.
+    /// </summary>
+    Task<Result<int>> CountRecoverableCopiesAsync(ShareId shareId, CancellationToken cancellationToken);
+
     Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken);
 }
 

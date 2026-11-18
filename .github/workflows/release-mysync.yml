@@ -316,8 +316,9 @@ jobs:
           ```
 
           `mysync status` shows what a sync would do, `mysync conflicts` lists what both sides changed,
-          `mysync resolve <path> --keep local|remote` decides one, `mysync info` describes the share and
-          `mysync gc` removes stored files no recent revision uses. Every command takes `--json`.
+          `mysync resolve <path> --keep local|remote` decides one, `mysync info` describes the share,
+          `mysync gc` removes stored files no recent revision uses, and `mysync delete --yes` removes a share
+          for every machine (local files stay). Every command takes `--json`.
           NOTES
 
           sed -i -e "s/VERSION/$VERSION/g" -e "s|REPOSITORY|$GITHUB_REPOSITORY|g" -e "s|/TAG/|/$TAG/|g" "$notes"

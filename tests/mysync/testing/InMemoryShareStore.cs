@@ -40,6 +40,12 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
     /// <summary>History revisions that list as unreadable (a damaged blob), as a real store would report them.</summary>
     public HashSet<long> UnreadableHistory { get; } = [];
 
+    /// <summary>What <see cref="CountRecoverableCopiesAsync"/> reports: simulates an account with soft delete or versioning.</summary>
+    public int RecoverableCopies { get; set; }
+
+    /// <summary>Runs before each object delete; return an error to make it fail (an interrupted <c>mysync delete</c>).</summary>
+    public Func<ContentHash, Error?>? BeforeDeleteObject { get; set; }
+
     /// <summary>Makes every history write fail (history is best-effort).</summary>
     public bool FailHistoryWrites { get; set; }
 
@@ -268,9 +274,19 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
         }
     }
 
+    public Task<Result<int>> CountRecoverableCopiesAsync(ShareId shareId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Result.Success(RecoverableCopies));
+    }
+
     public Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (BeforeDeleteObject?.Invoke(hash) is { } failure)
+        {
+            return Task.FromResult(Result.Failure(failure));
+        }
 
         lock (_gate)
         {

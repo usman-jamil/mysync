@@ -42,6 +42,11 @@ internal sealed class RemoteCommitter(
                 return Result.Failure<CommitOutcome>(ShareErrors.NotFound(shareId));
             }
 
+            if (snapshot.Manifest.Deletion is { } deletion)
+            {
+                return Result.Failure<CommitOutcome>(ShareErrors.Deleted(shareId, deletion));
+            }
+
             if (snapshot.Manifest.ShareId != shareId)
             {
                 return Result.Failure<CommitOutcome>(ShareErrors.InvalidManifest($"it belongs to share {snapshot.Manifest.ShareId}, not {shareId}."));

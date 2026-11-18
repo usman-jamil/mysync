@@ -51,6 +51,11 @@ internal sealed class GetShareInfoQueryHandler(ShareFolder shareFolder, IShareSt
             return Result.Failure<ShareInfoResponse>(ShareErrors.NotFound(state.ShareId));
         }
 
+        if (manifest.Deletion is { } deletion)
+        {
+            return Result.Failure<ShareInfoResponse>(ShareErrors.Deleted(state.ShareId, deletion));
+        }
+
         return new ShareInfoResponse(
             state.ShareId,
             folder.RootPath,

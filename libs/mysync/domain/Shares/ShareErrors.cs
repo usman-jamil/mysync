@@ -17,6 +17,21 @@ public static class ShareErrors
         "Shares.FolderNotEmpty",
         $"'{folder}' is not empty. Clone into an empty folder, or pass --force.");
 
+    /// <summary>
+    /// The share was deleted (<c>mysync delete</c>). Every command that needs the share stops here,
+    /// and leaves this folder's files alone. Exit 8, like a share that doesn't exist.
+    /// </summary>
+    public static Error Deleted(ShareId shareId, Manifests.ShareDeletion deletion)
+    {
+        ArgumentNullException.ThrowIfNull(deletion);
+
+        return Error.NotFound(
+            "Shares.Deleted",
+            string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"Share {shareId} was deleted by {Paths.PathErrors.Display(deletion.DeletedBy)} on {deletion.DeletedUtc.UtcDateTime:yyyy-MM-dd HH:mm} UTC. Nothing was changed here. Run 'mysync delete --yes' in this folder to make it an ordinary folder again; your files are kept."));
+    }
+
     public static Error AlreadyAShare(ShareId existingShareId) => Error.Conflict(
         "Shares.AlreadyAShare",
         $"This folder is already share {existingShareId}. Run 'mysync sync' without an ID.");

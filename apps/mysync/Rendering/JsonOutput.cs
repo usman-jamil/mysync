@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using MySync.Application.Conflicts.List;
 using MySync.Application.Maintenance.CollectGarbage;
 using MySync.Application.Shares.Create;
+using MySync.Application.Shares.Delete;
 using MySync.Application.Shares.GetInfo;
 using MySync.Application.Shares.Preview;
 using MySync.Application.Sync.Run;
@@ -109,6 +110,29 @@ internal static class JsonOutput
                 info.OpenConflicts,
                 exitCode),
             Context.InfoJson);
+        return exitCode;
+    }
+
+    public static int Write(DeleteShareResponse deleted, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(deleted);
+
+        Emit(
+            new DeleteJson(
+                "delete",
+                deleted.ShareId.ToString(),
+                deleted.MarkerRevision.Value,
+                Utc(deleted.Deletion.DeletedUtc),
+                deleted.Deletion.DeletedBy,
+                deleted.WasAlreadyDeleted,
+                deleted.ObjectsDeleted,
+                deleted.BytesDeleted,
+                deleted.HistoryRevisionsSwept,
+                deleted.LocalStateRemoved,
+                deleted.RecoverableCopies,
+                [.. deleted.Warnings],
+                exitCode),
+            Context.DeleteJson);
         return exitCode;
     }
 
@@ -264,6 +288,21 @@ internal sealed record InfoJson(
     int OpenConflicts,
     int ExitCode);
 
+internal sealed record DeleteJson(
+    string Command,
+    string ShareId,
+    long MarkerRevision,
+    string DeletedUtc,
+    string DeletedBy,
+    bool WasAlreadyDeleted,
+    int ObjectsDeleted,
+    long BytesDeleted,
+    long HistoryRevisionsSwept,
+    bool LocalStateRemoved,
+    int RecoverableCopies,
+    List<string> Warnings,
+    int ExitCode);
+
 internal sealed record GcObjectJson(string Sha256, long Size, string LastModifiedUtc);
 
 internal sealed record GcJson(
@@ -307,4 +346,5 @@ internal sealed record FailureJson(ErrorJson Error, int ExitCode);
 [JsonSerializable(typeof(ConflictListJson))]
 [JsonSerializable(typeof(InfoJson))]
 [JsonSerializable(typeof(GcJson))]
+[JsonSerializable(typeof(DeleteJson))]
 internal sealed partial class CliJsonContext : JsonSerializerContext;

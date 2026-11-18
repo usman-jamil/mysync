@@ -15,6 +15,9 @@ namespace MySync.Infrastructure.Serialization;
 /// A manifest comes from shared storage, so reading trusts nothing: the format version is checked
 /// first (a newer manifest is "upgrade mysync", even if its shape changed), then every path, hash
 /// and entry goes through the Domain.
+/// An ordinary manifest is format 1. Only a deleted share's marker is format 2 (with a
+/// <c>deleted</c> object), so a client that predates <c>mysync delete</c> refuses it rather than
+/// reading "no entries" as "everything was deleted".
 /// </remarks>
 internal sealed class ManifestSerializer : IManifestSerializer
 {
@@ -23,13 +26,14 @@ internal sealed class ManifestSerializer : IManifestSerializer
         ArgumentNullException.ThrowIfNull(manifest);
 
         ManifestJson json = new(
-            Manifest.CurrentFormatVersion,
+            manifest.FormatVersion,
             manifest.ShareId.ToString(),
             manifest.Revision.Value,
             manifest.CreatedUtc,
             manifest.UpdatedUtc,
             manifest.UpdatedBy,
-            EntryMapping.ToJson(manifest.Entries));
+            EntryMapping.ToJson(manifest.Entries),
+            manifest.Deletion is { } deletion ? new DeletionJson(deletion.DeletedUtc, deletion.DeletedBy) : null);
 
         return JsonSerializer.SerializeToUtf8Bytes(json, MySyncJsonContext.Default.ManifestJson);
     }
@@ -40,7 +44,7 @@ internal sealed class ManifestSerializer : IManifestSerializer
         try
         {
             FormatProbeJson? probe = JsonSerializer.Deserialize(json, MySyncJsonContext.Default.FormatProbeJson);
-            if (probe is not null && probe.FormatVersion > Manifest.CurrentFormatVersion)
+            if (probe is not null && probe.FormatVersion > Manifest.MaxReadableFormatVersion)
             {
                 return Result.Failure<Manifest>(ShareErrors.UnsupportedFormat(probe.FormatVersion));
             }
@@ -74,6 +78,7 @@ internal sealed class ManifestSerializer : IManifestSerializer
             return Result.Failure<Manifest>(entries.Error);
         }
 
-        return Manifest.Restore(parsed.FormatVersion, shareId, revision, parsed.CreatedUtc, parsed.UpdatedUtc, parsed.UpdatedBy, entries.Value);
+        ShareDeletion? deletion = parsed.Deleted is { } deleted ? new ShareDeletion(deleted.DeletedUtc, deleted.DeletedBy) : null;
+        return Manifest.Restore(parsed.FormatVersion, shareId, revision, parsed.CreatedUtc, parsed.UpdatedUtc, parsed.UpdatedBy, entries.Value, deletion);
     }
 }

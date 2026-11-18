@@ -39,4 +39,19 @@ internal sealed class FolderLock(ShareRoot root) : IFolderLock
             return Task.FromResult(Result.Failure<IAsyncDisposable>(StateErrors.FolderLocked));
         }
     }
+
+    public Task RemoveAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            File.Delete(root.Combine(StateFileNames.Lock));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Held by another mysync (Windows refuses to delete an open file): it is harmless and ignored.
+        }
+
+        return Task.CompletedTask;
+    }
 }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using MySync.Application.Shares.Delete;
 using MySync.Application.Shares.GetInfo;
 using Spectre.Console;
 
@@ -26,6 +27,33 @@ internal static class ShareInfoView
         Add(fields, "Files", $"{info.FileCount} ({ConsoleOutput.Bytes(info.TotalBytes)})");
         Add(fields, "Conflicts", info.OpenConflicts == 0 ? "none" : $"{info.OpenConflicts} open (mysync conflicts)");
         ConsoleOutput.Write(fields);
+    }
+
+    /// <summary><c>mysync delete</c>: what is gone, what was kept here, and what the storage account may still hold.</summary>
+    public static void Render(DeleteShareResponse deleted)
+    {
+        ArgumentNullException.ThrowIfNull(deleted);
+
+        foreach (string warning in deleted.Warnings)
+        {
+            ConsoleOutput.Warn(warning);
+        }
+
+        string files = deleted.ObjectsDeleted == 1 ? "file" : "files";
+        AnsiConsole.MarkupLine(deleted.WasAlreadyDeleted
+            ? $"[green]Share {ConsoleOutput.Value(deleted.ShareId.ToString())} was already deleted[/] by {ConsoleOutput.Value(Domain.Paths.PathErrors.Display(deleted.Deletion.DeletedBy))}; finished removing what was left."
+            : $"[green]Deleted share {ConsoleOutput.Value(deleted.ShareId.ToString())}[/]: {deleted.ObjectsDeleted} stored {files} ({ConsoleOutput.Bytes(deleted.BytesDeleted)}) and its history are gone.");
+        AnsiConsole.MarkupLine(ConsoleOutput.Muted("Other machines are told the share was deleted the next time they sync; their files are left alone."));
+
+        if (deleted.LocalStateRemoved)
+        {
+            AnsiConsole.MarkupLine(ConsoleOutput.Muted("This folder's files were kept; it is an ordinary folder again (.mysynctool and its log were removed)."));
+        }
+
+        if (deleted.RecoverableCopies > 0)
+        {
+            ConsoleOutput.Warn($"The storage account still keeps {deleted.RecoverableCopies} deleted {(deleted.RecoverableCopies == 1 ? "copy" : "copies")} (soft delete or blob versioning). They can be restored until the account's retention period ends; purge them in Azure if the data must be gone now.");
+        }
     }
 
     private static void Add(Grid fields, string label, string value) => fields.AddRow(ConsoleOutput.Label(label), ConsoleOutput.Value(value));

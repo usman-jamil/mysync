@@ -310,6 +310,36 @@ internal sealed partial class AzureBlobShareStore : IShareStore
         }
     }
 
+    /// <summary>
+    /// Soft-deleted blobs and older blob versions under the share's prefix: copies Azure can still
+    /// bring back after <c>mysync delete</c>. Listing them needs no extra permission beyond the key.
+    /// </summary>
+    public Task<Result<int>> CountRecoverableCopiesAsync(ShareId shareId, CancellationToken cancellationToken)
+    {
+        string prefix = ShareLayout.For(shareId).Prefix;
+
+        return CallAsync(prefix, async container =>
+        {
+            int count = 0;
+            try
+            {
+                await foreach (BlobItem item in container.GetBlobsAsync(BlobTraits.None, BlobStates.Deleted | BlobStates.Version, prefix, cancellationToken))
+                {
+                    if (item.Deleted || item.IsLatestVersion == false)
+                    {
+                        count++;
+                    }
+                }
+            }
+            catch (RequestFailedException exception) when (exception.Status == 404)
+            {
+                return Result.Success(0); // no container: nothing kept
+            }
+
+            return Result.Success(count);
+        }, cancellationToken);
+    }
+
     public Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken) =>
         DeleteAsync(ShareLayout.For(shareId).ObjectBlob(hash), cancellationToken);
 
