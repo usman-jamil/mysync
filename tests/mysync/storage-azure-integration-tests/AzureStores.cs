@@ -12,8 +12,11 @@ namespace MySync.Storage.Azure.IntegrationTests;
 /// <summary>Builds <see cref="AzureBlobShareStore"/>s against the shared Azurite, each on its own container.</summary>
 internal static class AzureStores
 {
-    private static readonly IManifestSerializer Serializer =
-        new ServiceCollection().AddInfrastructure().BuildServiceProvider().GetRequiredService<IManifestSerializer>();
+    private static readonly ServiceProvider Infrastructure = new ServiceCollection().AddInfrastructure().BuildServiceProvider();
+
+    private static readonly IManifestSerializer Serializer = Infrastructure.GetRequiredService<IManifestSerializer>();
+
+    internal static IPublicationRegistrySerializer RegistrySerializer { get; } = Infrastructure.GetRequiredService<IPublicationRegistrySerializer>();
 
     /// <summary>Small blocks, so a few-MB file is several blocks; few retries, so failures are quick.</summary>
     public static AzureTransferSettings TestSettings { get; } = new(1024 * 1024, 1, TimeSpan.FromSeconds(10));
@@ -23,6 +26,8 @@ internal static class AzureStores
         new(
             Options.Create(new AzureStorageOptions { ConnectionString = connectionString, Container = container ?? AzuriteEnvironment.NewContainerName() }),
             Serializer,
+            RegistrySerializer,
+            TimeProvider.System,
             settings ?? TestSettings,
             logger);
 

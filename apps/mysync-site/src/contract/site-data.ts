@@ -15,7 +15,6 @@ export interface Publication {
   id: string;
   title: string;
   publishedUtc: string;
-  publishedBy: string;
   revision: number;
   generator: string;
 }

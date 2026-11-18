@@ -21,15 +21,51 @@ public sealed class AzuriteEnvironment : IAsyncDisposable
 {
     public const string ConnectionStringVariable = "MYSYNC_TEST_AZURITE_CONNECTION_STRING";
 
+    /// <summary>
+    /// With <see cref="ConnectionStringVariable"/>: a publishing account (static website hosting on,
+    /// index document <c>index.html</c>) for the publishing tests. Without it they skip.
+    /// </summary>
+    public const string PublishConnectionStringVariable = "MYSYNC_TEST_PUBLISH_CONNECTION_STRING";
+
+    /// <summary>Azurite's well-known key, used for every account it starts.</summary>
+    public const string AzuriteKey = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
+
+    /// <summary>The accounts the started Azurite has besides <c>devstoreaccount1</c> (publishing tests).</summary>
+    public const string PublishAccount = "mysyncpublish";
+    public const string NoWebsiteAccount = "mysyncnoweb";
+    public const string WrongIndexAccount = "mysyncwrongindex";
+
     private readonly AzuriteContainer? _container;
 
-    private AzuriteEnvironment(string connectionString, AzuriteContainer? container)
+    private AzuriteEnvironment(string connectionString, AzuriteContainer? container, string? publishConnectionString)
     {
         ConnectionString = connectionString;
         _container = container;
+        PublishConnectionString = publishConnectionString;
     }
 
     public string ConnectionString { get; }
+
+    /// <summary>
+    /// The publishing account: <see cref="PublishAccount"/> on the started Azurite (static website
+    /// on), or <see cref="PublishConnectionStringVariable"/>'s. <c>null</c> when supplied storage has none.
+    /// </summary>
+    public string? PublishConnectionString { get; }
+
+    /// <summary>Another account of the started Azurite (only when <see cref="IsExternal"/> is false).</summary>
+    public string AccountConnectionString(string account)
+    {
+        if (_container is null)
+        {
+            throw new InvalidOperationException("Only the Azurite this run started has the extra accounts.");
+        }
+
+        return ForAccount(ConnectionString, account);
+    }
+
+    private static string ForAccount(string connectionString, string account) => connectionString
+        .Replace("AccountName=devstoreaccount1", "AccountName=" + account, StringComparison.Ordinal)
+        .Replace("/devstoreaccount1", "/" + account, StringComparison.Ordinal);
 
     /// <summary>True when the storage was supplied (<see cref="ConnectionStringVariable"/>), so the run must clean up after itself.</summary>
     public bool IsExternal => _container is null;
@@ -66,17 +102,35 @@ public sealed class AzuriteEnvironment : IAsyncDisposable
 
         if (!string.IsNullOrWhiteSpace(external))
         {
-            return new AzuriteEnvironment(external, container: null);
+            string? publish = Environment.GetEnvironmentVariable(PublishConnectionStringVariable);
+            return new AzuriteEnvironment(external, container: null, string.IsNullOrWhiteSpace(publish) ? null : publish);
         }
 
+        // devstoreaccount1 for shares, plus publishing accounts. Static website settings are
+        // account-wide, so each state the tests need has its own account.
+        string accounts = string.Join(';', new[] { "devstoreaccount1", PublishAccount, NoWebsiteAccount, WrongIndexAccount }.Select(account => $"{account}:{AzuriteKey}"));
         AzuriteContainer container = new AzuriteBuilder(AzuriteImage.Name)
             .WithCommand("--skipApiVersionCheck")
             .WithInMemoryPersistence()
+            .WithEnvironment("AZURITE_ACCOUNTS", accounts)
             .Build();
 
         await container.StartAsync(cancellationToken);
 
-        return new AzuriteEnvironment(container.GetConnectionString(), container);
+        string connectionString = container.GetConnectionString();
+        await SetUpStaticWebsiteAsync(ForAccount(connectionString, PublishAccount), "index.html", cancellationToken);
+        await SetUpStaticWebsiteAsync(ForAccount(connectionString, WrongIndexAccount), "home.html", cancellationToken);
+        return new AzuriteEnvironment(connectionString, container, ForAccount(connectionString, PublishAccount));
+    }
+
+    // What `az storage blob service-properties update --static-website` does, plus the $web container it creates.
+    private static async Task SetUpStaticWebsiteAsync(string connectionString, string indexDocument, CancellationToken cancellationToken)
+    {
+        Azure.Storage.Blobs.BlobServiceClient service = new(connectionString);
+        Azure.Storage.Blobs.Models.BlobServiceProperties properties = (await service.GetPropertiesAsync(cancellationToken)).Value;
+        properties.StaticWebsite = new Azure.Storage.Blobs.Models.BlobStaticWebsite { Enabled = true, IndexDocument = indexDocument, ErrorDocument404Path = "404.html" };
+        await service.SetPropertiesAsync(properties, cancellationToken);
+        await service.GetBlobContainerClient("$web").CreateIfNotExistsAsync(cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -84,6 +138,30 @@ public sealed class AzuriteEnvironment : IAsyncDisposable
     /// </summary>
     public static string NewContainerName() =>
         RunPrefix + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)[..24];
+
+    /// <summary>When this run started: supplied storage keeps publications, so the fixtures remove the ones this run made.</summary>
+    public static DateTimeOffset RunStartedUtc { get; } = DateTimeOffset.UtcNow.AddMinutes(-1);
+
+    /// <summary>
+    /// On supplied storage: deletes every publication blob (<c>$web/p/…</c>) written since this run
+    /// started, so no test publication stays public on a real account.
+    /// </summary>
+    public async Task RemoveThisRunsPublicationsAsync()
+    {
+        if (!IsExternal || PublishConnectionString is null)
+        {
+            return;
+        }
+
+        Azure.Storage.Blobs.BlobContainerClient web = new Azure.Storage.Blobs.BlobServiceClient(PublishConnectionString).GetBlobContainerClient("$web");
+        await foreach (Azure.Storage.Blobs.Models.BlobItem item in web.GetBlobsAsync(Azure.Storage.Blobs.Models.BlobTraits.None, Azure.Storage.Blobs.Models.BlobStates.None, "p/", CancellationToken.None))
+        {
+            if (item.Properties.LastModified >= RunStartedUtc)
+            {
+                await web.DeleteBlobIfExistsAsync(item.Name, cancellationToken: CancellationToken.None);
+            }
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {

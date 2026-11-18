@@ -68,7 +68,7 @@ ReleaseSourceSelector.Register(
 
 if (environment.Provider == StorageProvider.AzureBlob)
 {
-    builder.Services.AddAzureBlobStorage();
+    builder.Services.AddAzureBlobStorage().AddAzureStaticWebsitePublishing();
 }
 
 // ConsoleAppFramework writes its own messages (unknown option, missing argument) to stdout by
@@ -110,6 +110,7 @@ app.Add<ConflictCommands>();
 app.Add<ShareCommands>();
 app.Add<MaintenanceCommands>();
 app.Add<DiagnosticsCommands>();
+app.Add<PublishCommands>();
 
 await app.RunAsync(KnownCommands.ArrangeForParsing(args));
 

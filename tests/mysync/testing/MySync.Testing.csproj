@@ -9,6 +9,8 @@
 
   <ItemGroup>
     <PackageReference Include="Testcontainers.Azurite" />
+    <!-- Sets up Azurite's publishing accounts (static website); test code only, never a library's. -->
+    <PackageReference Include="Azure.Storage.Blobs" />
     <!-- The abstract contract suites carry [Fact]s and assertions; the runner stays in the test projects. -->
     <PackageReference Include="Shouldly" />
     <PackageReference Include="xunit.v3.extensibility.core" />

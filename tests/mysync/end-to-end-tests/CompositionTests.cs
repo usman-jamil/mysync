@@ -69,7 +69,7 @@ public class CompositionTests
         var services = new ServiceCollection();
         services.AddSingleton(configuration);
         services.AddLogging();
-        services.AddApplication().AddInfrastructure().AddAzureBlobStorage().AddGitHubReleaseSource("acme/mysync", "1.0.0").AddSiteAssets();
+        services.AddApplication().AddInfrastructure().AddAzureBlobStorage().AddAzureStaticWebsitePublishing().AddGitHubReleaseSource("acme/mysync", "1.0.0").AddSiteAssets();
 
         return services;
     }

@@ -62,6 +62,9 @@ jobs:
       - name: Storage integration + end-to-end tests
         env:
           MYSYNC_TEST_AZURITE_CONNECTION_STRING: ${{ secrets.MYSYNC_REAL_AZURE_CONNECTION_STRING }}
+          # Optional: a second, test-only account with static website hosting on (index.html), for the
+          # publishing tests; without it they skip. Their publications are deleted at the end of the run.
+          MYSYNC_TEST_PUBLISH_CONNECTION_STRING: ${{ secrets.MYSYNC_REAL_AZURE_PUBLISH_CONNECTION_STRING }}
           MYSYNC_TEST_LARGE: ${{ inputs.large && '1' || '' }}
         run: |
           set -euo pipefail

@@ -39,6 +39,11 @@ internal static class ShareInfoView
             ConsoleOutput.Warn(warning);
         }
 
+        if (deleted.PublicationsRemoved > 0)
+        {
+            AnsiConsole.MarkupLine($"Took down {deleted.PublicationsRemoved} {(deleted.PublicationsRemoved == 1 ? "publication" : "publications")} first: {(deleted.PublicationsRemoved == 1 ? "its link no longer works" : "their links no longer work")}.");
+        }
+
         string files = deleted.ObjectsDeleted == 1 ? "file" : "files";
         AnsiConsole.MarkupLine(deleted.WasAlreadyDeleted
             ? $"[green]Share {ConsoleOutput.Value(deleted.ShareId.ToString())} was already deleted[/] by {ConsoleOutput.Value(Domain.Paths.PathErrors.Display(deleted.Deletion.DeletedBy))}; finished removing what was left."

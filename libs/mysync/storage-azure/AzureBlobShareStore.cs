@@ -8,6 +8,7 @@ using Azure.Core;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Blobs.Specialized;
+using Azure.Storage.Sas;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -15,6 +16,7 @@ using MySync.Application.Abstractions.Storage;
 using MySync.Domain.Configuration;
 using MySync.Domain.Content;
 using MySync.Domain.Manifests;
+using MySync.Domain.Publishing;
 using MySync.Domain.Shares;
 using MySync.Domain.State;
 using MySync.Domain.Storage;
@@ -48,19 +50,34 @@ internal sealed partial class AzureBlobShareStore : IShareStore
     private const string ObjectContentType = "application/octet-stream";
 
     private readonly IManifestSerializer _serializer;
+    private readonly IPublicationRegistrySerializer _registrySerializer;
+    private readonly TimeProvider _timeProvider;
     private readonly AzureTransferSettings _settings;
     private readonly ILogger _logger;
     private readonly Lazy<Result<Connection>> _connection;
 
-    public AzureBlobShareStore(IOptions<AzureStorageOptions> options, IManifestSerializer serializer, ILogger<AzureBlobShareStore>? logger = null)
-        : this(options, serializer, AzureTransferSettings.Default, logger)
+    public AzureBlobShareStore(
+        IOptions<AzureStorageOptions> options,
+        IManifestSerializer serializer,
+        IPublicationRegistrySerializer registrySerializer,
+        TimeProvider timeProvider,
+        ILogger<AzureBlobShareStore>? logger = null)
+        : this(options, serializer, registrySerializer, timeProvider, AzureTransferSettings.Default, logger)
     {
     }
 
-    internal AzureBlobShareStore(IOptions<AzureStorageOptions> options, IManifestSerializer serializer, AzureTransferSettings settings, ILogger? logger)
+    internal AzureBlobShareStore(
+        IOptions<AzureStorageOptions> options,
+        IManifestSerializer serializer,
+        IPublicationRegistrySerializer registrySerializer,
+        TimeProvider timeProvider,
+        AzureTransferSettings settings,
+        ILogger? logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         _serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
+        _registrySerializer = registrySerializer ?? throw new ArgumentNullException(nameof(registrySerializer));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _settings = settings;
         _logger = logger ?? NullLogger.Instance;
         AzureStorageOptions values = options.Value;
@@ -342,6 +359,72 @@ internal sealed partial class AzureBlobShareStore : IShareStore
 
     public Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken) =>
         DeleteAsync(ShareLayout.For(shareId).ObjectBlob(hash), cancellationToken);
+
+    /// <summary>
+    /// A read-only SAS for this one blob, signed with the account key from the connection string.
+    /// <c>null</c> when the connection string has no key (e.g. it is itself a SAS): the caller streams.
+    /// </summary>
+    public Task<Result<Uri?>> GetObjectReadUrlAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken cancellationToken)
+    {
+        string name = ShareLayout.For(shareId).ObjectBlob(hash);
+
+        return CallAsync<Uri?>(name, container =>
+        {
+            BlobClient blob = container.GetBlobClient(name);
+            Uri? url = blob.CanGenerateSasUri ? blob.GenerateSasUri(BlobSasPermissions.Read, _timeProvider.GetUtcNow().Add(lifetime)) : null;
+            return Task.FromResult(Result.Success(url));
+        }, cancellationToken);
+    }
+
+    public Task<Result<PublicationsSnapshot?>> GetPublicationsAsync(ShareId shareId, CancellationToken cancellationToken)
+    {
+        string name = ShareLayout.For(shareId).Publications;
+
+        return CallAsync<PublicationsSnapshot?>(name, async container =>
+        {
+            Response<BlobDownloadResult> download;
+            try
+            {
+                download = await container.GetBlobClient(name).DownloadContentAsync(cancellationToken);
+            }
+            catch (RequestFailedException exception) when (exception.Status == 404)
+            {
+                return Result.Success<PublicationsSnapshot?>(null);
+            }
+
+            Result<PublicationRegistry> registry = _registrySerializer.Deserialize(download.Value.Content.ToMemory().Span);
+            return registry.IsSuccess
+                ? Result.Success<PublicationsSnapshot?>(new PublicationsSnapshot(registry.Value, download.Value.Details.ETag.ToString()))
+                : Result.Failure<PublicationsSnapshot?>(registry.Error);
+        }, cancellationToken);
+    }
+
+    public Task<Result<string>> PutPublicationsAsync(ShareId shareId, PublicationRegistry registry, string? ifMatchETag, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        string name = ShareLayout.For(shareId).Publications;
+
+        return CallAsync(name, async container =>
+        {
+            BlobRequestConditions conditions = ifMatchETag is null ? new BlobRequestConditions { IfNoneMatch = ETag.All } : new BlobRequestConditions { IfMatch = new ETag(ifMatchETag) };
+            try
+            {
+                Response<BlobContentInfo> written = await container.GetBlobClient(name).UploadAsync(
+                    BinaryData.FromBytes(_registrySerializer.Serialize(registry)),
+                    new BlobUploadOptions { Conditions = conditions, HttpHeaders = new BlobHttpHeaders { ContentType = ManifestContentType } },
+                    cancellationToken);
+                return Result.Success(written.Value.ETag.ToString());
+            }
+            catch (RequestFailedException exception) when (exception.Status is 409 or 412 or 404)
+            {
+                // Written by someone else since it was read (or created, or removed): read again.
+                return Result.Failure<string>(StorageErrors.PreconditionFailed(name));
+            }
+        }, cancellationToken);
+    }
+
+    public Task<Result> DeletePublicationsAsync(ShareId shareId, CancellationToken cancellationToken) =>
+        DeleteAsync(ShareLayout.For(shareId).Publications, cancellationToken);
 
     // Azure container names: 3-63 characters, lowercase letters, digits and single hyphens, starting and ending with a letter or digit.
     [GeneratedRegex("^(?=.{3,63}$)[a-z0-9]+(-[a-z0-9]+)*$", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 1000)]

@@ -26,6 +26,9 @@ using MySync.Testing;
 using SharedKernel;
 using Shouldly;
 using Xunit;
+using MySync.Application.Publishing.List;
+using MySync.Application.Publishing.Publish;
+using MySync.Application.Publishing.Unpublish;
 
 namespace MySync.Application.UnitTests.TestSupport;
 
@@ -45,7 +48,20 @@ internal sealed class SyncWorld
     /// <summary>Parallelism 1 by default, so progress sequences are deterministic.</summary>
     public SyncOptions Options { get; set; } = new() { MaxParallelism = 1 };
 
-    public SyncWorld() => Store = new InMemoryShareStore(Clock);
+    public SyncWorld()
+    {
+        Store = new InMemoryShareStore(Clock);
+        Publishing = new InMemoryPublishTarget(Store);
+        Verifier = new InMemoryPublicationVerifier(Publishing);
+    }
+
+    /// <summary>The publishing account's static website, shared by every machine like the store. Replaceable before a machine publishes.</summary>
+    public InMemoryPublishTarget Publishing { get; set; }
+
+    public InMemoryPublicationVerifier Verifier { get; set; }
+
+    /// <summary>The site assets every machine's binary carries (set a placeholder to simulate a Debug build).</summary>
+    public InMemorySiteAssetSource SiteAssets { get; set; } = new();
 
     public static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -97,7 +113,10 @@ internal sealed class Machine
         services.AddSingleton(_ => world.Options);
         services.AddSingleton<Abstractions.Updates.IReleaseSource>(new NoReleases());
         services.AddSingleton<Abstractions.Updates.IExecutableInstaller>(new NotInstalled());
-        services.AddSingleton<Abstractions.Publishing.ISiteAssetSource>(new InMemorySiteAssetSource());
+        services.AddScoped<Abstractions.Publishing.ISiteAssetSource>(_ => world.SiteAssets);
+        services.AddScoped<Abstractions.Publishing.IPublishTarget>(_ => world.Publishing);
+        services.AddScoped<Abstractions.Publishing.IPublicationVerifier>(_ => world.Verifier);
+        services.AddSingleton<Abstractions.Publishing.ISiteDataSerializer>(new TestSiteDataSerializer());
         services.AddApplication();
         _services = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
@@ -142,6 +161,15 @@ internal sealed class Machine
     public Task<Result<DeleteShareResponse>> DeleteAsync(string? shareId = null) =>
         Send<DeleteShareCommand, DeleteShareResponse>(new DeleteShareCommand(shareId));
 
+    public Task<Result<PublishReport>> PublishAsync(PublishShareCommand? command = null, CancellationToken? cancellationToken = null) =>
+        Send<PublishShareCommand, PublishReport>(command ?? new PublishShareCommand(), cancellationToken);
+
+    public Task<Result<PublicationListResponse>> PublicationsAsync(string? shareId = null) =>
+        Query<ListPublicationsQuery, PublicationListResponse>(new ListPublicationsQuery(shareId));
+
+    public Task<Result<UnpublishReport>> UnpublishAsync(string publishId, string? shareId = null) =>
+        Send<UnpublishCommand, UnpublishReport>(new UnpublishCommand(publishId, shareId));
+
     public Task<Result<GarbageReport>> GcAsync(CollectGarbageCommand? command = null) =>
         Send<CollectGarbageCommand, GarbageReport>(command ?? new CollectGarbageCommand());
 
@@ -149,11 +177,11 @@ internal sealed class Machine
     public IReadOnlyDictionary<string, string> Files() =>
         Folder.AllPaths.Where(path => !Folder.IsDirectory(path)).ToDictionary(path => path, Folder.ReadText, StringComparer.Ordinal);
 
-    private async Task<Result<TResponse>> Send<TCommand, TResponse>(TCommand command)
+    private async Task<Result<TResponse>> Send<TCommand, TResponse>(TCommand command, CancellationToken? cancellationToken = null)
         where TCommand : ICommand<TResponse>
     {
         await using AsyncServiceScope scope = _services.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<ICommandHandler<TCommand, TResponse>>().Handle(command, SyncWorld.Ct);
+        return await scope.ServiceProvider.GetRequiredService<ICommandHandler<TCommand, TResponse>>().Handle(command, cancellationToken ?? SyncWorld.Ct);
     }
 
     private async Task<Result<TResponse>> Query<TQuery, TResponse>(TQuery query)

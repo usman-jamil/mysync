@@ -19,6 +19,9 @@ public sealed class AzuriteFixture : IAsyncLifetime
     /// <summary>The storage account's name: <c>devstoreaccount1</c> on Azurite, the real one in the real-Azure workflow.</summary>
     public string AccountName => AzuriteEnvironment.AccountNameOf(ConnectionString);
 
+    /// <summary>The publishing account (static website on), or <c>null</c> when supplied storage has none: publishing tests skip.</summary>
+    public string? PublishConnectionString => _environment?.PublishConnectionString;
+
     public async ValueTask InitializeAsync() =>
         _environment = await AzuriteEnvironment.StartAsync(TestContext.Current.CancellationToken);
 
@@ -39,6 +42,7 @@ public sealed class AzuriteFixture : IAsyncLifetime
             }
         }
 
+        await _environment.RemoveThisRunsPublicationsAsync();
         await _environment.DisposeAsync();
     }
 }

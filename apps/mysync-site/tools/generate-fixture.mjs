@@ -50,7 +50,6 @@ const data = {
     id: 'LargeFixture0000000000',
     title: `Large fixture (${count.toLocaleString('en')} files)`,
     publishedUtc: '2026-11-18T07:30:00Z',
-    publishedBy: 'fixture@generator',
     revision: 1,
     generator: 'generate-fixture.mjs',
   },

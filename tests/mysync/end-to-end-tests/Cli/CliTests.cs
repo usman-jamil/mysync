@@ -521,6 +521,80 @@ public sealed class CliTests : IDisposable
         return shareId;
     }
 
+    [Fact]
+    public async Task PublishPublicationsAndUnpublish_Should_Work_AndAnUnverifiedPublicationExitTen()
+    {
+        Assert.SkipWhen(_azurite.PublishConnectionString is null, "No publishing account on supplied storage.");
+        _a.WriteFile("docs/readme.md", "# hi");
+        (await RunAsync(_a, "sync")).ExitCode.ShouldBe(0);
+        Dictionary<string, string?> publishing = new()
+        {
+            ["MYSYNC_PUBLISH_CONNECTION_STRING"] = _azurite.PublishConnectionString,
+            ["MYSYNC_PUBLISH_BASE_URL"] = "https://mysyncpublish.invalid", // nothing answers there: verification fails
+        };
+
+        CliResult published = await RunAsync(_a, publishing, "publish", "--title", "Q3 reports", "--json");
+
+        published.ExitCode.ShouldBe(10, published.ToString());
+        using var publishJson = JsonDocument.Parse(published.StdOut);
+        publishJson.RootElement.GetProperty("verified").GetBoolean().ShouldBeFalse();
+        publishJson.RootElement.GetProperty("files").GetInt32().ShouldBe(1);
+        publishJson.RootElement.GetProperty("exitCode").GetInt32().ShouldBe(10);
+        string publishId = publishJson.RootElement.GetProperty("publishId").GetString()!;
+        publishJson.RootElement.GetProperty("url").GetString().ShouldBe($"https://mysyncpublish.invalid/p/{publishId}/");
+        publishJson.RootElement.GetProperty("shellCommand").GetString().ShouldBe($"curl -fsSL https://mysyncpublish.invalid/p/{publishId}/download.sh | sh");
+
+        CliResult listed = await RunAsync(_a, "publications", "--json");
+        listed.ExitCode.ShouldBe(0, listed.ToString());
+        using var listJson = JsonDocument.Parse(listed.StdOut);
+        JsonElement record = listJson.RootElement.GetProperty("publications").EnumerateArray().Single();
+        record.GetProperty("id").GetString().ShouldBe(publishId);
+        record.GetProperty("status").GetString().ShouldBe("published");
+        record.GetProperty("title").GetString().ShouldBe("Q3 reports");
+
+        CliResult human = await RunAsync(_a, publishing, "publish");
+        human.ExitCode.ShouldBe(10, human.ToString());
+        human.StdOut.ShouldContain("Published");
+        human.StdErr.ShouldContain("couldn't be opened anonymously");
+        human.StdErr.ShouldContain("MYSYNC_PUBLISH_BASE_URL");
+
+        CliResult removed = await RunAsync(_a, publishing, "unpublish", publishId);
+        removed.ExitCode.ShouldBe(0, removed.ToString());
+        removed.StdOut.ShouldContain($"Unpublished {publishId}");
+
+        CliResult gone = await RunAsync(_a, publishing, "unpublish", publishId);
+        gone.ExitCode.ShouldBe(8, gone.ToString());
+
+        foreach (CliResult result in (CliResult[])[published, listed, human, removed, gone])
+        {
+            (result.StdOut + result.StdErr).ShouldNotContain(AzuriteEnvironment.AzuriteKey);
+        }
+    }
+
+    [Fact]
+    public async Task PublishingWithoutItsSettings_Should_ExitTwo_NamingTheVariable_AndDeleteShouldRefuse()
+    {
+        Assert.SkipWhen(_azurite.PublishConnectionString is null, "No publishing account on supplied storage.");
+        _a.WriteFile("a.txt", "a");
+        (await RunAsync(_a, "sync")).ExitCode.ShouldBe(0);
+
+        CliResult noBaseUrl = await RunAsync(_a, new Dictionary<string, string?> { ["MYSYNC_PUBLISH_CONNECTION_STRING"] = _azurite.PublishConnectionString }, "publish");
+        noBaseUrl.ExitCode.ShouldBe(2, noBaseUrl.ToString());
+        noBaseUrl.StdErr.ShouldContain("MYSYNC_PUBLISH_BASE_URL");
+
+        CliResult published = await RunAsync(_a, new Dictionary<string, string?>
+        {
+            ["MYSYNC_PUBLISH_CONNECTION_STRING"] = _azurite.PublishConnectionString,
+            ["MYSYNC_PUBLISH_BASE_URL"] = "https://mysyncpublish.invalid",
+        }, "publish");
+        published.ExitCode.ShouldBe(10, published.ToString());
+
+        CliResult delete = await RunAsync(_a, "delete", "--yes");
+        delete.ExitCode.ShouldBe(2, delete.ToString());
+        delete.StdErr.ShouldContain("1 publication(s)");
+        File.Exists(Path.Combine(_a.Path, StateFileNames.State)).ShouldBeTrue("nothing was deleted");
+    }
+
     private Task<CliResult> RunAsync(TempShareFolder folder, params string[] arguments) =>
         RunAsync(folder, new Dictionary<string, string?>(), arguments);
 

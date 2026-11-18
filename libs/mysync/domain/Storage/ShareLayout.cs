@@ -30,6 +30,7 @@ public sealed class ShareLayout
         Manifest = Prefix + "manifest.json";
         ManifestHistoryPrefix = Prefix + "manifests/";
         ObjectsPrefix = Prefix + "objects/";
+        Publications = Prefix + "publications.json";
     }
 
     public ShareId ShareId { get; }
@@ -42,6 +43,9 @@ public sealed class ShareLayout
     public string ManifestHistoryPrefix { get; }
 
     public string ObjectsPrefix { get; }
+
+    /// <summary>The share's publication records (<c>mysync publish</c>), ETag-guarded like HEAD.</summary>
+    public string Publications { get; }
 
     public static ShareLayout For(ShareId shareId)
     {

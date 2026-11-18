@@ -49,7 +49,7 @@ are both tested against it.
 {
   "schemaVersion": 1,
   "publication": { "id": "4fQ9xK2mT7bV1nR8sL3pZa", "title": "Q3 reports", "publishedUtc": "2026-11-18T07:30:00Z",
-                   "publishedBy": "usman@DEV-LAPTOP", "revision": 18, "generator": "mysync 0.5.0" },
+                   "revision": 18, "generator": "mysync 0.5.0" },
   "totals": { "files": 142, "bytes": 40050611 },
   "downloads": { "sha256sums": "SHA256SUMS.txt", "shell": "download.sh", "powershell": "download.ps1" },
   "entries": [

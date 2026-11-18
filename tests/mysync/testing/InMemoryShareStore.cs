@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using MySync.Application.Abstractions.Storage;
 using MySync.Domain.Content;
 using MySync.Domain.Manifests;
+using MySync.Domain.Publishing;
 using MySync.Domain.Shares;
 using MySync.Domain.State;
 using MySync.Domain.Storage;
@@ -45,6 +46,30 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
     /// <summary>Runs before each object delete; return an error to make it fail (an interrupted <c>mysync delete</c>).</summary>
     public Func<ContentHash, Error?>? BeforeDeleteObject { get; set; }
+
+    /// <summary>
+    /// Whether <see cref="GetObjectReadUrlAsync"/> gives URLs (like Azure with an account key) or
+    /// <c>null</c> (like a SAS-only connection string), so publishing streams instead.
+    /// </summary>
+    public bool CanMakeReadUrls { get; set; } = true;
+
+    /// <summary>Runs just before a conditional write of <c>publications.json</c>: lets a test write it as "another machine".</summary>
+    public Func<ShareId, Task>? BeforePutPublications { get; set; }
+
+    /// <summary>The bytes behind a URL from <see cref="GetObjectReadUrlAsync"/> (what a server-side copy reads), or <c>null</c>.</summary>
+    public byte[]? ReadUrl(Uri url)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        if (url.Scheme != "memory")
+        {
+            return null;
+        }
+
+        lock (_gate)
+        {
+            return _blobs.TryGetValue(Uri.UnescapeDataString(url.AbsolutePath.TrimStart('/')), out Blob? blob) ? blob.Bytes : null;
+        }
+    }
 
     /// <summary>Makes every history write fail (history is best-effort).</summary>
     public bool FailHistoryWrites { get; set; }
@@ -296,6 +321,57 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
         return Task.FromResult(Result.Success());
     }
 
+    public Task<Result<Uri?>> GetObjectReadUrlAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Uri? url = CanMakeReadUrls ? new Uri("memory://store/" + Uri.EscapeDataString(ShareLayout.For(shareId).ObjectBlob(hash))) : null;
+        return Task.FromResult(Result.Success(url));
+    }
+
+    public Task<Result<PublicationsSnapshot?>> GetPublicationsAsync(ShareId shareId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            PublicationsSnapshot? snapshot = _blobs.TryGetValue(ShareLayout.For(shareId).Publications, out Blob? blob)
+                ? new PublicationsSnapshot(blob.Registry!, blob.ETag)
+                : null;
+            return Task.FromResult(Result.Success(snapshot));
+        }
+    }
+
+    public async Task<Result<string>> PutPublicationsAsync(ShareId shareId, PublicationRegistry registry, string? ifMatchETag, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (BeforePutPublications is { } hook)
+        {
+            await hook(shareId);
+        }
+
+        string name = ShareLayout.For(shareId).Publications;
+        lock (_gate)
+        {
+            bool exists = _blobs.TryGetValue(name, out Blob? current);
+            bool matches = ifMatchETag is null ? !exists : exists && string.Equals(current!.ETag, ifMatchETag, StringComparison.Ordinal);
+            return matches
+                ? Result.Success(Put(name, bytes: null, manifest: null, registry).ETag)
+                : Result.Failure<string>(StorageErrors.PreconditionFailed(name));
+        }
+    }
+
+    public Task<Result> DeletePublicationsAsync(ShareId shareId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            _blobs.Remove(ShareLayout.For(shareId).Publications);
+        }
+
+        return Task.FromResult(Result.Success());
+    }
+
     /// <summary>Puts a blob that isn't a valid object or manifest name, e.g. to check listings ignore it.</summary>
     public void PutStrayBlob(string name, byte[] bytes)
     {
@@ -305,14 +381,14 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
         }
     }
 
-    private Blob Put(string name, byte[]? bytes, Manifest? manifest)
+    private Blob Put(string name, byte[]? bytes, Manifest? manifest, PublicationRegistry? registry = null)
     {
         DateTimeOffset now = clock is null ? DateTimeOffset.UtcNow : new DateTimeOffset(clock.UtcNow, TimeSpan.Zero);
         string etag = string.Create(CultureInfo.InvariantCulture, $"\"0x{++_etagCounter:X}\"");
-        Blob blob = new(bytes, manifest, etag, now);
+        Blob blob = new(bytes, manifest, etag, now, registry);
         _blobs[name] = blob;
         return blob;
     }
 
-    private sealed record Blob(byte[]? Bytes, Manifest? Manifest, string ETag, DateTimeOffset LastModifiedUtc);
+    private sealed record Blob(byte[]? Bytes, Manifest? Manifest, string ETag, DateTimeOffset LastModifiedUtc, PublicationRegistry? Registry = null);
 }

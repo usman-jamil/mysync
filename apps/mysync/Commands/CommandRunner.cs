@@ -38,6 +38,15 @@ internal sealed class CommandRunner(IServiceProvider services, GlobalOptions opt
         return location.IsSuccess ? Result.Success() : Result.Failure(location.Error);
     }
 
+    /// <summary>The publishing settings (<c>publish</c>, <c>unpublish</c>): checked before any work, like storage.</summary>
+    public Result CheckPublishing()
+    {
+        using IServiceScope scope = services.CreateScope();
+        Application.Abstractions.Publishing.IPublishTarget target = scope.ServiceProvider.GetRequiredService<Application.Abstractions.Publishing.IPublishTarget>();
+        Result<Application.Abstractions.Publishing.PublishLocation> location = target.GetLocation();
+        return location.IsSuccess ? Result.Success() : Result.Failure(location.Error);
+    }
+
     public async Task<Result<TResponse>> SendAsync<TCommand, TResponse>(TCommand command, CancellationToken cancellationToken)
         where TCommand : ICommand<TResponse>
     {

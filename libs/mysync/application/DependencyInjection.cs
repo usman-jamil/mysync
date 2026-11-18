@@ -43,6 +43,9 @@ public static class DependencyInjection
         services.AddScoped<LocalApplier>();
         services.AddScoped<SyncPipeline>();
         services.AddScoped<ShareFolder>();
+        services.AddScoped<Publishing.PublishingShare>();
+        services.AddScoped<Publishing.PublicationRegistryUpdater>();
+        services.AddScoped<Publishing.PublicationRemover>();
         services.TryAddSingleton(Maintenance.Update.UpdateOptions.Production);
 
         return services;

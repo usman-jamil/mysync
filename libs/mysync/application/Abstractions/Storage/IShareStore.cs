@@ -1,5 +1,6 @@
 using MySync.Domain.Content;
 using MySync.Domain.Manifests;
+using MySync.Domain.Publishing;
 using MySync.Domain.Shares;
 using MySync.Domain.State;
 using SharedKernel;
@@ -72,7 +73,31 @@ public interface IShareStore
     Task<Result<int>> CountRecoverableCopiesAsync(ShareId shareId, CancellationToken cancellationToken);
 
     Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// A URL anyone holding it can read the object from, valid for <paramref name="lifetime"/>
+    /// (Azure: a read-only SAS for that one blob), for server-side copies into a publication. A
+    /// <c>null</c> value when this store can't make one (e.g. the credential can't sign): the
+    /// caller then streams the object instead.
+    /// </summary>
+    Task<Result<Uri?>> GetObjectReadUrlAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken cancellationToken);
+
+    /// <summary>The share's publication records with their ETag, or a <c>null</c> value if it has none yet.</summary>
+    Task<Result<PublicationsSnapshot?>> GetPublicationsAsync(ShareId shareId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Writes the records only if they haven't changed since read: <c>If-Match: &lt;ETag&gt;</c>, or
+    /// <c>If-None-Match: *</c> when <paramref name="ifMatchETag"/> is <c>null</c> (none existed).
+    /// Otherwise <c>Storage.PreconditionFailed</c>. Returns the new ETag.
+    /// </summary>
+    Task<Result<string>> PutPublicationsAsync(ShareId shareId, PublicationRegistry registry, string? ifMatchETag, CancellationToken cancellationToken);
+
+    /// <summary>Removes the records (<c>mysync delete</c>). Missing counts as success.</summary>
+    Task<Result> DeletePublicationsAsync(ShareId shareId, CancellationToken cancellationToken);
 }
+
+/// <summary>The publication records as read, with the ETag a later write must match.</summary>
+public sealed record PublicationsSnapshot(PublicationRegistry Registry, string ETag);
 
 /// <summary>HEAD as read, with the ETag a later <see cref="IShareStore.ReplaceManifestAsync"/> must match.</summary>
 public sealed record ManifestSnapshot(Manifest Manifest, string ETag);

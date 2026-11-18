@@ -3,10 +3,10 @@ namespace MySync.Cli;
 /// <summary>The command names <c>Program</c> registers, to reject a typo before ConsoleAppFramework turns it into "show help, exit 0".</summary>
 internal static class KnownCommands
 {
-    public static IReadOnlyList<string> Names { get; } = ["sync", "status", "info", "conflicts", "resolve", "gc", "delete", "update", "self-check", "debug"];
+    public static IReadOnlyList<string> Names { get; } = ["sync", "status", "info", "conflicts", "resolve", "gc", "delete", "update", "self-check", "debug", "publish", "publications", "unpublish"];
 
     // Options that take a value, so their value isn't mistaken for a command or a path.
-    private static readonly string[] OptionsWithValues = ["--parallel", "--keep", "--keep-revisions", "--grace-hours"];
+    private static readonly string[] OptionsWithValues = ["--parallel", "--keep", "--keep-revisions", "--grace-hours", "--share", "--revision", "--title"];
 
     /// <summary>
     /// <c>resolve</c> takes any number of paths, and ConsoleAppFramework gives a <c>params</c>

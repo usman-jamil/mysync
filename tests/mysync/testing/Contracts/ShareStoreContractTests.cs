@@ -2,6 +2,7 @@ using System.Text;
 using MySync.Application.Abstractions.Storage;
 using MySync.Domain.Content;
 using MySync.Domain.Manifests;
+using MySync.Domain.Publishing;
 using MySync.Domain.Shares;
 using SharedKernel;
 using Shouldly;
@@ -420,6 +421,87 @@ public abstract class ShareStoreContractTests
 
         (await store.GetManifestAsync(manifest.ShareId, Ct)).Value.ShouldBeNull();
     }
+
+    [Fact]
+    public async Task Publications_Should_BeNull_ForAShareThatNeverPublished()
+    {
+        IShareStore store = await ReadyStoreAsync();
+
+        (await store.GetPublicationsAsync(ShareId.New(), Ct)).Value.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Publications_Should_BeCreatedOnlyIfAbsent_ThenReplacedOnlyWithTheCurrentETag()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        PublicationRegistry one = PublicationRegistry.Empty.With(Record("AAAAAAAAAAAAAAAAAAAAAA"));
+        PublicationRegistry two = one.With(Record("BBBBBBBBBBBBBBBBBBBBBB"));
+
+        string first = Unwrap(await store.PutPublicationsAsync(shareId, one, ifMatchETag: null, Ct));
+        (await store.PutPublicationsAsync(shareId, two, ifMatchETag: null, Ct)).Error.Code.ShouldBe("Storage.PreconditionFailed");
+
+        PublicationsSnapshot read = Unwrap(await store.GetPublicationsAsync(shareId, Ct))!;
+        read.ETag.ShouldBe(first);
+        read.Registry.Publications.ShouldBe(one.Publications);
+
+        string second = Unwrap(await store.PutPublicationsAsync(shareId, two, first, Ct));
+        second.ShouldNotBe(first);
+        (await store.PutPublicationsAsync(shareId, one, first, Ct)).Error.Code.ShouldBe("Storage.PreconditionFailed");
+        Unwrap(await store.GetPublicationsAsync(shareId, Ct))!.Registry.Publications.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task DeletePublications_Should_RemoveThem_AndSucceedWhenMissing()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        Unwrap(await store.PutPublicationsAsync(shareId, PublicationRegistry.Empty.With(Record("AAAAAAAAAAAAAAAAAAAAAA")), null, Ct));
+
+        Unwrap(await store.DeletePublicationsAsync(shareId, Ct));
+
+        (await store.GetPublicationsAsync(shareId, Ct)).Value.ShouldBeNull();
+        (await store.DeletePublicationsAsync(shareId, Ct)).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Publications_Should_NotChangeHead_OrTheObjects()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        Manifest manifest = new ManifestBuilder().Build();
+        Unwrap(await store.CreateManifestAsync(manifest.ShareId, manifest, Ct));
+
+        Unwrap(await store.PutPublicationsAsync(manifest.ShareId, PublicationRegistry.Empty.With(Record("AAAAAAAAAAAAAAAAAAAAAA")), null, Ct));
+
+        Unwrap(await store.GetManifestAsync(manifest.ShareId, Ct))!.Manifest.Revision.ShouldBe(manifest.Revision);
+        await foreach (Result<StoredObjectInfo> item in store.ListObjectsAsync(manifest.ShareId, Ct))
+        {
+            item.IsSuccess.ShouldBeFalse("publications.json is not an object");
+        }
+    }
+
+    [Fact]
+    public async Task GetObjectReadUrl_Should_GiveAUrl_OrNull_ButNeverFail()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        byte[] content = Encoding.UTF8.GetBytes("published content");
+        ContentHash hash = ManifestBuilder.HashOf(content);
+        Unwrap(await Upload(store, shareId, hash, content));
+
+        Uri? url = Unwrap(await store.GetObjectReadUrlAsync(shareId, hash, TimeSpan.FromMinutes(5), Ct));
+
+        if (url is not null)
+        {
+            url.IsAbsoluteUri.ShouldBeTrue();
+            url.AbsoluteUri.ShouldNotContain("AccountKey", Case.Insensitive);
+        }
+    }
+
+    private static Publication Record(string id) => new(
+        PublishId.TryParse(id, out PublishId? parsed) ? parsed : throw new ArgumentException(id),
+        PublicationStatus.Published, "title", Revision.Initial, 1, 2,
+        new DateTimeOffset(2026, 11, 18, 7, 30, 0, TimeSpan.Zero), "me@HOST", "publishacct", $"https://x/p/{id}/", "sha256:0000");
 
     private async Task<IShareStore> ReadyStoreAsync()
     {

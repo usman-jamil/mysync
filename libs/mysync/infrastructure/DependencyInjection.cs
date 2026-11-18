@@ -5,6 +5,7 @@ using MySync.Application.Abstractions.FileSystem;
 using MySync.Application.Abstractions.Hashing;
 using MySync.Application.Abstractions.Ignore;
 using MySync.Application.Abstractions.Logging;
+using MySync.Application.Abstractions.Publishing;
 using MySync.Application.Abstractions.State;
 using MySync.Application.Abstractions.Storage;
 using MySync.Application.Abstractions.Updates;
@@ -13,6 +14,7 @@ using MySync.Infrastructure.Hashing;
 using MySync.Infrastructure.Identity;
 using MySync.Infrastructure.Ignore;
 using MySync.Infrastructure.Logging;
+using MySync.Infrastructure.Publishing;
 using MySync.Infrastructure.Serialization;
 using MySync.Infrastructure.State;
 using MySync.Infrastructure.Time;
@@ -43,6 +45,13 @@ public static class DependencyInjection
         services.TryAddSingleton<IManifestSerializer, ManifestSerializer>();
         services.TryAddSingleton<IMachineIdentity, MachineIdentity>();
         services.TryAddSingleton<IExecutableInstaller, ExecutableInstaller>();
+        services.TryAddSingleton<IPublicationRegistrySerializer, PublicationRegistrySerializer>();
+        services.TryAddSingleton<ISiteDataSerializer, SiteDataSerializer>();
+        services.TryAddSingleton(TimeProvider.System);
+
+        // Anonymous on purpose: it checks what the public sees. No handler adds credentials.
+        services.TryAddSingleton<IPublicationVerifier>(provider => new HttpPublicationVerifier(
+            new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, provider.GetRequiredService<TimeProvider>()));
 
         return services;
     }

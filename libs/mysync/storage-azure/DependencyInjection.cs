@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using MySync.Application.Abstractions.Publishing;
 using MySync.Application.Abstractions.Storage;
 
 namespace MySync.Storage.Azure;
@@ -29,6 +30,27 @@ public static class DependencyInjection
             });
 
         services.TryAddSingleton<IShareStore, AzureBlobShareStore>();
+        services.TryAddSingleton(TimeProvider.System);
+
+        return services;
+    }
+
+    /// <summary>
+    /// <c>mysync publish</c>'s target: the static website of the account in
+    /// <c>MYSYNC_PUBLISH_CONNECTION_STRING</c>, public at <c>MYSYNC_PUBLISH_BASE_URL</c>. Registered
+    /// always; the variables are read only by the commands that publish.
+    /// </summary>
+    public static IServiceCollection AddAzureStaticWebsitePublishing(this IServiceCollection services)
+    {
+        services
+            .AddOptions<PublishStorageOptions>()
+            .Configure<IConfiguration>((options, configuration) =>
+            {
+                options.ConnectionString = configuration[PublishStorageOptions.ConnectionStringVariable];
+                options.BaseUrl = configuration[PublishStorageOptions.BaseUrlVariable];
+            });
+
+        services.TryAddSingleton<IPublishTarget, AzureStaticWebsitePublishTarget>();
 
         return services;
     }

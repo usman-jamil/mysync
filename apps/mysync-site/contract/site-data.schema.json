@@ -11,12 +11,11 @@
     "publication": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "publishedUtc", "publishedBy", "revision", "generator"],
+      "required": ["id", "title", "publishedUtc", "revision", "generator"],
       "properties": {
         "id": { "type": "string", "pattern": "^[0-9A-Za-z]{20,24}$" },
         "title": { "type": "string", "minLength": 1, "maxLength": 200 },
         "publishedUtc": { "type": "string", "format": "date-time" },
-        "publishedBy": { "type": "string" },
         "revision": { "type": "integer", "minimum": 1 },
         "generator": { "type": "string" }
       }

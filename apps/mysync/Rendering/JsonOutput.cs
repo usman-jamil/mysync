@@ -2,15 +2,20 @@ using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MySync.Application.Abstractions.Publishing;
 using MySync.Application.Conflicts.List;
 using MySync.Application.Maintenance.CollectGarbage;
 using MySync.Application.Maintenance.Update;
+using MySync.Application.Publishing.List;
+using MySync.Application.Publishing.Publish;
+using MySync.Application.Publishing.Unpublish;
 using MySync.Application.Shares.Create;
 using MySync.Application.Shares.Delete;
 using MySync.Application.Shares.GetInfo;
 using MySync.Application.Shares.Preview;
 using MySync.Application.Sync.Run;
 using MySync.Domain.Manifests;
+using MySync.Domain.Publishing;
 using MySync.Domain.Sync;
 using SharedKernel;
 
@@ -131,11 +136,85 @@ internal static class JsonOutput
                 deleted.HistoryRevisionsSwept,
                 deleted.LocalStateRemoved,
                 deleted.RecoverableCopies,
+                deleted.PublicationsRemoved,
                 [.. deleted.Warnings],
                 exitCode),
             Context.DeleteJson);
         return exitCode;
     }
+
+    public static int Write(PublishReport report, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        Emit(
+            new PublishJson(
+                "publish",
+                report.ShareId.ToString(),
+                report.PublishId.Value,
+                report.Url.AbsoluteUri,
+                report.Revision.Value,
+                report.Title,
+                report.Files,
+                report.Bytes,
+                report.Copies.ToDictionary(pair => CopyMethodName(pair.Key), pair => pair.Value, StringComparer.Ordinal),
+                report.Verified,
+                report.VerificationDetail,
+                report.ShellCommand,
+                report.PowerShellCommand,
+                [.. report.Skipped.Select(skipped => new SkippedJson(skipped.Path.Value, "unpublishable", skipped.Reason))],
+                [.. report.Warnings],
+                exitCode),
+            Context.PublishJson);
+        return exitCode;
+    }
+
+    public static int Write(PublicationListResponse listed, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(listed);
+
+        Emit(
+            new PublicationsJson(
+                "publications",
+                listed.ShareId.ToString(),
+                [.. listed.Publications.Select(publication => new PublicationJson(
+                    publication.Id.Value,
+                    publication.Status switch
+                    {
+                        PublicationStatus.Published => "published",
+                        PublicationStatus.Pending => "pending",
+                        _ => "failed",
+                    },
+                    publication.Title,
+                    publication.Revision.Value,
+                    publication.Files,
+                    publication.Bytes,
+                    Utc(publication.CreatedUtc),
+                    publication.CreatedBy,
+                    publication.PublishAccount,
+                    publication.Url,
+                    publication.SiteAssetsVersion))],
+                exitCode),
+            Context.PublicationsJson);
+        return exitCode;
+    }
+
+    public static int Write(UnpublishReport report, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        Emit(
+            new UnpublishJson("unpublish", report.ShareId.ToString(), report.PublishId.Value, report.Url, report.BlobsDeleted, exitCode),
+            Context.UnpublishJson);
+        return exitCode;
+    }
+
+    private static string CopyMethodName(CopyMethod method) => method switch
+    {
+        CopyMethod.PutBlobFromUrl => "put-blob-from-url",
+        CopyMethod.BlocksFromUrl => "blocks-from-url",
+        _ => "streamed",
+    };
 
     public static int Write(UpdateReport report, int exitCode)
     {
@@ -317,8 +396,44 @@ internal sealed record DeleteJson(
     long HistoryRevisionsSwept,
     bool LocalStateRemoved,
     int RecoverableCopies,
+    int PublicationsRemoved,
     List<string> Warnings,
     int ExitCode);
+
+internal sealed record PublishJson(
+    string Command,
+    string ShareId,
+    string PublishId,
+    string Url,
+    long Revision,
+    string Title,
+    int Files,
+    long Bytes,
+    Dictionary<string, int> Copies,
+    bool Verified,
+    string? VerificationDetail,
+    string ShellCommand,
+    string PowerShellCommand,
+    List<SkippedJson> Skipped,
+    List<string> Warnings,
+    int ExitCode);
+
+internal sealed record PublicationJson(
+    string Id,
+    string Status,
+    string Title,
+    long Revision,
+    int Files,
+    long Bytes,
+    string CreatedUtc,
+    string CreatedBy,
+    string PublishAccount,
+    string Url,
+    string SiteAssetsVersion);
+
+internal sealed record PublicationsJson(string Command, string ShareId, List<PublicationJson> Publications, int ExitCode);
+
+internal sealed record UnpublishJson(string Command, string ShareId, string PublishId, string Url, int BlobsDeleted, int ExitCode);
 
 internal sealed record UpdateJson(
     string Command,
@@ -377,4 +492,7 @@ internal sealed record FailureJson(ErrorJson Error, int ExitCode);
 [JsonSerializable(typeof(GcJson))]
 [JsonSerializable(typeof(DeleteJson))]
 [JsonSerializable(typeof(UpdateJson))]
+[JsonSerializable(typeof(PublishJson))]
+[JsonSerializable(typeof(PublicationsJson))]
+[JsonSerializable(typeof(UnpublishJson))]
 internal sealed partial class CliJsonContext : JsonSerializerContext;

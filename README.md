@@ -173,6 +173,8 @@ Environment variables only: no config file, no prompts.
 | `MYSYNC_CONTAINER` | no | `mysync` | Blob container (3–63 lowercase letters, digits and hyphens). Created when the first share is. |
 | `MYSYNC_PROVIDER` | no | `azure-blob` | Storage provider. Azure Blob is the only one today. |
 | `MYSYNC_PARALLELISM` | no | `min(cores × 2, 16)` | Concurrent transfers, 1–64. `--parallel <n>` overrides it for one run. |
+| `MYSYNC_PUBLISH_CONNECTION_STRING` | for publishing | | The storage account publications go to. Its static website must be on. See [Publishing](#publishing-a-share). |
+| `MYSYNC_PUBLISH_BASE_URL` | for publishing | | That account's static website address, `https://<account>.z13.web.core.windows.net` (or your own domain). |
 
 ```bash
 # macOS / Linux (e.g. in ~/.zshrc or ~/.bashrc)
@@ -216,7 +218,10 @@ Each `mysync sync` uploads what changed here and downloads what changed there. I
 | `mysync conflicts` | List open conflicts: path, kind, both versions, and who changed the share. Works offline. |
 | `mysync resolve <path>... --keep local\|remote` | Decide conflicts. `--all` instead of paths decides every one. |
 | `mysync gc` | Delete stored files no recent revision uses, and old history. |
-| `mysync delete [<shareId>] --yes` | Delete a share for every machine: its stored files and history. Local files stay. |
+| `mysync delete [<shareId>] --yes` | Delete a share for every machine: its stored files, history and publications. Local files stay. |
+| `mysync publish` | Publish a snapshot of the share as a read-only website anyone with the link can browse and download from. |
+| `mysync publications` | List the share's publications and their links. |
+| `mysync unpublish <id>` | Take a publication down; its link stops working at once. |
 | `mysync update` | Update mysync itself to the latest release, verified before it replaces anything. |
 | `mysync self-check` | Check this binary works on this machine. |
 
@@ -274,7 +279,8 @@ mysync delete --yes                    # in the share's folder
 mysync delete <shareId> --yes          # or from anywhere
 ```
 
-- **Everything is removed from storage:** every stored file and the share's history. What stays is a small marker saying who deleted the share and when.
+- **Everything is removed from storage:** every stored file and the share's history, and every [publication](#publishing-a-share) of it first. What stays is a small marker saying who deleted the share and when.
+- **Publications need the publishing settings.** If the share has publications, set `MYSYNC_PUBLISH_CONNECTION_STRING` and `MYSYNC_PUBLISH_BASE_URL` first, or `delete` stops (exit code 2) before changing anything: otherwise the public copies would be left with no record of them.
 - **Other machines are told.** Their next `sync` (or `status`, `info`, `resolve`, `gc`) stops with "Share … was deleted by … on …" and exit code 8. **Their files are left alone**: whoever has a copy decides what to do with it. Running `mysync delete --yes` in such a folder removes its `.mysynctool`, making it an ordinary folder again.
 - **This folder keeps its files.** Its `.mysynctool` and `.mysynctool.log` are removed, so it's an ordinary folder again.
 - **Interrupted?** Run it again: it finishes the job.
@@ -306,6 +312,47 @@ build/
 - **Interrupting is safe.** Ctrl+C (exit 130), a crash or a lost connection never leaves a half-applied change in the share, and the next `sync` carries on from where things stand.
 - **Concurrent syncs merge.** Two machines syncing at once both succeed. If another machine committed first, mysync re-plans and retries.
 
+## Publishing a share
+
+`mysync publish` makes a **public, read-only website** from a snapshot of a share: a page where anyone with the link can browse the folders, search, and download files one at a time or all at once. No login, no server. Use it to hand files to someone who doesn't use mysync.
+
+```text
+$ mysync publish --title "Q3 reports"
+Published Q3 reports: revision 18, 142 files (38.2 MB)
+  https://teampublish.z13.web.core.windows.net/p/4fQ9xK2mT7bV1nR8sL3pZa/
+Anyone with this link can browse and download these files. Remove it with:
+  mysync unpublish 4fQ9xK2mT7bV1nR8sL3pZa
+Download everything:
+  curl -fsSL https://teampublish.z13.web.core.windows.net/p/4fQ9xK2mT7bV1nR8sL3pZa/download.sh | sh
+  irm https://teampublish.z13.web.core.windows.net/p/4fQ9xK2mT7bV1nR8sL3pZa/download.ps1 | iex
+```
+
+**Set up once:** a storage account with static website hosting on, ideally a separate one used only for publishing:
+
+```bash
+az storage blob service-properties update --account-name teampublish \
+  --static-website --index-document index.html --404-document 404.html
+az storage account show -n teampublish --query primaryEndpoints.web -o tsv    # → MYSYNC_PUBLISH_BASE_URL
+
+export MYSYNC_PUBLISH_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=teampublish;AccountKey=..."
+export MYSYNC_PUBLISH_BASE_URL="https://teampublish.z13.web.core.windows.net"
+```
+
+The publishing variables can also name the same account as `AZURE_STORAGE_CONNECTION_STRING`, as long as its static website is on. Your shares stay private (only the `$web` container is public), but the public link then names that account, and `publish` says so.
+
+| Command | |
+| --- | --- |
+| `mysync publish` | Publish this folder's share as it was last synced. `--title` names the page (default: the folder's name). `--revision <n>` publishes an older revision. `--share <id>` publishes another share. |
+| `mysync publications` | The share's publications: ID, status, link, revision, when, files and size. |
+| `mysync unpublish <id>` | Remove a publication. Its link stops working first, then its files are removed. |
+
+- **A snapshot, and a copy.** The files are copied inside Azure (they never pass through your machine when the connection string has the account key). Later syncs, `gc` or conflict resolution don't change a publication; publish again for a newer one. If this folder has changes that aren't synced, `publish` says so: it publishes the last synced state.
+- **The link is the secret.** Its 22-character ID is random and never derived from the share ID. Nothing public leads back to your share. Search engines are asked to stay away (`robots.txt`, `noindex`), but anyone who has the link can open it, so treat it like the files themselves.
+- **Safe to open.** Web pages, SVG, XML and scripts in a publication always download instead of opening, so a published file can't run code in the browser. Text, Markdown, CSV, JSON, PDF and images open in a new tab.
+- **Download everything:** the page and the output show one command for macOS/Linux and one for Windows. Run it in an empty folder: it downloads every file and checks each SHA-256 against `SHA256SUMS.txt`, stopping at the first mismatch.
+- **Exit code 10:** the publication is up, but mysync couldn't open it anonymously. Usually `MYSYNC_PUBLISH_BASE_URL` isn't the account's static website address.
+- **Deleting the share removes its publications too** (see [Deleting a share](#deleting-a-share)).
+
 ## Scripting: `--json` and exit codes
 
 With `--json`, every command prints exactly one JSON document on stdout, even when it fails, and that document ends with `exitCode`. Progress, warnings and errors always go to stderr. When output isn't a terminal it is plain text: no colours, escape codes or line wrapping.
@@ -314,14 +361,15 @@ With `--json`, every command prints exactly one JSON document on stdout, even wh
 | --- | --- |
 | 0 | Success |
 | 1 | Unexpected error (details with `--verbose`) |
-| 2 | Usage or configuration error (bad option, missing or invalid environment variable, `resolve` on a path not in conflict) |
+| 2 | Usage or configuration error (bad option, missing or invalid environment variable, `resolve` on a path not in conflict, the publishing account's static website is off) |
 | 3 | Finished, but conflicts are open (takes precedence over 9) |
 | 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; `update` can't replace this binary |
 | 5 | Another machine kept committing; try again |
 | 6 | Another mysync is working in this folder |
 | 7 | The mass-delete safety check stopped the sync |
-| 8 | Share not found or deleted, the storage account rejected the credentials, or no such release |
+| 8 | Share not found or deleted, the storage account rejected the credentials, or no such release or publication |
 | 9 | Finished, but some paths were skipped (busy, unreadable, invalid name) |
+| 10 | Published, but the publication couldn't be opened from the internet (check `MYSYNC_PUBLISH_BASE_URL`) |
 | 130 | Cancelled (Ctrl+C) |
 
 ## What mysync keeps in the folder
@@ -366,6 +414,7 @@ dotnet run --project apps/mysync -- self-check --verbose
 npx nx publish mysync --rid=osx-arm64          # single-file binary in out/osx-arm64
 ```
 
+- **The publication page** (`apps/mysync-site`, React): `npm run site` shows it with a mocked share; `apps/mysync-site/README.md` describes it.
 - **Local Azurite:** `docker run -p 10000:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck`, then `export AZURE_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true`.
 - **Real Azure:** the manually triggered *Real Azure tests* workflow runs the storage and end-to-end suites against a test-only account. With *large* ticked, it also runs a 300 MB file and a 5,000-file share. Add the repository secret `MYSYNC_REAL_AZURE_CONNECTION_STRING` first; the top of `.github/workflows/real-azure.yml` explains how.
 - **Releases** are cut by pushing a `mysync-<version>` tag after bumping `<Version>` in `Directory.Build.props` (`CLAUDE.md` §16).

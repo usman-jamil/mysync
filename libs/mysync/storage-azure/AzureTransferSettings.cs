@@ -9,7 +9,8 @@ namespace MySync.Storage.Azure;
 /// </param>
 /// <param name="MaxRetries">The SDK's own retries (exponential back-off) for transient failures.</param>
 /// <param name="NetworkTimeout">Per request, not per file: a large upload is many requests.</param>
-internal sealed record AzureTransferSettings(int BlockSize, int MaxRetries, TimeSpan NetworkTimeout)
+/// <param name="CopyBlockSize">Bytes per block staged from a URL in a server-side copy (<see cref="AzureCopyLimits"/>).</param>
+internal sealed record AzureTransferSettings(int BlockSize, int MaxRetries, TimeSpan NetworkTimeout, long CopyBlockSize = AzureCopyLimits.BlockFromUrlSize)
 {
     public static AzureTransferSettings Default { get; } = new(4 * 1024 * 1024, 5, TimeSpan.FromSeconds(100));
 }

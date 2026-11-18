@@ -24,9 +24,12 @@ namespace MySync.Application.Shares.Delete;
 /// <remarks>
 /// In this order, so every machine learns at once and an interruption is safe to re-run:
 /// <list type="number">
+/// <item>Take down every publication of the share (<c>mysync publish</c>), each with its
+/// <c>index.html</c> first. If it has any and the publishing variables aren't set, refuse before
+/// anything changes: otherwise the public copies would outlive the record that finds them.</item>
 /// <item>Replace HEAD with the deleted marker (<see cref="Manifest.CreateDeletedRevision"/>), conditionally,
 /// as the next revision. Any sync in progress elsewhere fails its commit, re-reads, and stops.</item>
-/// <item>Delete every object, then every history manifest (they list file paths).</item>
+/// <item>Delete every object, then every history manifest (they list file paths), then <c>publications.json</c>.</item>
 /// <item>Report copies the provider still keeps (soft delete, versions).</item>
 /// <item>If this folder is that share: remove <c>.mysynctool</c> and <c>.mysynctool.log</c>. Files stay.</item>
 /// </list>
@@ -39,6 +42,7 @@ public sealed record DeleteShareCommand(string? ShareId = null, int? Parallelism
 /// <param name="HistoryRevisionsSwept">History manifests up to this revision were removed (missing ones count as removed).</param>
 /// <param name="LocalStateRemoved">This folder was the share, and its <c>.mysynctool</c> and log are gone.</param>
 /// <param name="RecoverableCopies">Deleted blobs the provider can still restore, until its retention ends; -1 if it couldn't say.</param>
+/// <param name="PublicationsRemoved">Publications taken down first.</param>
 public sealed record DeleteShareResponse(
     ShareId ShareId,
     Revision MarkerRevision,
@@ -49,7 +53,10 @@ public sealed record DeleteShareResponse(
     long HistoryRevisionsSwept,
     bool LocalStateRemoved,
     int RecoverableCopies,
-    ImmutableArray<string> Warnings);
+    ImmutableArray<string> Warnings)
+{
+    public int PublicationsRemoved { get; init; }
+}
 
 internal sealed class DeleteShareCommandValidator : AbstractValidator<DeleteShareCommand>
 {
@@ -75,6 +82,9 @@ internal sealed class DeleteShareCommandHandler(
     RemoteCommitter committer,
     SyncOptions options,
     TimeProvider timeProvider,
+    Publishing.PublicationRegistryUpdater publications,
+    Publishing.PublicationRemover remover,
+    Abstractions.Publishing.IPublishTarget publishTarget,
     ILogger<DeleteShareCommandHandler> logger)
     : ICommandHandler<DeleteShareCommand, DeleteShareResponse>
 {
@@ -166,6 +176,13 @@ internal sealed class DeleteShareCommandHandler(
 
     private async Task<Result<DeleteShareResponse>> DeleteAsync(ShareId shareId, bool thisFolder, int parallelism, CancellationToken cancellationToken)
     {
+        // 0. Publications first, while their record still exists.
+        Result<int> unpublished = await UnpublishAllAsync(shareId, cancellationToken);
+        if (unpublished.IsFailure)
+        {
+            return Result.Failure<DeleteShareResponse>(unpublished.Error);
+        }
+
         // 1. The marker: from here on every machine sees the share as deleted.
         Result<(Manifest Marker, bool Already)> marked = await MarkDeletedAsync(shareId, cancellationToken);
         if (marked.IsFailure)
@@ -203,6 +220,12 @@ internal sealed class DeleteShareCommandHandler(
             return Result.Failure<DeleteShareResponse>(history.Error);
         }
 
+        Result records = await store.DeletePublicationsAsync(shareId, cancellationToken);
+        if (records.IsFailure)
+        {
+            return Result.Failure<DeleteShareResponse>(records.Error);
+        }
+
         // 3. What the provider can still bring back.
         Result<int> recoverable = await store.CountRecoverableCopiesAsync(shareId, cancellationToken);
         if (recoverable.IsFailure)
@@ -227,7 +250,44 @@ internal sealed class DeleteShareCommandHandler(
             lastRevision,
             thisFolder,
             recoverable.IsSuccess ? recoverable.Value : -1,
-            [.. warnings]);
+            [.. warnings])
+        {
+            PublicationsRemoved = unpublished.Value,
+        };
+    }
+
+    private async Task<Result<int>> UnpublishAllAsync(ShareId shareId, CancellationToken cancellationToken)
+    {
+        Result<Domain.Publishing.PublicationRegistry> read = await publications.ReadAsync(shareId, cancellationToken);
+        if (read.IsFailure)
+        {
+            return Result.Failure<int>(read.Error);
+        }
+
+        if (read.Value.Publications.IsEmpty)
+        {
+            return 0;
+        }
+
+        Result<Abstractions.Publishing.PublishLocation> location = publishTarget.GetLocation();
+        if (location.IsFailure)
+        {
+            string variable = location.Error.Description.Contains(Domain.Publishing.PublishErrors.PublishBaseUrlVariable, StringComparison.Ordinal)
+                ? Domain.Publishing.PublishErrors.PublishBaseUrlVariable
+                : Domain.Publishing.PublishErrors.PublishConnectionStringVariable;
+            return Result.Failure<int>(Domain.Publishing.PublishErrors.PublicationsNeedSettings(read.Value.Publications.Count, variable));
+        }
+
+        foreach (Domain.Publishing.Publication publication in read.Value.Publications)
+        {
+            Result<int> removed = await remover.RemoveAsync(shareId, publication, location.Value, cancellationToken);
+            if (removed.IsFailure)
+            {
+                return Result.Failure<int>(removed.Error);
+            }
+        }
+
+        return read.Value.Publications.Count;
     }
 
     // Conditional on HEAD, like any commit: another machine committing first means read again.

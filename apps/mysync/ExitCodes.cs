@@ -18,7 +18,15 @@ internal static class ExitCodes
     public const int MassDeleteBlocked = 7;
     public const int NotFoundOrUnauthorized = 8;
     public const int PathsSkipped = 9;
+    public const int PublicationNotVerified = 10;
     public const int Cancelled = 130;
+
+    /// <summary>A publication that is up but couldn't be seen anonymously: exit 10.</summary>
+    public static int FromReport(Application.Publishing.Publish.PublishReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        return report.Verified ? Success : PublicationNotVerified;
+    }
 
     public static int FromError(Error error)
     {
@@ -39,6 +47,8 @@ internal static class ExitCodes
             "Shares.NotFound" or "Shares.Deleted" or "Storage.Unauthorized" => NotFoundOrUnauthorized,
             "Update.ReleaseNotFound" or "Update.NoBuildForPlatform" => NotFoundOrUnauthorized,
             "Update.NotWritable" or "Update.NotInstalledBinary" => FolderPrecondition,
+            "Publish.NotFound" or "Publish.RevisionNotFound" or "Publish.Unauthorized" or "Publish.CannotReadServiceProperties" => NotFoundOrUnauthorized,
+            "Publish.RegistryRetriesExhausted" => CommitRetriesExhausted,
             _ => Unexpected,
         };
     }
