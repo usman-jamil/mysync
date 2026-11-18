@@ -8,9 +8,16 @@
     <!-- Overridden by the release workflow with -p:Version=<tag>. -->
   </PropertyGroup>
 
-  <!-- Test builds only (the update end-to-end test): trust another release key. Release builds never set it. -->
+  <!--
+    Set by the release workflow (and the update end-to-end test), never by hand: the repository this
+    binary updates from and the public key its releases must be signed with. A fork's workflow sets
+    its own, so its users update from the fork. Unset (a local build): the defaults in the Domain.
+  -->
   <ItemGroup Condition="'$(MySyncReleasePublicKey)' != ''">
     <AssemblyMetadata Include="MySyncReleasePublicKey" Value="$(MySyncReleasePublicKey)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(MySyncReleaseRepository)' != ''">
+    <AssemblyMetadata Include="MySyncReleaseRepository" Value="$(MySyncReleaseRepository)" />
   </ItemGroup>
 
   <ItemGroup>

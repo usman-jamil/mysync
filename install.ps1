@@ -13,6 +13,8 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3
 
+# A fork that hosts its own copy of this script changes these two: its repository, and the public
+# half of its MYSYNC_RELEASE_SIGNING_KEY (CLAUDE.md §16).
 $Repository = 'usman-jamil/mysync'
 $ReleaseKey = @'
 -----BEGIN PUBLIC KEY-----

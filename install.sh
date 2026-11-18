@@ -17,6 +17,8 @@
 
 set -eu
 
+# A fork that hosts its own copy of this script changes these two: its repository, and the public
+# half of its MYSYNC_RELEASE_SIGNING_KEY (CLAUDE.md §16).
 repository="usman-jamil/mysync"
 install_dir="${MYSYNC_INSTALL_DIR:-$HOME/.local/bin}"
 

@@ -52,6 +52,22 @@ public class ReleaseAssetsTests
     }
 
     [Fact]
+    public void TheReleaseWorkflow_Should_BuildEveryBinaryWithItsOwnRepositoryAndKey()
+    {
+        string workflow = File.ReadAllText(Path.Combine(RepositoryRoot(), ".github", "workflows", "release-mysync.yml"));
+        string csproj = File.ReadAllText(Path.Combine(RepositoryRoot(), "apps", "mysync", "MySync.Cli.csproj"));
+
+        foreach (string property in new[] { "MySyncReleaseRepository", "MySyncReleasePublicKey" })
+        {
+            workflow.ShouldContain($"-p:{property}=");
+            csproj.ShouldContain($"<AssemblyMetadata Include=\"{property}\" Value=\"$({property})\" />");
+        }
+
+        workflow.ShouldContain("RELEASE_REPOSITORY: ${{ github.repository }}");
+        workflow.ShouldContain($"UPSTREAM: {ReleaseAssets.DefaultRepository}");
+    }
+
+    [Fact]
     public void ParseChecksums_Should_ReadSha256sumOutput_LikeARealRelease()
     {
         const string Sums = """

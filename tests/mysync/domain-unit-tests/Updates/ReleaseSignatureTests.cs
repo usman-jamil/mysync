@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using MySync.Domain.Updates;
@@ -35,6 +36,17 @@ public class ReleaseSignatureTests
         using var key = ECDsa.Create();
         key.ImportFromPem(ReleaseSignature.ProductionPublicKeyPem);
         key.KeySize.ShouldBe(256);
+    }
+
+    [Theory]
+    [InlineData("install.sh", "repository=\"{0}\"")]
+    [InlineData("install.ps1", "$Repository = '{0}'")]
+    public void TheInstallScripts_Should_TrustTheBuiltInKey_AndAskTheDefaultRepository(string script, string repositoryLine)
+    {
+        string text = File.ReadAllText(Path.Combine(ReleaseAssetsTests.RepositoryRoot(), script)).ReplaceLineEndings("\n");
+
+        text.ShouldContain(Normalize(ReleaseSignature.ProductionPublicKeyPem));
+        text.ShouldContain(string.Format(CultureInfo.InvariantCulture, repositoryLine, ReleaseAssets.DefaultRepository));
     }
 
     // openssl dgst -sha256 -sign writes a DER signature; that's what the release carries.

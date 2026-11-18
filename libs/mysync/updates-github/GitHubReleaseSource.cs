@@ -83,7 +83,7 @@ internal sealed class GitHubReleaseSource(HttpClient http, string repository) : 
         }
         catch (Exception exception) when (IsTransport(exception, cancellationToken))
         {
-            return Result.Failure(UpdateErrors.SourceUnreachable($"downloading {asset.Name} from GitHub failed ({exception.GetType().Name})"));
+            return Result.Failure(UpdateErrors.SourceUnreachable($"downloading {asset.Name} from GitHub {repository} failed ({exception.GetType().Name})"));
         }
     }
 
@@ -124,7 +124,7 @@ internal sealed class GitHubReleaseSource(HttpClient http, string repository) : 
         }
         catch (Exception exception) when (IsTransport(exception, cancellationToken))
         {
-            return Result.Failure<T>(UpdateErrors.SourceUnreachable($"GitHub could not be reached ({exception.GetType().Name})"));
+            return Result.Failure<T>(UpdateErrors.SourceUnreachable($"GitHub could not be reached for {repository} ({exception.GetType().Name})"));
         }
     }
 

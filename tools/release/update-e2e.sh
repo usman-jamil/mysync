@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # End-to-end test of `mysync update` and install.sh with real published binaries (CLAUDE.md §16).
 #
-# Publishes mysync 9.9.8 and 9.9.9 for one runtime, both trusting a throwaway test key (baked in at
-# build time with -p:MySyncReleasePublicKey; release builds never set it). Lays 9.9.9 out as a
+# Publishes mysync 9.9.8 and 9.9.9 for one runtime the way the release workflow does: both trust a
+# throwaway test key and name a release repository, baked in at build time (-p:MySyncReleasePublicKey,
+# -p:MySyncReleaseRepository; the workflow passes its own key and repository). Lays 9.9.9 out as a
 # signed release folder, installs 9.9.8 somewhere writable, and checks that:
+#   - without MYSYNC_UPDATE_SOURCE the binary asks the repository it was built with;
 #   - `update --check` sees 9.9.9 and changes nothing;
 #   - a tampered archive and a wrongly signed checksum file are both refused, with 9.9.8 still in place;
 #   - `update` installs 9.9.9, which then reports its version and passes self-check;
@@ -34,7 +36,7 @@ publish() {
     --configuration Release --runtime "$rid" --self-contained true --output "$work/publish-$1" \
     -p:Version="$1" -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true \
     -p:IncludeNativeLibrariesForSelfExtract=true -p:InvariantGlobalization=true -p:DebugType=embedded \
-    -p:MySyncReleasePublicKey="$public_key" --nologo --verbosity quiet
+    -p:MySyncReleasePublicKey="$public_key" -p:MySyncReleaseRepository=mysync-e2e/fork --nologo --verbosity quiet
 }
 
 echo "== publish 9.9.8 and 9.9.9 for $rid"
@@ -90,6 +92,15 @@ expect_refused() { # <source> <what>
 }
 
 version_is 9.9.8
+
+echo "== the built-in release repository"
+# A proxy that refuses every connection: nothing leaves the machine, and the error names the repository.
+if HTTPS_PROXY=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 "$installed" update --check --json > "$work/default.json"; then
+  echo "FAIL: update --check reached a release source through a dead proxy" >&2
+  exit 1
+fi
+grep -q "mysync-e2e/fork" "$work/default.json" || { echo "FAIL: the binary doesn't use its built-in repository:" >&2; cat "$work/default.json" >&2; exit 1; }
+echo "ok: asks GitHub mysync-e2e/fork"
 
 echo "== update --check"
 MYSYNC_UPDATE_SOURCE="$work/releases" "$installed" update --check | tee "$work/check.txt"
