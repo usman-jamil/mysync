@@ -296,23 +296,24 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p dist
+          # Not dist/: the site build lives in dist/apps, and everything in this folder becomes a release file.
+          mkdir -p packages
           name="mysync-$VERSION-$RID"
 
           if [ "$ARCHIVE" = "zip" ]; then
-            (cd "publish/$RID" && zip --quiet --recurse-paths "$GITHUB_WORKSPACE/dist/$name.zip" .)
+            (cd "publish/$RID" && zip --quiet --recurse-paths "$GITHUB_WORKSPACE/packages/$name.zip" .)
           else
-            tar --create --gzip --file "dist/$name.tar.gz" --directory "publish/$RID" .
+            tar --create --gzip --file "packages/$name.tar.gz" --directory "publish/$RID" .
           fi
 
-          (cd dist && sha256sum "$name.$ARCHIVE" > "$name.$ARCHIVE.sha256")
-          ls -l dist
+          (cd packages && sha256sum "$name.$ARCHIVE" > "$name.$ARCHIVE.sha256")
+          ls -l packages
 
       - name: Upload the archive
         uses: actions/upload-artifact@v4
         with:
           name: mysync-${{ matrix.rid }}
-          path: dist/*
+          path: packages/*
           if-no-files-found: error
           retention-days: 7
 

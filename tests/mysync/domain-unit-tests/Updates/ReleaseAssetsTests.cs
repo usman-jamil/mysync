@@ -66,6 +66,10 @@ public class ReleaseAssetsTests
         uploaded.ShouldContain("mysync-${{ matrix.rid }}");
         uploaded.Where(name => name.StartsWith("mysync-", StringComparison.Ordinal)).ShouldBe(["mysync-${{ matrix.rid }}"],
             "the release job uploads every mysync-* artifact as a release file");
+
+        // The archives' folder holds nothing else: the site build is downloaded into dist/.
+        workflow.ReplaceLineEndings("\n").ShouldContain("          name: mysync-${{ matrix.rid }}\n          path: packages/*\n");
+        workflow.ShouldContain("path: dist/apps/mysync-site");
     }
 
     [Fact]
