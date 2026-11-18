@@ -51,16 +51,65 @@ curl -fsSL https://raw.githubusercontent.com/usman-jamil/mysync/main/install.sh 
 irm https://raw.githubusercontent.com/usman-jamil/mysync/main/install.ps1 | iex
 ```
 
-The scripts:
+Then open a new terminal and check it:
 
-1. pick the right build for your machine;
-2. check that the release's `SHA256SUMS.txt` is **signed with the mysync release key**, and that the download matches it;
-3. run the new binary's `self-check`;
-4. install it where no administrator rights are needed: `~/.local/bin` on macOS and Linux, or `%LOCALAPPDATA%\Programs\mysync` on Windows (added to your user `PATH`).
+```bash
+mysync --version      # e.g. 0.4.0
+mysync self-check     # checks this binary works on this machine
+```
 
-Nothing is installed if any check fails. `MYSYNC_VERSION=0.4.0` installs a specific release, and `MYSYNC_INSTALL_DIR` chooses the folder. They need `curl`, `tar` and `openssl` on macOS and Linux; on Alpine, also `apk add libstdc++ libgcc`. Signed releases start with the first one after 0.3.0, so the scripts can't install 0.3.0 or earlier.
+### What the install script does
 
-**By hand:** download the archive for your platform from the [latest release](https://github.com/usman-jamil/mysync/releases/latest).
+1. Picks the build for your system and processor: macOS, Linux (glibc or musl/Alpine) or Windows, on x64 or arm64.
+2. Downloads the release's `SHA256SUMS.txt` and checks it is **signed with the mysync release key**, which is written into the script. A release that isn't signed, or is signed with another key, is refused.
+3. Downloads the archive and checks it against the signed checksum.
+4. Runs the new binary's `--version` and `self-check`.
+5. Only then installs it, into a folder that needs no `sudo` or administrator rights:
+   - macOS and Linux: `~/.local/bin/mysync`. If that folder isn't on your `PATH`, the script prints the line to add to `~/.zshrc` or `~/.bashrc`.
+   - Windows: `%LOCALAPPDATA%\Programs\mysync\mysync.exe`, added to your user `PATH`.
+
+If any check fails, nothing is installed and the script says why. The binary isn't quarantined (macOS) or flagged by SmartScreen (Windows), because it wasn't downloaded by a browser.
+
+**Requirements:**
+- **macOS and Linux:** `curl`, `tar`, `openssl`, and `sha256sum` or `shasum`. These are present by default on macOS and most Linux distributions.
+- **Alpine:** run `apk add curl openssl libstdc++ libgcc` first.
+- **Windows:** Windows PowerShell 5.1 or PowerShell 7. Nothing else.
+
+### Install options
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MYSYNC_VERSION` | the latest release | Install this release instead, e.g. `0.4.0`. |
+| `MYSYNC_INSTALL_DIR` | `~/.local/bin`, or `%LOCALAPPDATA%\Programs\mysync` on Windows | Install into this folder. |
+| `GITHUB_TOKEN` | | Only needed if GitHub rate-limits you. |
+
+Variables go to the shell that runs the script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/usman-jamil/mysync/main/install.sh | MYSYNC_VERSION=0.4.0 sh
+```
+
+```powershell
+$env:MYSYNC_VERSION = '0.4.0'; irm https://raw.githubusercontent.com/usman-jamil/mysync/main/install.ps1 | iex
+```
+
+**Read the script first?** Download it, look, then run it:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/usman-jamil/mysync/main/install.sh && less install.sh && sh install.sh
+```
+
+0.4.0 is the first signed release, so the scripts (and `mysync update`) can't install 0.3.0 or earlier.
+
+### Coming from 0.3.0 or earlier
+
+Those versions have no `update` command. Run the install script once on each machine; from then on, use `mysync update`.
+
+If you had put mysync in `/usr/local/bin` by hand, either delete that copy (`sudo rm /usr/local/bin/mysync`) or make sure `~/.local/bin` comes first on your `PATH`. Otherwise the old copy keeps running. `command -v mysync` shows which one runs.
+
+### Install by hand
+
+Download these from the [latest release](https://github.com/usman-jamil/mysync/releases/latest): the archive for your platform, `SHA256SUMS.txt` and `SHA256SUMS.txt.sig`.
 
 | Platform | Archive |
 | --- | --- |
@@ -69,34 +118,50 @@ Nothing is installed if any check fails. `MYSYNC_VERSION=0.4.0` installs a speci
 | Linux (x64, musl / Alpine) | `mysync-<version>-linux-musl-x64.tar.gz` |
 | Windows (x64 / arm64) | `mysync-<version>-win-x64.zip` / `win-arm64` |
 
+Check the signature and the checksum, then install:
+
 ```bash
-tar -xzf mysync-<version>-<platform>.tar.gz && mv mysync ~/.local/bin/
-sha256sum -c --ignore-missing SHA256SUMS.txt        # Linux (shasum -a 256 -c … on macOS)
-openssl dgst -sha256 -verify tools/release/mysync-release-signing.pub.pem -signature SHA256SUMS.txt.sig SHA256SUMS.txt
+curl -fsSLO https://raw.githubusercontent.com/usman-jamil/mysync/main/tools/release/mysync-release-signing.pub.pem
+openssl dgst -sha256 -verify mysync-release-signing.pub.pem -signature SHA256SUMS.txt.sig SHA256SUMS.txt   # "Verified OK"
+sha256sum -c --ignore-missing SHA256SUMS.txt          # Linux
+shasum -a 256 -c --ignore-missing SHA256SUMS.txt      # macOS
+tar -xzf mysync-<version>-<platform>.tar.gz && mkdir -p ~/.local/bin && mv mysync ~/.local/bin/
 ```
 
-The public key is [`tools/release/mysync-release-signing.pub.pem`](tools/release/mysync-release-signing.pub.pem). The binaries themselves are unsigned:
-- **macOS** quarantines a browser download; clear it once with `xattr -d com.apple.quarantine ~/.local/bin/mysync`.
-- **Windows** SmartScreen warns the first time; choose *More info* → *Run anyway*.
+The public key is [`tools/release/mysync-release-signing.pub.pem`](tools/release/mysync-release-signing.pub.pem). The binaries themselves aren't code-signed, so a browser download triggers the OS warning:
+- **macOS** quarantines it; clear that once with `xattr -d com.apple.quarantine ~/.local/bin/mysync`.
+- **Windows** SmartScreen warns the first time; choose *More info* → *Run anyway*. On Windows, unzip the archive and put `mysync.exe` in a folder on your `PATH`; `(Get-FileHash mysync-<version>-win-x64.zip).Hash` should match its line in `SHA256SUMS.txt`.
 
-Neither happens with the install scripts or `mysync update`. `mysync self-check` confirms the binary works on this machine: it checks Unicode normalization, which file-name matching depends on.
+### Uninstall
+
+Delete the binary: `~/.local/bin/mysync`, or `%LOCALAPPDATA%\Programs\mysync` on Windows (and remove that folder from your user `PATH`). mysync installs nothing else. Synced folders keep their files and their `.mysynctool` state.
 
 ## Updating
 
 ```bash
+mysync update --check            # is there a newer release? Downloads nothing
 mysync update                    # install the latest release
-mysync update --check            # only say whether there is one
-mysync update --version 0.4.0    # install exactly this one (also older), e.g. to keep a team on one version
-mysync update --prerelease       # let the latest be a prerelease
+mysync update --version 0.4.0    # install exactly this release, newer or older, e.g. to keep a team on one version
+mysync update --prerelease       # let "latest" include prereleases
 ```
 
-- **Verified before anything is replaced:** `update` downloads the release for your platform, checks its signature and checksum, and runs the new binary's `--version` and `self-check`. Only then does it replace the old binary. If anything fails, the installed mysync stays exactly as it was.
-- **When it takes effect:** the new version runs from your next command.
-- **Significant changes:** if the first or second number changes (0.3 → 0.4), `update` says so. Read the release notes and update every machine that shares folders together.
-- **Never automatic:** mysync only contacts GitHub when you run `mysync update`.
-- **Permissions:** a binary in a folder you can't write (such as `/usr/local/bin`) needs `sudo mysync update`, or reinstall it in `~/.local/bin`.
-- **Rate limits and private copies:** set `GITHUB_TOKEN` if GitHub rate-limits you, or for a private copy of the repository.
-- **Mirrors:** `MYSYNC_UPDATE_SOURCE=/path/to/releases` updates from a local folder laid out like the GitHub releases (`mysync-1.2.3/<files>`), for machines without internet access. The same signature checks apply.
+```text
+$ mysync update --check
+mysync 0.4.0 is up to date (from GitHub usman-jamil/mysync)
+```
+
+- **Checked before anything is replaced.** `update` makes the same checks as the install script: the signature on `SHA256SUMS.txt`, the archive's checksum, then the new binary's `--version` and `self-check`. Only then does it swap the binary in. If anything fails, the installed mysync stays exactly as it was. mysync only accepts its own release key; no setting or environment variable can make it trust another.
+- **Takes effect from the next command.**
+  - macOS and Linux: the new file replaces the old one in place.
+  - Windows: a running `.exe` can't be overwritten. The old one is renamed aside (`mysync.exe.old-…`) and deleted the next time mysync starts.
+- **Latest never goes backwards.** `mysync update` only moves to a newer release. Going back needs an explicit `--version`.
+- **Update machines together on significant changes.** When the first or second number changes (0.3 → 0.4), `update` says so. Read the release notes and update every machine that shares folders together.
+- **Never automatic.** mysync contacts GitHub only when you run `mysync update`. There are no background checks and no "new version" hints.
+- **Permissions.** For a binary in a folder you can't write (such as `/usr/local/bin`), `update` stops before downloading anything (exit code `4`). Run `sudo mysync update`, or reinstall into `~/.local/bin` with the install script.
+- **A development build** (`dotnet run`) can't update itself (exit code `4`).
+- **Rate limits.** If GitHub rate-limits you, set `GITHUB_TOKEN`. It's sent only to `api.github.com` and never printed.
+- **Machines without internet access.** `MYSYNC_UPDATE_SOURCE=/path/to/releases` updates from a local folder laid out like the GitHub releases (`mysync-0.4.0/<the release's files>`). The same signature checks apply, so a mirror can't serve a binary of its own.
+- **Scripts.** Add `--json` for one result document: `status` is `up-to-date`, `available` or `updated`, plus `currentVersion`, `targetVersion` and `exitCode`. An unknown version exits `8`.
 
 ## Configure
 
