@@ -258,3 +258,7 @@ FakesAssemblies/
 **/.idea/
 # mysync local publish output (nx publish mysync)
 /out/
+
+vitest.config.*.timestamp*
+# mysync-site: the large dev fixture (tools/generate-fixture.mjs)
+apps/mysync-site/public/site-data.large.js

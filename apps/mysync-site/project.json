@@ -1,0 +1,38 @@
+{
+  "name": "mysync-site",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/mysync-site/src",
+  "projectType": "application",
+  "tags": [
+    "stack:mysync",
+    "type:web"
+  ],
+  "targets": {
+    "lint": {
+      "options": {
+        "args": [
+          "--max-warnings=0"
+        ]
+      }
+    },
+    "typecheck": {
+      "command": "tsc -b",
+      "options": {
+        "cwd": "apps/mysync-site"
+      },
+      "cache": true,
+      "inputs": [
+        "production",
+        "^production",
+        {
+          "externalDependencies": [
+            "typescript"
+          ]
+        }
+      ],
+      "outputs": [
+        "{workspaceRoot}/dist/out-tsc/mysync-site"
+      ]
+    }
+  }
+}

@@ -1,0 +1,10 @@
+import { cleanup } from '@testing-library/react';
+import { afterEach } from 'vitest';
+
+afterEach(() => {
+  cleanup();
+  window.location.hash = '';
+  delete window.__MYSYNC_SITE__;
+  window.localStorage.clear();
+  document.documentElement.removeAttribute('data-theme');
+});

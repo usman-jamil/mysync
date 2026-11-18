@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/usman-jamil/mysync/apps/mysync-site/contract/site-data.schema.json",
+  "title": "mysync publication data (window.__MYSYNC_SITE__)",
+  "description": "Written by `mysync publish` into site-data.js; the only input of the mysync-site app. The TypeScript types (src/contract/site-data.ts) and the C# DTOs are tested against this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "publication", "totals", "downloads", "entries"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "publishedUtc", "publishedBy", "revision", "generator"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9A-Za-z]{20,24}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "publishedUtc": { "type": "string", "format": "date-time" },
+        "publishedBy": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "generator": { "type": "string" }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files", "bytes"],
+      "properties": {
+        "files": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "downloads": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256sums", "shell", "powershell"],
+      "properties": {
+        "sha256sums": { "$ref": "#/$defs/siblingFile" },
+        "shell": { "$ref": "#/$defs/siblingFile" },
+        "powershell": { "$ref": "#/$defs/siblingFile" }
+      }
+    },
+    "entries": {
+      "description": "Sorted ordinally by path. Paths are the manifest's normalized relative paths (forward slashes, NFC).",
+      "type": "array",
+      "items": { "oneOf": [{ "$ref": "#/$defs/file" }, { "$ref": "#/$defs/dir" }] }
+    }
+  },
+  "$defs": {
+    "siblingFile": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "not": { "pattern": "(^/)|(/$)|(//)|(\\\\)|(^|/)\\.\\.?(/|$)" }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "size", "sha256", "mtimeUtc", "disposition"],
+      "properties": {
+        "kind": { "const": "file" },
+        "path": { "$ref": "#/$defs/path" },
+        "size": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "mtimeUtc": { "type": "string", "format": "date-time" },
+        "disposition": { "enum": ["inline", "attachment"] }
+      }
+    },
+    "dir": {
+      "description": "Only empty directories; non-empty ones are implied by file paths.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": { "const": "dir" },
+        "path": { "$ref": "#/$defs/path" }
+      }
+    }
+  }
+}
