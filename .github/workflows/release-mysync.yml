@@ -154,20 +154,18 @@ jobs:
 
   # Who releases: this repository, and the public half of its MYSYNC_RELEASE_SIGNING_KEY. Every
   # binary is built to update from here and to trust only this key, so a fork that adds its own
-  # secret releases its own mysync with no code change (CLAUDE.md §16). Fails before any build
-  # if the secret is missing.
+  # secret releases its own mysync with no code change (CLAUDE.md §16). This job only checks the
+  # key, before anything is built; each job that needs the public key derives it itself
+  # (tools/release/public-key.sh), because a job output carrying it can be masked empty.
   identity:
     name: Release identity
     runs-on: ubuntu-latest
-    outputs:
-      public-key: ${{ steps.key.outputs.public-key }}
     steps:
       - uses: actions/checkout@v5
         with:
           sparse-checkout: tools/release
 
-      - name: Derive the public key from the signing key
-        id: key
+      - name: Check the signing key
         env:
           SIGNING_KEY: ${{ secrets.MYSYNC_RELEASE_SIGNING_KEY }}
           REPOSITORY: ${{ github.repository }}
@@ -180,22 +178,14 @@ jobs:
             exit 1
           fi
 
-          umask 077
-          key="$RUNNER_TEMP/signing.key.pem"
-          printf '%s\n' "$SIGNING_KEY" > "$key"
-          openssl ec -in "$key" -pubout -out "$RUNNER_TEMP/release.pub.pem" 2>/dev/null \
-            || { rm -f "$key"; echo "::error::MYSYNC_RELEASE_SIGNING_KEY is not a PEM EC private key."; exit 1; }
-          rm -f "$key"
-          openssl ec -pubin -in "$RUNNER_TEMP/release.pub.pem" -text -noout 2>/dev/null | grep -q prime256v1 \
-            || { echo "::error::MYSYNC_RELEASE_SIGNING_KEY must be a P-256 (prime256v1) key."; exit 1; }
+          public_key="$(tools/release/public-key.sh)" || { echo "::error::MYSYNC_RELEASE_SIGNING_KEY must be a PEM P-256 private key."; exit 1; }
 
           # Upstream binaries built locally trust the committed key too, so upstream must sign with it.
-          if [ "$REPOSITORY" = "$UPSTREAM" ] && ! cmp -s "$RUNNER_TEMP/release.pub.pem" tools/release/mysync-release-signing.pub.pem; then
+          committed="$(grep -v -- ----- tools/release/mysync-release-signing.pub.pem | tr -d '\n')"
+          if [ "$REPOSITORY" = "$UPSTREAM" ] && [ "$public_key" != "$committed" ]; then
             echo "::error::MYSYNC_RELEASE_SIGNING_KEY doesn't match tools/release/mysync-release-signing.pub.pem."
             exit 1
           fi
-
-          echo "public-key=$(grep -v -- ----- "$RUNNER_TEMP/release.pub.pem" | tr -d '\n')" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.rid }}
@@ -244,9 +234,12 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           RID: ${{ matrix.rid }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-          RELEASE_PUBLIC_KEY: ${{ needs.identity.outputs.public-key }}
+          SIGNING_KEY: ${{ secrets.MYSYNC_RELEASE_SIGNING_KEY }}
         run: |
           set -euo pipefail
+
+          # Derived here, never empty: a binary built without it would silently trust the built-in key.
+          RELEASE_PUBLIC_KEY="$(tools/release/public-key.sh)"
 
           dotnet publish "$PROJECT" \
             --configuration Release \
@@ -347,12 +340,16 @@ jobs:
           rm -f ./*.sha256
           cat SHA256SUMS.txt
 
+      - uses: actions/checkout@v5
+        with:
+          path: source
+          sparse-checkout: tools/release
+
       # `mysync update` installs nothing that isn't signed with this key (ECDSA P-256, SHA-256, DER),
-      # and the key's public half was built into every binary by the identity job.
+      # and the key's public half was built into every binary.
       - name: Sign the checksums
         env:
           SIGNING_KEY: ${{ secrets.MYSYNC_RELEASE_SIGNING_KEY }}
-          RELEASE_PUBLIC_KEY: ${{ needs.identity.outputs.public-key }}
         run: |
           set -euo pipefail
 
@@ -366,6 +363,8 @@ jobs:
           printf '%s\n' "$SIGNING_KEY" > "$key"
           openssl dgst -sha256 -sign "$key" -out artifacts/SHA256SUMS.txt.sig artifacts/SHA256SUMS.txt
           rm -f "$key"
+
+          RELEASE_PUBLIC_KEY="$(source/tools/release/public-key.sh)"
 
           # The signature must verify with the public key the binaries trust, or no one could update.
           # The key goes out with the release, for people who verify by hand.
