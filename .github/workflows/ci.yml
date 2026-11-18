@@ -47,7 +47,7 @@ jobs:
       - name: Upload the site build
         uses: actions/upload-artifact@v4
         with:
-          name: mysync-site
+          name: site-build
           path: dist/apps/mysync-site
           if-no-files-found: error
           retention-days: 7
@@ -67,7 +67,7 @@ jobs:
       - name: Download the site build
         uses: actions/download-artifact@v4
         with:
-          name: mysync-site
+          name: site-build
           path: dist/apps/mysync-site
 
       - name: Setup .NET
@@ -128,7 +128,7 @@ jobs:
       - name: Download the site build
         uses: actions/download-artifact@v4
         with:
-          name: mysync-site
+          name: site-build
           path: dist/apps/mysync-site
 
       - name: Setup .NET
@@ -153,7 +153,7 @@ jobs:
       - name: Download the site build
         uses: actions/download-artifact@v4
         with:
-          name: mysync-site
+          name: site-build
           path: dist/apps/mysync-site
 
       - name: Setup .NET

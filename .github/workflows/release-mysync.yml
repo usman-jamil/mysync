@@ -91,10 +91,11 @@ jobs:
       - name: Lint, typecheck, test and build
         run: npx nx run-many -t lint,typecheck,test,build -p mysync-site
 
+      # Not "mysync-*": the release job merges every mysync-* artifact into the release's files.
       - name: Upload the site build
         uses: actions/upload-artifact@v4
         with:
-          name: mysync-site
+          name: site-build
           path: dist/apps/mysync-site
           if-no-files-found: error
 
@@ -109,7 +110,7 @@ jobs:
       - name: Download the site build
         uses: actions/download-artifact@v4
         with:
-          name: mysync-site
+          name: site-build
           path: dist/apps/mysync-site
 
       - name: Setup .NET
@@ -219,7 +220,7 @@ jobs:
       - name: Download the site build
         uses: actions/download-artifact@v4
         with:
-          name: mysync-site
+          name: site-build
           path: dist/apps/mysync-site
 
       - name: Setup .NET
@@ -475,6 +476,16 @@ jobs:
           if [ "$PRERELEASE" = "true" ]; then
             prerelease_flag="--prerelease"
           fi
+
+          # A failed earlier run can leave a draft for this tag; start again from nothing.
+          if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" = "true" ]; then
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+
+          # Only files: a folder here means another artifact matched the download pattern.
+          for file in artifacts/*; do
+            [ -f "$file" ] || { echo "::error::$file is not a file; only the archives and checksums belong in the release."; exit 1; }
+          done
 
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \

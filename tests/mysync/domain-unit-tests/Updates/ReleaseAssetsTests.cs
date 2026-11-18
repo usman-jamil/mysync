@@ -52,6 +52,23 @@ public class ReleaseAssetsTests
     }
 
     [Fact]
+    public void OnlyTheArchives_Should_MatchTheReleasesDownloadPattern()
+    {
+        string workflow = File.ReadAllText(Path.Combine(RepositoryRoot(), ".github", "workflows", "release-mysync.yml"));
+
+        workflow.ShouldContain("pattern: mysync-*");
+        string[] lines = workflow.ReplaceLineEndings("\n").Split('\n');
+        string[] uploaded = [.. lines
+            .Select((line, index) => (line, index))
+            .Where(item => item.line.Contains("uses: actions/upload-artifact", StringComparison.Ordinal))
+            .Select(item => lines.Skip(item.index).Take(4).First(line => line.TrimStart().StartsWith("name:", StringComparison.Ordinal) && !line.Contains("Upload", StringComparison.Ordinal)).Trim()["name:".Length..].Trim())];
+
+        uploaded.ShouldContain("mysync-${{ matrix.rid }}");
+        uploaded.Where(name => name.StartsWith("mysync-", StringComparison.Ordinal)).ShouldBe(["mysync-${{ matrix.rid }}"],
+            "the release job uploads every mysync-* artifact as a release file");
+    }
+
+    [Fact]
     public void TheReleaseWorkflow_Should_BuildEveryBinaryWithItsOwnRepositoryAndKey()
     {
         string workflow = File.ReadAllText(Path.Combine(RepositoryRoot(), ".github", "workflows", "release-mysync.yml"));
