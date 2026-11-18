@@ -37,6 +37,8 @@ internal static class ExitCodes
             "State.FolderLocked" => FolderLocked,
             "Sync.MassDeleteBlocked" => MassDeleteBlocked,
             "Shares.NotFound" or "Shares.Deleted" or "Storage.Unauthorized" => NotFoundOrUnauthorized,
+            "Update.ReleaseNotFound" or "Update.NoBuildForPlatform" => NotFoundOrUnauthorized,
+            "Update.NotWritable" or "Update.NotInstalledBinary" => FolderPrecondition,
             _ => Unexpected,
         };
     }

@@ -95,6 +95,8 @@ internal sealed class Machine
         services.AddSingleton<IContentHasher>(new TestContentHasher());
         services.AddSingleton<TimeProvider>(world.Time);
         services.AddSingleton(_ => world.Options);
+        services.AddSingleton<Abstractions.Updates.IReleaseSource>(new NoReleases());
+        services.AddSingleton<Abstractions.Updates.IExecutableInstaller>(new NotInstalled());
         services.AddApplication();
         _services = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }

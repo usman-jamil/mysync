@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using MySync.Application.Conflicts.List;
 using MySync.Application.Maintenance.CollectGarbage;
+using MySync.Application.Maintenance.Update;
 using MySync.Application.Shares.Create;
 using MySync.Application.Shares.Delete;
 using MySync.Application.Shares.GetInfo;
@@ -133,6 +134,22 @@ internal static class JsonOutput
                 [.. deleted.Warnings],
                 exitCode),
             Context.DeleteJson);
+        return exitCode;
+    }
+
+    public static int Write(UpdateReport report, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        string status = report.Status switch
+        {
+            UpdateStatus.UpToDate => "up-to-date",
+            UpdateStatus.Available => "available",
+            _ => "updated",
+        };
+        Emit(
+            new UpdateJson("update", status, report.Current.ToString(), report.Target.ToString(), report.Downgrade, report.SignificantChange, report.NotesUrl, report.ExecutablePath, report.Source, exitCode),
+            Context.UpdateJson);
         return exitCode;
     }
 
@@ -303,6 +320,18 @@ internal sealed record DeleteJson(
     List<string> Warnings,
     int ExitCode);
 
+internal sealed record UpdateJson(
+    string Command,
+    string Status,
+    string CurrentVersion,
+    string TargetVersion,
+    bool Downgrade,
+    bool SignificantChange,
+    string? NotesUrl,
+    string ExecutablePath,
+    string Source,
+    int ExitCode);
+
 internal sealed record GcObjectJson(string Sha256, long Size, string LastModifiedUtc);
 
 internal sealed record GcJson(
@@ -347,4 +376,5 @@ internal sealed record FailureJson(ErrorJson Error, int ExitCode);
 [JsonSerializable(typeof(InfoJson))]
 [JsonSerializable(typeof(GcJson))]
 [JsonSerializable(typeof(DeleteJson))]
+[JsonSerializable(typeof(UpdateJson))]
 internal sealed partial class CliJsonContext : JsonSerializerContext;

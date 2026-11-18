@@ -4,3 +4,8 @@
 *.cs text eol=crlf
 *.sh text eol=lf
 *.gz binary
+# Signed fixtures and keys: any line-ending change would break the signatures.
+tools/release/testdata/** binary
+*.sig binary
+*.pem text eol=lf
+install.sh text eol=lf

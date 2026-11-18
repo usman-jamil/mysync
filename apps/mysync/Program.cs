@@ -36,6 +36,9 @@ builder.Services.Configure<ConsoleLifetimeOptions>(options => options.SuppressSt
 
 ConsoleOutput.Configure();
 
+// What a previous update may have left next to the executable (Windows keeps the old .exe until now).
+MySync.Infrastructure.Updates.UpdateLeftovers.RemoveNextTo(Environment.ProcessPath);
+
 // A typo ("mysync snyc") would otherwise print the help and exit 0.
 if (KnownCommands.FindUnknown(args) is { } unknown)
 {
@@ -56,6 +59,11 @@ builder.Services
 
 // An unknown provider registers nothing here; it is reported as ConfigurationErrors.UnknownProvider
 // (exit 2) by the first command that needs storage, so --help and --version still work.
+ReleaseSourceSelector.Register(
+    builder.Services,
+    builder.Configuration,
+    System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0");
+
 if (environment.Provider == StorageProvider.AzureBlob)
 {
     builder.Services.AddAzureBlobStorage();

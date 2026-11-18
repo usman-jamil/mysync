@@ -183,6 +183,7 @@ public sealed class DiskSyncTests : IDisposable
         services.AddSingleton(new ShareRoot(folder.Path));
         services.AddSingleton<IShareStore>(_store);
         services.AddSingleton<TimeProvider>(new InstantTimeProvider());
+        services.AddSingleton<MySync.Application.Abstractions.Updates.IReleaseSource>(new NoReleases());
         services.AddApplication();
         services.AddInfrastructure();
 

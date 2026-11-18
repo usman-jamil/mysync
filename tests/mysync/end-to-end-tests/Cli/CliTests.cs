@@ -463,6 +463,33 @@ public sealed class CliTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task UpdateCheck_Should_ReportANewerRelease_FromALocalReleaseFolder_AsJson()
+    {
+        _a.WriteFile("releases/mysync-99.0.0/SHA256SUMS.txt", "unused for a check").WriteFile("releases/mysync-99.1.0-beta.1/SHA256SUMS.txt", "prerelease");
+
+        CliResult text = await CliProcess.RunAsync(_a.Path, new Dictionary<string, string?> { ["MYSYNC_UPDATE_SOURCE"] = _a.Combine("releases") }, "update", "--check");
+        CliResult json = await CliProcess.RunAsync(_a.Path, new Dictionary<string, string?> { ["MYSYNC_UPDATE_SOURCE"] = _a.Combine("releases") }, "update", "--check", "--json");
+
+        text.ExitCode.ShouldBe(0, text.ToString());
+        text.StdOut.ShouldContain("mysync 99.0.0 is available");
+        text.StdErr.ShouldContain("significant change");
+        using var document = JsonDocument.Parse(json.StdOut);
+        document.RootElement.GetProperty("status").GetString().ShouldBe("available");
+        document.RootElement.GetProperty("targetVersion").GetString().ShouldBe("99.0.0");
+    }
+
+    [Fact]
+    public async Task Update_Should_RefuseToReplaceADevelopmentBuild_ExitFour()
+    {
+        _a.WriteFile("releases/mysync-99.0.0/SHA256SUMS.txt", "x");
+
+        CliResult result = await CliProcess.RunAsync(_a.Path, new Dictionary<string, string?> { ["MYSYNC_UPDATE_SOURCE"] = _a.Combine("releases") }, "update");
+
+        result.ExitCode.ShouldBe(4, result.ToString());
+        result.StdErr.ShouldContain("can't update itself");
+    }
+
     public void Dispose()
     {
         _a.Dispose();

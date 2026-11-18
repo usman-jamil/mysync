@@ -73,8 +73,10 @@ $ mysync sync        # two-way sync: upload local changes, download remote chang
 ├── .editorconfig                 # formatting + analyzer severities
 ├── .gitattributes                # *.cs checked out as CRLF everywhere, so IDE0055 agrees on every CI OS
 │
+├── install.sh / install.ps1      # first install from GitHub releases, signature-checked (§16)
 ├── tools/
-│   └── unicode/GenerateNfcData.cs  # file-based app: UCD → NFC tables + conformance data (§8)
+│   ├── unicode/GenerateNfcData.cs  # file-based app: UCD → NFC tables + conformance data (§8)
+│   └── release/                    # release signing public key, update/install end-to-end test, test-only fixtures (§16)
 │
 ├── apps/
 │   └── mysync/                   # MySync.Cli.csproj — the executable + composition root   (Nx: "mysync")
@@ -91,7 +93,8 @@ $ mysync sync        # two-way sync: upload local changes, download remote chang
 │   │   ├── domain/               # MySync.Domain.csproj               (Nx: "mysync-domain")
 │   │   ├── application/          # MySync.Application.csproj          (Nx: "mysync-application")
 │   │   ├── infrastructure/       # MySync.Infrastructure.csproj       (Nx: "mysync-infrastructure")
-│   │   └── storage-azure/        # MySync.Storage.Azure.csproj        (Nx: "mysync-storage-azure")
+│   │   ├── storage-azure/        # MySync.Storage.Azure.csproj        (Nx: "mysync-storage-azure")
+│   │   └── updates-github/       # MySync.Updates.GitHub.csproj       (Nx: "mysync-updates-github") — `update`'s release source
 │   │                             #   later: storage-s3/ MySync.Storage.S3.csproj
 │   └── shared/
 │       └── shared-kernel/        # SharedKernel.csproj — no dependencies (Nx: "shared-kernel")
@@ -127,6 +130,8 @@ Each project is an **Nx project** defined by its `project.json` (targets wrap `d
 | Local disk, `.mysynctool` serialization, hashing, ignore matching, conflict log | `libs/mysync/infrastructure` | |
 | How a share is stored in Azure (blob calls, ETags, error mapping) | `libs/mysync/storage-azure` | The only project that references `Azure.Storage.Blobs`. |
 | A new storage provider | a **new** `libs/mysync/storage-<name>` | Implements `IShareStore`; registered by the composition root. |
+| Where `mysync update` gets releases (GitHub API) | `libs/mysync/updates-github` | Implements `IReleaseSource`; never references Infrastructure or storage. |
+| Swapping the running binary, staging an update | `libs/mysync/infrastructure/Updates` | `ExecutableInstaller` is the only OS-specific part of `update`. |
 | What the CLI looks like on screen | `apps/mysync/Rendering/` | Spectre.Console. No rendering below `apps/`. |
 | A command, its arguments, flags, confirmations, exit codes | `apps/mysync/Commands/` + `ExitCodes.cs` | Keep commands thin. |
 | `Result`, `Error`, other cross-stack primitives | `libs/shared/shared-kernel` | Must stay dependency-free. |
@@ -162,6 +167,7 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | `MySync.Domain` (`libs/mysync/domain/MySync.Domain.csproj`) | Sync rules | Value objects (`ShareId`, `SharePath`, `ContentHash`, `Revision`), `Manifest` / `ManifestEntry`, `ShareState`, `MergePlanner`, `SyncPlan` / `SyncAction`, `Conflict` / `ConflictKind`, `MassDeleteGuard`, `ShareLayout` (blob key scheme, provider-agnostic), `ShareState` + `StorageLocation` + `HashCacheEntry`, `CaseCollision`, `StateFileNames`, `NfcNormalizer` (our own Unicode NFC, §8), and **static `*Errors` classes** (`ShareErrors`, `SyncErrors`, `PathErrors`, `LocalFileErrors`, `StateErrors`, `StorageErrors`, `ConfigurationErrors`). No I/O. |
 | `MySync.Application` (`libs/mysync/application/MySync.Application.csproj`) | Use cases | Command/query handlers, FluentValidation validators, **all abstractions** (`I...`), behaviors (decorators), response DTOs, the internal `SyncPipeline` that sequences the phases in §9. |
 | `MySync.Infrastructure` (`libs/mysync/infrastructure/MySync.Infrastructure.csproj`) | Local machine | `ShareRoot` (the folder being synced), `LocalFolder` + `PathResolver` / `FileScanner`, `Sha256ContentHasher`, `JsonShareStateStore` + `FolderLock`, `FileConflictLog`, `GitIgnoreRulesLoader` + `GitIgnoreMatcher` (our own gitignore matcher), `ManifestSerializer` + `MySyncJsonContext` (source-generated JSON), `MachineIdentity`, `DateTimeProvider`, `DependencyInjection.AddInfrastructure()`. |
+| `MySync.Updates.GitHub` (`libs/mysync/updates-github/MySync.Updates.GitHub.csproj`) | Release source | `GitHubReleaseSource : IReleaseSource` (`api.github.com`, source-generated JSON), `DependencyInjection.AddGitHubReleaseSource(repo, version, token)`. Depends on Application only. |
 | `MySync.Storage.Azure` (`libs/mysync/storage-azure/MySync.Storage.Azure.csproj`) | Azure Blob provider | `AzureBlobShareStore : IShareStore`, `AzureStorageOptions`, `AzureErrorMapper` (`RequestFailedException` → `StorageErrors`), `ConnectionStringRedactor`, `DependencyInjection.AddAzureBlobStorage()`. |
 | `MySync.Cli` (`apps/mysync/MySync.Cli.csproj`) | Presentation / composition root | `Program.cs`, `Commands/`, `Rendering/`, `ExitCodes.cs`. Selects the provider from `MYSYNC_PROVIDER`. |
 
@@ -180,6 +186,8 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | `IIgnoreRulesLoader`, `IIgnoreMatcher` | `Abstractions/Ignore/` | Infrastructure |
 | `IMachineIdentity` | `Abstractions/Environment/` | Infrastructure |
 | `ISyncProgressReporter`, `NullSyncProgressReporter` | `Abstractions/Progress/` | `apps/mysync/Rendering/SyncProgressDisplay` |
+| `IReleaseSource` (+ `ReleaseInfo`, `ReleaseAsset`) | `Abstractions/Updates/` | `MySync.Updates.GitHub` (GitHub), Infrastructure `DirectoryReleaseSource` (a local folder) |
+| `IExecutableInstaller`, `IUpdateWorkspace` | `Abstractions/Updates/` | Infrastructure `ExecutableInstaller` |
 
 Need a new external capability? Define the interface in `Abstractions/`, implement it outward, and register it in that project's `DependencyInjection.cs`.
 
@@ -232,6 +240,7 @@ libs/mysync/application/
     Resolve/        ResolveConflictsCommand(.cs|Handler|Validator) → SyncReport (+ Resolved)
   Maintenance/
     CollectGarbage/ CollectGarbageCommand(.cs|Handler|Validator), GarbageReport
+    Update/         UpdateCommand(.cs|Handler|Validator), UpdateReport, UpdateOptions (trusted key)
   Diagnostics/
     SelfCheck/      RunSelfCheckQuery(.cs|Handler), SelfCheckResponse                  # `self-check`, release smoke test (§8, §16)
 ```
@@ -587,6 +596,7 @@ mysync resolve <path>... --keep local|remote [--dry-run]
 mysync resolve --all     --keep local|remote [--dry-run]
 mysync gc [--dry-run] [--keep-revisions 20] [--grace-hours 24]
 mysync delete [<shareId>] --yes   # delete a share for every machine; local files stay
+mysync update [--check] [--version <v>] [--prerelease]   # replace this binary with a verified release
 mysync --version
 mysync self-check       # runtime checks inside the shipped binary (Unicode normalization); exit 1 if any fail
 ```
@@ -627,6 +637,24 @@ How it's built (`SyncSession.Resolve`, `SyncPipeline.PlanAgainst`): for each nam
 - A sync that uploaded objects and then finds the marker at commit time deletes the objects *it* stored (`UploadOutcome.Sent`), so nothing lingers after the sweep.
 - **No prompt:** `--yes` is required (`Cli.DeleteNeedsYes` → exit `2`), so the large-share `y/N` stays mysync's only prompt.
 
+### `update` (self-update; never automatic)
+
+mysync contacts the release source **only** when `update` runs: no background checks, no "new version" hints (the tool's promise is no backend but storage, and CI/offline runs stay predictable). `UpdateCommand`:
+
+1. **Pick the release:** the newest (prereleases only with `--prerelease`), or exactly `--version <v>` (also an older one, so a team can pin one version). "Latest" never goes backwards. `--check` stops here and downloads nothing.
+2. **Check the binary can be replaced** before downloading anything: a development build (`dotnet mysync.dll`) can't (`Update.NotInstalledBinary` → exit `4`), nor a folder this user can't write (`Update.NotWritable` → exit `4`, with advice: `sudo`, or install into `~/.local/bin`).
+3. **Signed checksums first:** download `SHA256SUMS.txt` and `SHA256SUMS.txt.sig`; the signature (ECDSA P-256, SHA-256, DER) must verify against the **trusted key** (`UpdateOptions`), or nothing large is even downloaded. An unsigned release (0.3.0 and older) is refused (`Update.SignatureMissing`).
+4. **The archive**, hashed while written into a workspace **next to the executable** (same volume): it must match the signed checksum.
+5. **Extract only the executable** (to a path of our choosing, never the entry's), run it: `--version` must print the release and `self-check` must pass (`Update.NewBinaryFailed`).
+6. **Swap** (`IUpdateWorkspace.InstallAsync`): Unix renames over the old file (the running process keeps its copy). Windows can't overwrite a running .exe, so it renames it aside (`mysync.exe.old-<guid>`), moves the new one in (moving the old back if that fails), and `UpdateLeftovers.RemoveNextTo` deletes the old copy at a later start, along with workspaces an interrupted update left (> 1 h old).
+
+Until step 6 the installed binary is untouched. The platform to fetch is the one the binary was built for (`RuntimeInformation.RuntimeIdentifier`). A symlinked install is resolved and the real file replaced.
+
+- **Release source** (`ReleaseSourceSelector`, `MYSYNC_UPDATE_SOURCE`): unset → GitHub `ReleaseAssets.DefaultRepository`; `github:owner/repo` → that repo; anything else → a local folder (`DirectoryReleaseSource`) laid out like GitHub releases (`<root>/mysync-1.2.3/<assets>`), for a mirror, an offline machine, or tests. GitHub lists `releases?per_page=100` (only `mysync-*` tags, never drafts) and downloads through the API asset URL; `GITHUB_TOKEN` (optional) is sent only to api.github.com (.NET drops it on the redirect) and never echoed. A rate limit or a private repo without a token gets a message that says so.
+- **The trusted key** is `ReleaseSignature.ProductionPublicKeyPem`. It can be replaced **only at build time** (`-p:MySyncReleasePublicKey=<base64 SPKI>` → assembly metadata), which only the end-to-end test does: no environment variable can make a binary trust another key.
+- `ReleaseVersion` orders by Semantic Versioning 2.0 (prereleases before their release). `IsSignificantChangeFrom` (major or minor changed) makes the CLI tell people to read the notes and update every machine together (e.g. the delete marker in 0.3).
+- `ReleaseAssets` is the one place release names are built (tag, archive per RID, `SHA256SUMS.txt`, `.sig`); `ReleaseAssetsTests` pins them and checks the release workflow publishes every RID and the signature.
+
 ### `gc` (never automatic)
 
 Deletes object blobs in the share that are **not referenced** by HEAD or by any of the last `--keep-revisions` history manifests, **and** whose `LastModified` is older than `--grace-hours`. The grace period protects objects uploaded by another client's sync that hasn't committed yet. Prune history manifests older than the kept window. Always print what will be (or was) deleted.
@@ -646,11 +674,11 @@ Mapped from `Error.Code` (failures) or from the report (partial successes). Noth
 | 1 | Unexpected error | unhandled exception |
 | 2 | Usage or configuration error | `ValidationError`, `ConfigurationErrors.*`, `resolve` on a non-conflicted path |
 | 3 | Completed, but one or more conflicts were dropped and logged (still open) | `SyncReport.Conflicts` non-empty (takes precedence over 9) |
-| 4 | Folder precondition failed | `ShareErrors.FolderNotEmpty`, `AlreadyAShare`, `NotAShare`, `UnsafeRoot` |
+| 4 | Folder precondition failed | `ShareErrors.FolderNotEmpty`, `AlreadyAShare`, `NotAShare`, `UnsafeRoot`; `UpdateErrors.NotWritable`, `NotInstalledBinary` |
 | 5 | Remote concurrency retries exhausted | `SyncErrors.CommitRetriesExhausted`, `SyncErrors.ShareChangedDuringGc` |
 | 6 | Another mysync process holds the lock for this folder | `StateErrors.FolderLocked` |
 | 7 | Safety guard tripped (mass delete) | `SyncErrors.MassDeleteBlocked` |
-| 8 | Share not found, deleted, or storage auth failure | `ShareErrors.NotFound`, `ShareErrors.Deleted`, `StorageErrors.Unauthorized` |
+| 8 | Share not found, deleted, or storage auth failure; no such release | `ShareErrors.NotFound`, `ShareErrors.Deleted`, `StorageErrors.Unauthorized`, `UpdateErrors.ReleaseNotFound` / `NoBuildForPlatform` |
 | 9 | Completed, but some paths were skipped (locked, unstable, invalid name) | `SyncReport.Skipped` non-empty |
 | 130 | Cancelled (Ctrl+C) | `OperationCanceledException` from the caller's token |
 
@@ -728,6 +756,7 @@ public sealed record StoredObjectInfo(ContentHash Hash, long Size, DateTimeOffse
 | `FluentValidation`, `FluentValidation.DependencyInjectionExtensions` | `MySync.Application` | Command validators (`AddValidatorsFromAssembly`, including internal types) |
 | `Microsoft.Extensions.DependencyInjection.Abstractions`, `Microsoft.Extensions.Options`, `Microsoft.Extensions.Logging.Abstractions` | libraries | `DependencyInjection.cs` extensions, options, `ILogger<T>` |
 | `Azure.Storage.Blobs` | `MySync.Storage.Azure` **only** | Blob provider |
+| (none) | `MySync.Updates.GitHub` | `update` uses the BCL only: `HttpClient`, `System.Text.Json`, `System.Formats.Tar`, `ZipFile`, `ECDsa` |
 | `SonarAnalyzer.CSharp` | all (via `Directory.Build.props`) | Analyzers |
 | `xunit.v3` | tests | Test framework, on **Microsoft.Testing.Platform** |
 | `Shouldly` | tests | Assertions |
@@ -873,6 +902,9 @@ The tag is the version. `mysync-` and an optional `v` are stripped; the rest mus
 - Archives are `mysync-<version>-<rid>.tar.gz` (Unix) / `.zip` (Windows), plus a collected `SHA256SUMS.txt`.
 - **Smoke tests:** a step runs the `linux-x64` binary inside a stock `ubuntu:24.04` container and the `linux-musl-x64` binary inside `alpine`, asserts each prints the tagged version, and runs the NFC-normalization self-check (§8). That's the self-containment claim tested rather than assumed. Keep it.
 - Binaries are unsigned. Release notes tell macOS users about `xattr -d com.apple.quarantine ./mysync` and Windows users about SmartScreen. Signing is the next step if that becomes a problem.
+- **Signing:** the *Publish release* job signs `SHA256SUMS.txt` (`openssl dgst -sha256 -sign`) with the repository secret **`MYSYNC_RELEASE_SIGNING_KEY`** (the PEM private key; it fails the release if the secret is missing), checks the signature against `tools/release/mysync-release-signing.pub.pem` (the same key as `ReleaseSignature.ProductionPublicKeyPem`, pinned by a test), and publishes `SHA256SUMS.txt.sig`. Never commit the private key. Rotating it means binaries built before the rotation can't verify later releases: publish one release signed with the old key whose binary trusts the new one.
+- **`tools/release/update-e2e.sh <rid>`** (CI job *Self-update end to end*, Linux and macOS): publishes 9.9.8 and 9.9.9 trusting a throwaway key, and checks `update --check`, a refused tampered archive and wrong-key signature, the real update, and `install.sh` against the same release folder. `tools/release/install-ps1-check.ps1` checks `install.ps1`'s signature code on Windows PowerShell 5.1 and 7 against `tools/release/testdata` (test-only key; marked binary in `.gitattributes`, since a line-ending change would break the signatures).
+- **Install scripts** (`install.sh` for macOS/Linux, `install.ps1` for Windows) are for the first install only, then `mysync update` takes over. Same checks as `update`: signature (the release key is inlined), checksum, `--version` and `self-check` before the binary is moved into place. They install into a user-writable folder by default (`~/.local/bin`, `%LOCALAPPDATA%\Programs\mysync`). `MYSYNC_INSTALL_SOURCE` / `MYSYNC_INSTALL_PUBLIC_KEY_FILE` exist for the end-to-end test.
 - **Release notes** are the heredoc in the *Create the release* step: what mysync is, a link to the README at that tag, the download table, install and checksum steps per OS (Alpine needs `libstdc++ libgcc`), a quick start and the command list, then GitHub's generated change list. `VERSION`, `REPOSITORY` and `/TAG/` are substituted by `sed`; keep those placeholders unique. The README is the full user guide: keep its commands, options and exit codes in step with §10.
 
 ---
@@ -909,6 +941,5 @@ The tag is the version. `mysync-` and an optional `v` are stripped; the rest mus
 
 - S3 / S3-compatible provider (`libs/mysync/storage-s3`, `MySync.Storage.S3`), passing the same contract suite.
 - Share codes with an embedded, scoped, expiring SAS so recipients need no env credentials. Needs either one container per share or an ADLS Gen2 (hierarchical namespace) account for directory SAS. Keep `ShareLayout` flexible for this.
-- `mysync update` self-update from GitHub releases, reusing the archive naming and `SHA256SUMS.txt` from §16 (keep that naming in one domain class when it lands).
 - `mysync restore --revision <n>` using history manifests.
 - `watch` mode, client-side encryption, gzip manifests, chunk-level dedupe for large, slowly-changing files.

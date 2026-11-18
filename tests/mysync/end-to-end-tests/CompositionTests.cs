@@ -6,6 +6,7 @@ using MySync.Application.Abstractions.Messaging;
 using MySync.Application.Diagnostics.SelfCheck;
 using MySync.Infrastructure;
 using MySync.Storage.Azure;
+using MySync.Updates.GitHub;
 using SharedKernel;
 using Shouldly;
 using Xunit;
@@ -67,7 +68,7 @@ public class CompositionTests
         var services = new ServiceCollection();
         services.AddSingleton(configuration);
         services.AddLogging();
-        services.AddApplication().AddInfrastructure().AddAzureBlobStorage();
+        services.AddApplication().AddInfrastructure().AddAzureBlobStorage().AddGitHubReleaseSource("acme/mysync", "1.0.0");
 
         return services;
     }

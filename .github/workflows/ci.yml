@@ -42,6 +42,16 @@ jobs:
       - name: Build
         run: dotnet build mysync.slnx --configuration Release --no-restore
 
+      # install.ps1's signature check: Windows PowerShell 5.1 takes a .NET Framework (CNG) path that
+      # only a Windows machine can run; PowerShell 7 takes the other one.
+      - name: install.ps1 signature check
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/release/install-ps1-check.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tools/release/install-ps1-check.ps1
+
       # Path rules and local-disk behaviour differ per OS, so unit tests run on all three.
       - name: Unit + architecture tests
         shell: bash
@@ -55,6 +65,33 @@ jobs:
           do
             dotnet test --project "$project" --configuration Release --no-build
           done
+
+  # `mysync update` with real published binaries: an old build updates itself from a signed local
+  # release, and refuses a tampered archive and a wrongly signed one (tools/release/update-e2e.sh).
+  # Windows' rename-aside swap is covered by ExecutableInstallerTests on the Windows runner.
+  self-update:
+    name: Self-update end to end (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: macos-latest
+            rid: osx-arm64
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Update an old build to a new one
+        env:
+          RID: ${{ matrix.rid }}
+        run: tools/release/update-e2e.sh "$RID"
 
   azurite:
     name: Azurite suites

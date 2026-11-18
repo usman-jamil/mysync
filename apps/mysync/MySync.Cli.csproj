@@ -8,6 +8,11 @@
     <!-- Overridden by the release workflow with -p:Version=<tag>. -->
   </PropertyGroup>
 
+  <!-- Test builds only (the update end-to-end test): trust another release key. Release builds never set it. -->
+  <ItemGroup Condition="'$(MySyncReleasePublicKey)' != ''">
+    <AssemblyMetadata Include="MySyncReleasePublicKey" Value="$(MySyncReleasePublicKey)" />
+  </ItemGroup>
+
   <ItemGroup>
     <Content Update="project.json">
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
@@ -32,6 +37,7 @@
     <ProjectReference Include="..\..\libs\mysync\application\MySync.Application.csproj" />
     <ProjectReference Include="..\..\libs\mysync\infrastructure\MySync.Infrastructure.csproj" />
     <ProjectReference Include="..\..\libs\mysync\storage-azure\MySync.Storage.Azure.csproj" />
+    <ProjectReference Include="..\..\libs\mysync\updates-github\MySync.Updates.GitHub.csproj" />
   </ItemGroup>
 
 </Project>

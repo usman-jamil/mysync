@@ -39,7 +39,28 @@ mysync sync <shareId>  # in an empty folder: clone a share
 
 ## Install
 
-Download the archive for your platform from the [latest release](https://github.com/usman-jamil/mysync/releases/latest).
+**macOS and Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/usman-jamil/mysync/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/usman-jamil/mysync/main/install.ps1 | iex
+```
+
+The scripts:
+
+1. pick the right build for your machine;
+2. check that the release's `SHA256SUMS.txt` is **signed with the mysync release key**, and that the download matches it;
+3. run the new binary's `self-check`;
+4. install it where no administrator rights are needed: `~/.local/bin` on macOS and Linux, or `%LOCALAPPDATA%\Programs\mysync` on Windows (added to your user `PATH`).
+
+Nothing is installed if any check fails. `MYSYNC_VERSION=0.4.0` installs a specific release, and `MYSYNC_INSTALL_DIR` chooses the folder. They need `curl`, `tar` and `openssl` on macOS and Linux; on Alpine, also `apk add libstdc++ libgcc`. Signed releases start with the first one after 0.3.0, so the scripts can't install 0.3.0 or earlier.
+
+**By hand:** download the archive for your platform from the [latest release](https://github.com/usman-jamil/mysync/releases/latest).
 
 | Platform | Archive |
 | --- | --- |
@@ -48,31 +69,34 @@ Download the archive for your platform from the [latest release](https://github.
 | Linux (x64, musl / Alpine) | `mysync-<version>-linux-musl-x64.tar.gz` |
 | Windows (x64 / arm64) | `mysync-<version>-win-x64.zip` / `win-arm64` |
 
-**macOS and Linux**
+```bash
+tar -xzf mysync-<version>-<platform>.tar.gz && mv mysync ~/.local/bin/
+sha256sum -c --ignore-missing SHA256SUMS.txt        # Linux (shasum -a 256 -c … on macOS)
+openssl dgst -sha256 -verify tools/release/mysync-release-signing.pub.pem -signature SHA256SUMS.txt.sig SHA256SUMS.txt
+```
+
+The public key is [`tools/release/mysync-release-signing.pub.pem`](tools/release/mysync-release-signing.pub.pem). The binaries themselves are unsigned:
+- **macOS** quarantines a browser download; clear it once with `xattr -d com.apple.quarantine ~/.local/bin/mysync`.
+- **Windows** SmartScreen warns the first time; choose *More info* → *Run anyway*.
+
+Neither happens with the install scripts or `mysync update`. `mysync self-check` confirms the binary works on this machine: it checks Unicode normalization, which file-name matching depends on.
+
+## Updating
 
 ```bash
-tar -xzf mysync-<version>-<platform>.tar.gz
-sudo mv mysync /usr/local/bin/mysync
-mysync --version
+mysync update                    # install the latest release
+mysync update --check            # only say whether there is one
+mysync update --version 0.4.0    # install exactly this one (also older), e.g. to keep a team on one version
+mysync update --prerelease       # let the latest be a prerelease
 ```
 
-- **macOS:** the binary is unsigned, so macOS quarantines it. Clear that once: `xattr -d com.apple.quarantine /usr/local/bin/mysync`.
-- **Alpine:** install the C++ runtime first: `apk add libstdc++ libgcc`.
-
-**Windows:** unzip and put `mysync.exe` in a folder on your `PATH`. SmartScreen warns about unsigned executables the first time; choose *More info* → *Run anyway*.
-
-**Verify the download** against the `SHA256SUMS.txt` attached to the release:
-
-```bash
-sha256sum -c --ignore-missing SHA256SUMS.txt        # Linux
-shasum -a 256 -c --ignore-missing SHA256SUMS.txt    # macOS
-```
-
-```powershell
-(Get-FileHash mysync-<version>-win-x64.zip).Hash    # Windows: compare with SHA256SUMS.txt
-```
-
-`mysync self-check` confirms the binary works on this machine (it checks Unicode normalization, which file-name matching depends on).
+- **Verified before anything is replaced:** `update` downloads the release for your platform, checks its signature and checksum, and runs the new binary's `--version` and `self-check`. Only then does it replace the old binary. If anything fails, the installed mysync stays exactly as it was.
+- **When it takes effect:** the new version runs from your next command.
+- **Significant changes:** if the first or second number changes (0.3 → 0.4), `update` says so. Read the release notes and update every machine that shares folders together.
+- **Never automatic:** mysync only contacts GitHub when you run `mysync update`.
+- **Permissions:** a binary in a folder you can't write (such as `/usr/local/bin`) needs `sudo mysync update`, or reinstall it in `~/.local/bin`.
+- **Rate limits and private copies:** set `GITHUB_TOKEN` if GitHub rate-limits you, or for a private copy of the repository.
+- **Mirrors:** `MYSYNC_UPDATE_SOURCE=/path/to/releases` updates from a local folder laid out like the GitHub releases (`mysync-1.2.3/<files>`), for machines without internet access. The same signature checks apply.
 
 ## Configure
 
@@ -128,6 +152,7 @@ Each `mysync sync` uploads what changed here and downloads what changed there. I
 | `mysync resolve <path>... --keep local\|remote` | Decide conflicts. `--all` instead of paths decides every one. |
 | `mysync gc` | Delete stored files no recent revision uses, and old history. |
 | `mysync delete [<shareId>] --yes` | Delete a share for every machine: its stored files and history. Local files stay. |
+| `mysync update` | Update mysync itself to the latest release, verified before it replaces anything. |
 | `mysync self-check` | Check this binary works on this machine. |
 
 Options for `sync`:
@@ -226,11 +251,11 @@ With `--json`, every command prints exactly one JSON document on stdout, even wh
 | 1 | Unexpected error (details with `--verbose`) |
 | 2 | Usage or configuration error (bad option, missing or invalid environment variable, `resolve` on a path not in conflict) |
 | 3 | Finished, but conflicts are open (takes precedence over 9) |
-| 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root |
+| 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; `update` can't replace this binary |
 | 5 | Another machine kept committing; try again |
 | 6 | Another mysync is working in this folder |
 | 7 | The mass-delete safety check stopped the sync |
-| 8 | Share not found or deleted, or the storage account rejected the credentials |
+| 8 | Share not found or deleted, the storage account rejected the credentials, or no such release |
 | 9 | Finished, but some paths were skipped (busy, unreadable, invalid name) |
 | 130 | Cancelled (Ctrl+C) |
 

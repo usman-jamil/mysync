@@ -77,6 +77,7 @@ internal sealed class AzureMachine(string connectionString, string container) : 
         services.AddSingleton(configuration);
         services.AddLogging();
         services.AddSingleton(new ShareRoot(Folder.Path));
+        services.AddSingleton<MySync.Application.Abstractions.Updates.IReleaseSource>(new NoReleases());
         services.AddApplication().AddInfrastructure().AddAzureBlobStorage();
         return services;
     }

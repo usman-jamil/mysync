@@ -252,6 +252,34 @@ jobs:
           rm -f ./*.sha256
           cat SHA256SUMS.txt
 
+      # `mysync update` installs nothing that isn't signed with this key (ECDSA P-256, SHA-256, DER),
+      # and the key's public half is built into every binary (ReleaseSignature.ProductionPublicKeyPem).
+      - uses: actions/checkout@v5
+        with:
+          path: source
+          sparse-checkout: tools/release
+
+      - name: Sign the checksums
+        env:
+          SIGNING_KEY: ${{ secrets.MYSYNC_RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::error::The repository secret MYSYNC_RELEASE_SIGNING_KEY is missing. Releases must be signed, or 'mysync update' can't install them."
+            exit 1
+          fi
+
+          key="$RUNNER_TEMP/signing.key.pem"
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          openssl dgst -sha256 -sign "$key" -out artifacts/SHA256SUMS.txt.sig artifacts/SHA256SUMS.txt
+          rm -f "$key"
+
+          # The signature must verify with the public key the binaries trust, or no one could update.
+          openssl dgst -sha256 -verify source/tools/release/mysync-release-signing.pub.pem \
+            -signature artifacts/SHA256SUMS.txt.sig artifacts/SHA256SUMS.txt
+
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -277,7 +305,19 @@ jobs:
           | Windows (x64) | `mysync-VERSION-win-x64.zip` |
           | Windows (arm64) | `mysync-VERSION-win-arm64.zip` |
 
-          ### Install — macOS and Linux
+          ### Install
+
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/REPOSITORY/main/install.sh | sh                # macOS, Linux
+          ```
+
+          ```powershell
+          irm https://raw.githubusercontent.com/REPOSITORY/main/install.ps1 | iex                     # Windows
+          ```
+
+          Already installed? `mysync update`. Both check the release signature before installing anything.
+
+          ### Install by hand — macOS and Linux
 
           ```bash
           tar -xzf mysync-VERSION-<platform>.tar.gz
@@ -289,7 +329,7 @@ jobs:
           `xattr -d com.apple.quarantine /usr/local/bin/mysync`. On Alpine, install the C++ runtime
           first: `apk add libstdc++ libgcc`.
 
-          ### Install — Windows
+          ### Install by hand — Windows
 
           Unzip and put `mysync.exe` in a folder on your `PATH`. SmartScreen warns about unsigned
           executables the first time; choose *More info* → *Run anyway*. For paths longer than 260
@@ -300,7 +340,12 @@ jobs:
           ```bash
           sha256sum -c --ignore-missing SHA256SUMS.txt          # Linux
           shasum -a 256 -c --ignore-missing SHA256SUMS.txt      # macOS
+          # and that SHA256SUMS.txt is the one the mysync release key signed:
+          openssl dgst -sha256 -verify mysync-release-signing.pub.pem -signature SHA256SUMS.txt.sig SHA256SUMS.txt
           ```
+
+          The public key is [`tools/release/mysync-release-signing.pub.pem`](https://github.com/REPOSITORY/blob/TAG/tools/release/mysync-release-signing.pub.pem).
+          Already have mysync? `mysync update` does all of this itself.
 
           On Windows: `(Get-FileHash mysync-VERSION-win-x64.zip).Hash` and compare with `SHA256SUMS.txt`.
 

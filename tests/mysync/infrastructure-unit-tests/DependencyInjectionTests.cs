@@ -38,6 +38,7 @@ public sealed class DependencyInjectionTests : IDisposable
     [InlineData(typeof(IConflictLog))]
     [InlineData(typeof(IManifestSerializer))]
     [InlineData(typeof(IMachineIdentity))]
+    [InlineData(typeof(MySync.Application.Abstractions.Updates.IExecutableInstaller))]
     public void AddInfrastructure_Should_ImplementEveryLocalAbstraction(Type abstraction)
     {
         using ServiceProvider provider = Services().BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });

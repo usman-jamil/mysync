@@ -17,6 +17,7 @@
     <Project Path="libs/mysync/application/MySync.Application.csproj" />
     <Project Path="libs/mysync/infrastructure/MySync.Infrastructure.csproj" />
     <Project Path="libs/mysync/storage-azure/MySync.Storage.Azure.csproj" />
+    <Project Path="libs/mysync/updates-github/MySync.Updates.GitHub.csproj" />
   </Folder>
   <Folder Name="/libs/shared/">
     <Project Path="libs/shared/shared-kernel/SharedKernel.csproj" />

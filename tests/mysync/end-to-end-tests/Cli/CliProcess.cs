@@ -40,7 +40,8 @@ internal static class CliProcess
 
         foreach (string name in start.Environment.Keys.ToList())
         {
-            if (name.StartsWith("MYSYNC_", StringComparison.OrdinalIgnoreCase) || name.StartsWith("AZURE_", StringComparison.OrdinalIgnoreCase) || name.StartsWith("DOTNET_ENVIRONMENT", StringComparison.OrdinalIgnoreCase))
+            if (name.StartsWith("MYSYNC_", StringComparison.OrdinalIgnoreCase) || name.StartsWith("AZURE_", StringComparison.OrdinalIgnoreCase) || name.StartsWith("DOTNET_ENVIRONMENT", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("GITHUB_TOKEN", StringComparison.OrdinalIgnoreCase))
             {
                 start.Environment.Remove(name);
             }

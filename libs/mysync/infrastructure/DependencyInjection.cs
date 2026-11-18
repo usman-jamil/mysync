@@ -7,6 +7,7 @@ using MySync.Application.Abstractions.Ignore;
 using MySync.Application.Abstractions.Logging;
 using MySync.Application.Abstractions.State;
 using MySync.Application.Abstractions.Storage;
+using MySync.Application.Abstractions.Updates;
 using MySync.Infrastructure.FileSystem;
 using MySync.Infrastructure.Hashing;
 using MySync.Infrastructure.Identity;
@@ -15,6 +16,7 @@ using MySync.Infrastructure.Logging;
 using MySync.Infrastructure.Serialization;
 using MySync.Infrastructure.State;
 using MySync.Infrastructure.Time;
+using MySync.Infrastructure.Updates;
 using SharedKernel;
 
 namespace MySync.Infrastructure;
@@ -40,7 +42,19 @@ public static class DependencyInjection
         services.TryAddSingleton<IConflictLog>(provider => new FileConflictLog(provider.GetRequiredService<ShareRoot>()));
         services.TryAddSingleton<IManifestSerializer, ManifestSerializer>();
         services.TryAddSingleton<IMachineIdentity, MachineIdentity>();
+        services.TryAddSingleton<IExecutableInstaller, ExecutableInstaller>();
 
+        return services;
+    }
+
+    /// <summary>
+    /// Releases from a local folder (<c>MYSYNC_UPDATE_SOURCE=/path</c>): a mirror, an offline machine,
+    /// or tests. The default source is GitHub (<c>MySync.Updates.GitHub</c>).
+    /// </summary>
+    public static IServiceCollection AddDirectoryReleaseSource(this IServiceCollection services, string folder)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
+        services.TryAddSingleton<IReleaseSource>(new DirectoryReleaseSource(Path.GetFullPath(folder)));
         return services;
     }
 }

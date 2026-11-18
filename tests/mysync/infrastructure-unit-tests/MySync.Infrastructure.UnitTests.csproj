@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\libs\mysync\infrastructure\MySync.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\libs\mysync\updates-github\MySync.Updates.GitHub.csproj" />
     <ProjectReference Include="..\testing\MySync.Testing.csproj" />
   </ItemGroup>
 

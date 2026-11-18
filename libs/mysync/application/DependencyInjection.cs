@@ -43,6 +43,7 @@ public static class DependencyInjection
         services.AddScoped<LocalApplier>();
         services.AddScoped<SyncPipeline>();
         services.AddScoped<ShareFolder>();
+        services.TryAddSingleton(Maintenance.Update.UpdateOptions.Production);
 
         return services;
     }

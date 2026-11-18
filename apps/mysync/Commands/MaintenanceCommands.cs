@@ -1,13 +1,41 @@
 using ConsoleAppFramework;
 using MySync.Application.Maintenance.CollectGarbage;
+using MySync.Application.Maintenance.Update;
 using MySync.Cli.Rendering;
 using SharedKernel;
 
 namespace MySync.Cli.Commands;
 
-/// <summary><c>mysync gc</c> (CLAUDE.md §10). Never automatic.</summary>
+/// <summary><c>mysync gc</c> and <c>mysync update</c> (CLAUDE.md §10). Neither runs on its own.</summary>
 internal sealed class MaintenanceCommands(CommandRunner runner)
 {
+    /// <summary>
+    /// Update mysync to the latest release (verified and tested before it replaces this one).
+    /// </summary>
+    /// <param name="check">Only say whether an update is available; download nothing.</param>
+    /// <param name="version">Install this release instead, even an older one, so a team can stay on one version.</param>
+    /// <param name="prerelease">Let the latest be a prerelease.</param>
+    /// <param name="cancellationToken">Ctrl+C.</param>
+    [Command("update")]
+    public Task<int> Update(bool check = false, string? version = null, bool prerelease = false, CancellationToken cancellationToken = default) =>
+        runner.RunAsync(async () =>
+        {
+            Result<UpdateReport> updated = await SyncProgressDisplay.RunAsync(runner.Options, progress =>
+                runner.SendAsync<UpdateCommand, UpdateReport>(new UpdateCommand(check, version, prerelease, progress), cancellationToken));
+            if (updated.IsFailure)
+            {
+                return runner.Fail(updated.Error);
+            }
+
+            if (runner.Options.Json)
+            {
+                return JsonOutput.Write(updated.Value, ExitCodes.Success);
+            }
+
+            UpdateView.Render(updated.Value);
+            return ExitCodes.Success;
+        }, cancellationToken);
+
     /// <summary>
     /// Delete stored files no recent revision uses, and old history. Run it when no one else is syncing.
     /// </summary>
