@@ -9,3 +9,6 @@ tools/release/testdata/** binary
 *.sig binary
 *.pem text eol=lf
 install.sh text eol=lf
+
+# Served as-is from the static website: the same bytes on every OS.
+libs/mysync/site-assets/Root/* text eol=lf

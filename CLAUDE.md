@@ -65,7 +65,9 @@ $ mysync sync        # two-way sync: upload local changes, download remote chang
 ```text
 / (repo root)
 ├── nx.json                       # Nx workspace config (target defaults, named inputs, caching)
-├── package.json                  # Nx toolchain only (no runtime JS) + workspace scripts
+├── package.json                  # Nx toolchain + mysync-site's npm packages (one lockfile) + workspace scripts
+├── .nvmrc                        # Node version for CI and local work (mysync-site)
+├── tsconfig.base.json, eslint.config.mjs   # shared TypeScript / ESLint settings (mysync-site)
 ├── mysync.slnx                   # .NET solution: every project under apps/, libs/, tests/
 ├── global.json                   # pins the .NET 10 SDK + selects Microsoft.Testing.Platform for dotnet test
 ├── Directory.Build.props         # shared MSBuild settings (nullable, analyzers, warnings-as-errors)
@@ -79,7 +81,11 @@ $ mysync sync        # two-way sync: upload local changes, download remote chang
 │   └── release/                    # release signing public key, update/install end-to-end test, test-only fixtures (§16)
 │
 ├── apps/
-│   └── mysync/                   # MySync.Cli.csproj — the executable + composition root   (Nx: "mysync")
+│   ├── mysync/                   # MySync.Cli.csproj — the executable + composition root   (Nx: "mysync")
+│   └── mysync-site/              # React 19 + Vite: the page of a published share (Nx: "mysync-site", tags stack:mysync, type:web)
+│       ├── contract/site-data.schema.json   # the data contract (window.__MYSYNC_SITE__), source of truth for TS and C#
+│       ├── src/                  #   app, contract types, path/URL helpers; public/site-data.js is the dev fixture
+│       └── tools/                #   build plugins (CSP, notices, output contract), generate-fixture.mjs
 │       ├── Program.cs            #   host, DI wiring, provider selection, command registration
 │       ├── Commands/             #   <Feature>Commands.cs — thin: resolve handler, invoke, render
 │       ├── Rendering/            #   everything the user sees (Spectre.Console)
@@ -94,7 +100,8 @@ $ mysync sync        # two-way sync: upload local changes, download remote chang
 │   │   ├── application/          # MySync.Application.csproj          (Nx: "mysync-application")
 │   │   ├── infrastructure/       # MySync.Infrastructure.csproj       (Nx: "mysync-infrastructure")
 │   │   ├── storage-azure/        # MySync.Storage.Azure.csproj        (Nx: "mysync-storage-azure")
-│   │   └── updates-github/       # MySync.Updates.GitHub.csproj       (Nx: "mysync-updates-github") — `update`'s release source
+│   │   ├── updates-github/       # MySync.Updates.GitHub.csproj       (Nx: "mysync-updates-github") — `update`'s release source
+│   │   └── site-assets/          # MySync.SiteAssets.csproj           (Nx: "mysync-site-assets") — embeds the mysync-site build
 │   │                             #   later: storage-s3/ MySync.Storage.S3.csproj
 │   └── shared/
 │       └── shared-kernel/        # SharedKernel.csproj — no dependencies (Nx: "shared-kernel")
@@ -107,18 +114,19 @@ $ mysync sync        # two-way sync: upload local changes, download remote chang
 │       ├── infrastructure-unit-tests/        # MySync.Infrastructure.UnitTests.csproj
 │       ├── storage-azure-integration-tests/  # MySync.Storage.Azure.IntegrationTests.csproj (Azurite)
 │       ├── end-to-end-tests/                 # MySync.EndToEndTests.csproj (Azurite, full DI graph, two "machines")
+│       ├── site-assets-unit-tests/           # MySync.SiteAssets.UnitTests.csproj (needs the site build)
 │       └── architecture-tests/               # MySync.ArchitectureTests.csproj (dependency rules)
 │
 └── .github/workflows/
-    ├── ci.yml                    # build + unit tests on ubuntu/windows/macos; Azurite suites on ubuntu
+    ├── ci.yml                    # site checks + build once; .NET build + unit tests on ubuntu/windows/macos; Azurite suites on ubuntu
     └── release-mysync.yml        # tag-driven publish of every RID (§16)
 ```
 
-> **Convention:** every .NET **class library** lives under `libs/mysync/` or `libs/shared/` (one folder per project). Only the executable host (`apps/mysync/MySync.Cli.csproj`) lives under `apps/`. `mysync.slnx` references all of them.
+> **Convention:** every .NET **class library** lives under `libs/mysync/` or `libs/shared/` (one folder per project). Only the executable host (`apps/mysync/MySync.Cli.csproj`) and the web app (`apps/mysync-site`) live under `apps/`. `mysync.slnx` references all of them.
 >
 > `libs/mysync/` is **private to the mysync stack**. If another tool is added to this monorepo later, it gets its own `libs/<tool>/` and never references `libs/mysync/*`. `libs/shared/` is the only place a library several stacks may reference belongs.
 
-Each project is an **Nx project** defined by its `project.json` (targets wrap `dotnet` via `nx:run-commands` unless the workspace adopts a .NET Nx plugin). Every project carries **tags**: `stack:mysync` or `stack:shared`, plus `type:lib`, `type:app`, `type:unit-test`, `type:integration-test`, `type:e2e-test` or `type:architecture-test`. CI and the commands in §15 select test suites by tag.
+Each project is an **Nx project** defined by its `project.json` (targets wrap `dotnet` via `nx:run-commands` unless the workspace adopts a .NET Nx plugin). Every project carries **tags**: `stack:mysync` or `stack:shared`, plus `type:lib`, `type:app`, `type:web`, `type:unit-test`, `type:integration-test`, `type:e2e-test` or `type:architecture-test`. CI and the commands in §15 select test suites by tag.
 
 ### Decision table — which project owns a change
 
@@ -133,6 +141,8 @@ Each project is an **Nx project** defined by its `project.json` (targets wrap `d
 | Where `mysync update` gets releases (GitHub API) | `libs/mysync/updates-github` | Implements `IReleaseSource`; never references Infrastructure or storage. |
 | Swapping the running binary, staging an update | `libs/mysync/infrastructure/Updates` | `ExecutableInstaller` is the only OS-specific part of `update`. |
 | What the CLI looks like on screen | `apps/mysync/Rendering/` | Spectre.Console. No rendering below `apps/`. |
+| What a published share looks like in the browser | `apps/mysync-site` | React; renders only from `window.__MYSYNC_SITE__` (`apps/mysync-site/README.md`). Change the data shape in `contract/site-data.schema.json` first. |
+| How the site build gets into the binary | `libs/mysync/site-assets` | `EmbeddedSiteAssetSource : ISiteAssetSource`; the CLI-owned `$web` root files in `Root/`. Depends on Application only. |
 | A command, its arguments, flags, confirmations, exit codes | `apps/mysync/Commands/` + `ExitCodes.cs` | Keep commands thin. |
 | `Result`, `Error`, other cross-stack primitives | `libs/shared/shared-kernel` | Must stay dependency-free. |
 | NuGet versions | `Directory.Packages.props` | Central Package Management (§13). |
@@ -155,6 +165,7 @@ MySync.Cli ──────┤                            ├──▶ MySync.
 - `MySync.Application` depends on `MySync.Domain` + `SharedKernel`. **It must NOT reference Infrastructure, any storage project, the Azure SDK, Spectre.Console or ConsoleAppFramework.**
 - `MySync.Infrastructure` and `MySync.Storage.*` depend on `MySync.Application` (and inward). They implement abstractions Application defines. **They never reference each other**, so a provider can be added or removed without touching local-disk code.
 - `MySync.Storage.Azure` is the **only** project that references `Azure.*` packages.
+- `MySync.SiteAssets` and `MySync.Updates.GitHub` depend on `MySync.Application` only, and nothing but the CLI (and their tests) references them. Only the CLI, its end-to-end and architecture tests, and `MySync.SiteAssets.UnitTests` need the web build.
 - `MySync.Cli` is the composition root. It references Application, Infrastructure and the storage projects, and wires everything together at startup. Only it references Spectre.Console and ConsoleAppFramework.
 
 These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **If you add a reference that points outward, those tests fail by design. Fix the design, not the test.**
@@ -168,6 +179,7 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | `MySync.Application` (`libs/mysync/application/MySync.Application.csproj`) | Use cases | Command/query handlers, FluentValidation validators, **all abstractions** (`I...`), behaviors (decorators), response DTOs, the internal `SyncPipeline` that sequences the phases in §9. |
 | `MySync.Infrastructure` (`libs/mysync/infrastructure/MySync.Infrastructure.csproj`) | Local machine | `ShareRoot` (the folder being synced), `LocalFolder` + `PathResolver` / `FileScanner`, `Sha256ContentHasher`, `JsonShareStateStore` + `FolderLock`, `FileConflictLog`, `GitIgnoreRulesLoader` + `GitIgnoreMatcher` (our own gitignore matcher), `ManifestSerializer` + `MySyncJsonContext` (source-generated JSON), `MachineIdentity`, `DateTimeProvider`, `DependencyInjection.AddInfrastructure()`. |
 | `MySync.Updates.GitHub` (`libs/mysync/updates-github/MySync.Updates.GitHub.csproj`) | Release source | `GitHubReleaseSource : IReleaseSource` (`api.github.com`, source-generated JSON), `DependencyInjection.AddGitHubReleaseSource(repo, version, token)`. Depends on Application only. |
+| `MySync.SiteAssets` (`libs/mysync/site-assets/MySync.SiteAssets.csproj`) | Publication page assets | `EmbeddedSiteAssetSource : ISiteAssetSource` (manifest resources `site/…` from `dist/apps/mysync-site`, `root/…` from `Root/`), `DependencyInjection.AddSiteAssets()`. Depends on Application only. |
 | `MySync.Storage.Azure` (`libs/mysync/storage-azure/MySync.Storage.Azure.csproj`) | Azure Blob provider | `AzureBlobShareStore : IShareStore`, `AzureStorageOptions`, `AzureErrorMapper` (`RequestFailedException` → `StorageErrors`), `ConnectionStringRedactor`, `DependencyInjection.AddAzureBlobStorage()`. |
 | `MySync.Cli` (`apps/mysync/MySync.Cli.csproj`) | Presentation / composition root | `Program.cs`, `Commands/`, `Rendering/`, `ExitCodes.cs`. Selects the provider from `MYSYNC_PROVIDER`. |
 
@@ -188,6 +200,7 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | `ISyncProgressReporter`, `NullSyncProgressReporter` | `Abstractions/Progress/` | `apps/mysync/Rendering/SyncProgressDisplay` |
 | `IReleaseSource` (+ `ReleaseInfo`, `ReleaseAsset`) | `Abstractions/Updates/` | `MySync.Updates.GitHub` (GitHub), Infrastructure `DirectoryReleaseSource` (a local folder) |
 | `IExecutableInstaller`, `IUpdateWorkspace` | `Abstractions/Updates/` | Infrastructure `ExecutableInstaller` |
+| `ISiteAssetSource` (+ `SiteAsset`) | `Abstractions/Publishing/` | `MySync.SiteAssets` `EmbeddedSiteAssetSource` |
 
 Need a new external capability? Define the interface in `Abstractions/`, implement it outward, and register it in that project's `DependencyInjection.cs`.
 
@@ -766,6 +779,20 @@ public sealed record StoredObjectInfo(ContentHash Hash, long Size, DateTimeOffse
 | `Microsoft.Extensions.DependencyInjection` | tests only | A concrete `ServiceCollection` for DI tests (the libraries reference only the abstractions) |
 | `NetArchTest.Rules` | architecture tests | Dependency rules (§3) |
 
+**npm** (root `package.json`, one `package-lock.json`; only `apps/mysync-site` uses them):
+
+| Package | Kind | Purpose |
+|---|---|---|
+| `react`, `react-dom` | runtime | The publication page (bundled into every publication's `app.js`) |
+| `@tanstack/react-virtual` | runtime | Virtualized file list (100,000 entries) |
+| `nx`, `@nx/react`, `@nx/vite`, `@nx/vitest`, `@nx/eslint`, `@nx/js`, `@nx/web` | dev | Workspace tooling (same version as `nx`) |
+| `vite`, `@vitejs/plugin-react`, `typescript` | dev | Build and type checking |
+| `vitest`, `jsdom`, `@testing-library/react`, `@testing-library/dom`, `@testing-library/user-event` | dev | Site tests |
+| `ajv`, `ajv-formats` | dev | Validating the fixture against `site-data.schema.json` |
+| `eslint` (+ Nx's flat configs) | dev | Lint; `--max-warnings=0`, `dangerouslySetInnerHTML` banned |
+
+A new **runtime** npm package ships inside every publication: it needs a reason, and `THIRD-PARTY-NOTICES.txt` picks up its license automatically (the build fails if it has none).
+
 Don't add a package without a row here. Use the BCL (`IncrementalHash`, `System.Text.Json`, `File.SetUnixFileMode`) where it's enough. There is deliberately no gitignore package: neither candidate matched git (§7), so `.mysyncignore` matching is our own code, checked against git.
 
 ---
@@ -782,6 +809,8 @@ Every test project is xUnit v3 on the Microsoft Testing Platform with Shouldly, 
 | `MySync.Storage.Azure.IntegrationTests` (`tests/mysync/storage-azure-integration-tests/`) | `type:integration-test` | `AzureBlobShareStore` against **Azurite**, plus the `IShareStore` **contract suite** | Azurite |
 | `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + Azure) with two temp folders as two "machines"; `Cli/CliTests` runs the **built `mysync` as a process** (`CliProcess`, fresh environment, stdin closed) for exit codes, stdout/stderr, `--json` and the no-terminal prompt rule | Azurite |
 | `MySync.ArchitectureTests` (`tests/mysync/architecture-tests/`) | `type:architecture-test` | The dependency rules in §3 | none |
+| `MySync.SiteAssets.UnitTests` (`tests/mysync/site-assets-unit-tests/`) | `type:unit-test`, `requires:site-build` | The embedded set is exactly the four site files plus the three root files, `index.html` loads `./site-data.js` then `./assets/app.js`, content types, the version digest, placeholder detection, and the embedded bytes equal `dist/apps/mysync-site` | the real site build (fails with advice if the placeholder is embedded) |
+| `mysync-site` (`apps/mysync-site`, Vitest) | `type:web` | Rendering from the fixture, search, hash navigation, URL encoding of awkward names, the theme switcher, the error states, the build-output check, and the fixture against the schema | jsdom, `public/site-data.js` |
 | `MySync.Testing` (`tests/mysync/testing/`) | `type:lib` | **Not a test project.** Shared fakes and builders: `InMemoryShareStore`, `InMemoryLocalFolder` (also a simple `IFileScanner`; `ExecutableBitSupported = false` simulates Windows), `PathListIgnoreMatcher`, `ManifestBuilder` (real hashes + their bytes), `ManifestAssertions.ShouldMatchManifest`, `TempShareFolder`, `FixedDateTimeProvider`, `InstantTimeProvider`, `RecordingSyncProgressReporter`, `InMemoryShareStateStore`, `InMemoryFolderLock`, `RecordingConflictLog`, `FixedMachineIdentity`, `FixedIgnoreRulesLoader`, `TestContentHasher`, `FailingStream` (throws `IOException` partway), and the abstract contract suites `Contracts/ShareStoreContractTests` and `Contracts/LocalFolderContractTests` | |
 
 ### Conventions
@@ -835,7 +864,7 @@ Both Azurite-backed suites use `Testcontainers.Azurite` with the image `mcr.micr
 - A 5 MB file (two blocks) upload and download with hash verification. Large shares are tested against real Azure, not Azurite.
 - `gc` keeps objects referenced by kept history and within the grace period.
 
-**CI (`ci.yml`):** build + unit + architecture tests on `ubuntu-latest`, `windows-latest` and `macos-latest`. Azurite suites on `ubuntu-latest`.
+**CI (`ci.yml`):** a `site` job (Node from `.nvmrc`, `npm ci`, then `nx run-many -t lint,typecheck,test,build -p mysync-site`) runs first and uploads the build; every .NET job downloads it into `dist/apps/mysync-site` before building. Then build + unit + architecture tests on `ubuntu-latest`, `windows-latest` and `macos-latest`, and the Azurite suites on `ubuntu-latest`.
 
 ---
 
@@ -844,7 +873,9 @@ Both Azurite-backed suites use `Testcontainers.Azurite` with the image `mcr.micr
 Prefer **Nx targets**. They wrap the `dotnet` commands and give caching and a uniform interface. Run from the repo root.
 
 ```bash
-nx build mysync                                          # dotnet build the CLI (and its dependencies)
+nx build mysync                                          # builds mysync-site first, then the CLI (and its dependencies)
+nx run-many -t lint,typecheck,test,build -p mysync-site  # the publication page (typecheck is `tsc -b`: app, tests and build config)
+npm run site                                             # the page with a mocked share, in your browser (npm run site:large: 100,000 files)
 nx run-many -t test --projects=tag:type:unit-test        # all unit tests
 nx run-many -t test --projects=tag:type:architecture-test
 nx run-many -t test --projects=tag:type:integration-test,tag:type:e2e-test   # Azurite suites (needs Docker or BYO Azurite)
@@ -852,7 +883,9 @@ nx run-many -t test --all                                # everything
 nx publish mysync --rid=linux-x64                        # local single-file publish (same flags as the release workflow)
 ```
 
-Direct .NET commands (the solution is `mysync.slnx`; `global.json` selects Microsoft.Testing.Platform):
+Direct .NET commands (the solution is `mysync.slnx`; `global.json` selects Microsoft.Testing.Platform). **The CLI embeds the site build** (`dist/apps/mysync-site`): without it a **Release** build fails (`MYSYNC001`: run `nx build mysync`), and a **Debug** build warns (`MYSYNC002`) and embeds a placeholder page that `mysync publish` refuses. So run `nx build mysync-site` once before `dotnet build -c Release`.
+
+> **`tsc -b`, not `tsc --noEmit -p …`**: `apps/mysync-site/tsconfig.json` is a solution-style config (`files: []` plus references to `tsconfig.app.json` and `tsconfig.spec.json`). `--noEmit -p tsconfig.app.json` checks only the app and skips the tests and build config; `tsc -b` checks every referenced project.
 
 ```bash
 dotnet build                                                                     # whole solution, warnings = errors
@@ -900,7 +933,8 @@ The tag is the version. `mysync-` and an optional `v` are stripped; the rest mus
 - **Publish flags are release-packaging concerns and live in the workflow** (and the mirrored Nx `publish` target), not the csproj: `--self-contained` (no .NET runtime needed on the target machine), `PublishSingleFile` + `EnableCompressionInSingleFile` + `IncludeNativeLibrariesForSelfExtract` (one executable), `InvariantGlobalization=true` (drops the libicu dependency; without it the binary dies with an ICU error on a minimal server image. NFC doesn't depend on ICU because we implement it ourselves, §8), `DebugType=embedded` (stack traces keep line numbers, no separate `.pdb`).
 - **Not trimmed**, deliberately: the configuration binder and Serilog resolve types by reflection, and the Azure SDK emits trim warnings. Trimming breaks these silently.
 - Archives are `mysync-<version>-<rid>.tar.gz` (Unix) / `.zip` (Windows), plus a collected `SHA256SUMS.txt`.
-- **Smoke tests:** a step runs the `linux-x64` binary inside a stock `ubuntu:24.04` container and the `linux-musl-x64` binary inside `alpine`, asserts each prints the tagged version, and runs the NFC-normalization self-check (§8). That's the self-containment claim tested rather than assumed. Keep it.
+- **The site is built once:** the `site` job runs `npm ci` and the site's lint/typecheck/test/build and uploads `dist/apps/mysync-site`; the test job and all seven builds download that same build, so every binary embeds identical assets.
+- **Smoke tests:** a step runs the `linux-x64` binary inside a stock `ubuntu:24.04` container and the `linux-musl-x64` binary inside `alpine`, asserts each prints the tagged version, runs the NFC-normalization self-check (§8), and runs the hidden `mysync debug site-assets`, which lists each embedded asset with its SHA-256 and exits `1` on the Debug placeholder. That's the self-containment claim tested rather than assumed. Keep it.
 - Binaries are unsigned. Release notes tell macOS users about `xattr -d com.apple.quarantine ./mysync` and Windows users about SmartScreen. Signing is the next step if that becomes a problem.
 - **Signing:** the repository secret **`MYSYNC_RELEASE_SIGNING_KEY`** (a PEM P-256 private key) is the release's identity. The *Release identity* job derives its public half first (and fails before any build if the secret is missing or malformed); every build gets `-p:MySyncReleaseRepository=${{ github.repository }}` and `-p:MySyncReleasePublicKey=<that key>`. The *Publish release* job signs `SHA256SUMS.txt` (`openssl dgst -sha256 -sign`), checks the signature against the derived key, and publishes `SHA256SUMS.txt.sig` plus `mysync-release-signing.pub.pem`. In the upstream repository (`UPSTREAM`) the key must also equal `tools/release/mysync-release-signing.pub.pem` (= `ReleaseSignature.ProductionPublicKeyPem`, pinned by a test), so local builds trust the same key.
 - **Forks** release their own mysync by adding their own `MYSYNC_RELEASE_SIGNING_KEY` secret and nothing else: their binaries update from the fork and trust the fork's key. Only a fork that hosts its own install scripts edits the two marked lines in each (repository and public key). `ReleaseSignatureTests` keeps the upstream scripts in step with the code. Never commit the private key. Rotating it means binaries built before the rotation can't verify later releases: publish one release signed with the old key whose binary trusts the new one.

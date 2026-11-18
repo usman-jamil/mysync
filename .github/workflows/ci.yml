@@ -21,8 +21,40 @@ env:
   TESTINGPLATFORM_TELEMETRY_OPTOUT: 'true'
 
 jobs:
+  # apps/mysync-site: checked and built once, before any .NET build. Every .NET job downloads the
+  # build, because MySync.SiteAssets embeds it into the CLI (CLAUDE.md, Publishing).
+  site:
+    name: Site (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    env:
+      NX_DAEMON: 'false'
+      NX_NO_CLOUD: 'true'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint, typecheck, test and build
+        run: npx nx run-many -t lint,typecheck,test,build -p mysync-site
+
+      - name: Upload the site build
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysync-site
+          path: dist/apps/mysync-site
+          if-no-files-found: error
+          retention-days: 7
+
   build-and-unit-test:
     name: Build + unit tests (${{ matrix.os }})
+    needs: site
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -30,6 +62,13 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
+
+      # The site build from the `site` job: the CLI embeds it, and a Release build fails without it.
+      - name: Download the site build
+        uses: actions/download-artifact@v4
+        with:
+          name: mysync-site
+          path: dist/apps/mysync-site
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -61,6 +100,7 @@ jobs:
             tests/mysync/domain-unit-tests/MySync.Domain.UnitTests.csproj \
             tests/mysync/application-unit-tests/MySync.Application.UnitTests.csproj \
             tests/mysync/infrastructure-unit-tests/MySync.Infrastructure.UnitTests.csproj \
+            tests/mysync/site-assets-unit-tests/MySync.SiteAssets.UnitTests.csproj \
             tests/mysync/architecture-tests/MySync.ArchitectureTests.csproj
           do
             dotnet test --project "$project" --configuration Release --no-build
@@ -71,6 +111,7 @@ jobs:
   # Windows' rename-aside swap is covered by ExecutableInstallerTests on the Windows runner.
   self-update:
     name: Self-update end to end (${{ matrix.rid }})
+    needs: site
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -82,6 +123,13 @@ jobs:
             rid: osx-arm64
     steps:
       - uses: actions/checkout@v5
+
+      # The site build from the `site` job: the CLI embeds it, and a Release build fails without it.
+      - name: Download the site build
+        uses: actions/download-artifact@v4
+        with:
+          name: mysync-site
+          path: dist/apps/mysync-site
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -95,10 +143,18 @@ jobs:
 
   azurite:
     name: Azurite suites
+    needs: site
     # Docker is only available on the Linux runners.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      # The site build from the `site` job: the CLI embeds it, and a Release build fails without it.
+      - name: Download the site build
+        uses: actions/download-artifact@v4
+        with:
+          name: mysync-site
+          path: dist/apps/mysync-site
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5

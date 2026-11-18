@@ -12,13 +12,32 @@
       "executor": "nx:run-commands",
       "options": {
         "command": "dotnet build tests/mysync/architecture-tests/MySync.ArchitectureTests.csproj -c Release"
-      }
+      },
+      "dependsOn": [
+        {
+          "projects": [
+            "mysync-site"
+          ],
+          "target": "build"
+        }
+      ]
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
         "command": "dotnet test --project tests/mysync/architecture-tests/MySync.ArchitectureTests.csproj -c Release"
-      }
+      },
+      "dependsOn": [
+        {
+          "projects": [
+            "mysync-site"
+          ],
+          "target": "build"
+        }
+      ]
     }
-  }
+  },
+  "implicitDependencies": [
+    "mysync"
+  ]
 }

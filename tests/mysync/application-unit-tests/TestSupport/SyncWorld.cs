@@ -97,6 +97,7 @@ internal sealed class Machine
         services.AddSingleton(_ => world.Options);
         services.AddSingleton<Abstractions.Updates.IReleaseSource>(new NoReleases());
         services.AddSingleton<Abstractions.Updates.IExecutableInstaller>(new NotInstalled());
+        services.AddSingleton<Abstractions.Publishing.ISiteAssetSource>(new InMemorySiteAssetSource());
         services.AddApplication();
         _services = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }

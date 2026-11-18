@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MySync.SiteAssets.UnitTests</RootNamespace>
+    <OutputType>exe</OutputType>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- A stand-in for a Debug build without the site, to test placeholder detection. -->
+    <EmbeddedResource Include="Placeholder\index.html" LogicalName="site/index.html" />
+    <EmbeddedResource Include="Placeholder\placeholder.txt" LogicalName="mysync-site-placeholder" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="xunit.v3.mtp-v2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\libs\mysync\site-assets\MySync.SiteAssets.csproj" />
+  </ItemGroup>
+
+</Project>

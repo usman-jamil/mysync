@@ -69,11 +69,48 @@ jobs:
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
           echo "mysync $version (prerelease: $prerelease)" >> "$GITHUB_STEP_SUMMARY"
 
+  # apps/mysync-site, checked and built once; every binary embeds this same build.
+  site:
+    name: Site
+    runs-on: ubuntu-latest
+    env:
+      NX_DAEMON: 'false'
+      NX_NO_CLOUD: 'true'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint, typecheck, test and build
+        run: npx nx run-many -t lint,typecheck,test,build -p mysync-site
+
+      - name: Upload the site build
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysync-site
+          path: dist/apps/mysync-site
+          if-no-files-found: error
+
   test:
     name: Test
+    needs: site
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      # The site build from the `site` job, embedded into the binary (a Release build fails without it).
+      - name: Download the site build
+        uses: actions/download-artifact@v4
+        with:
+          name: mysync-site
+          path: dist/apps/mysync-site
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -162,7 +199,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.rid }}
-    needs: [version, test, identity]
+    needs: [version, site, test, identity]
     # Every target is cross-published from Linux. A self-contained (non-AOT) publish does not
     # need a matching host, and building the Unix targets on a Unix host is what preserves the
     # executable bit inside the archives — a Windows runner would drop it.
@@ -187,6 +224,13 @@ jobs:
             archive: zip
     steps:
       - uses: actions/checkout@v5
+
+      # The site build from the `site` job, embedded into the binary (a Release build fails without it).
+      - name: Download the site build
+        uses: actions/download-artifact@v4
+        with:
+          name: mysync-site
+          path: dist/apps/mysync-site
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -218,8 +262,9 @@ jobs:
             -p:MySyncReleaseRepository="$RELEASE_REPOSITORY" \
             -p:MySyncReleasePublicKey="$RELEASE_PUBLIC_KEY"
 
-      # Proves the self-containment claim on stock images: the tagged version is reported, and
-      # Unicode normalization works inside the shipped binary (CLAUDE.md §8).
+      # Proves the self-containment claim on stock images: the tagged version is reported,
+      # Unicode normalization works inside the shipped binary (CLAUDE.md §8), and the real
+      # publication page is embedded (`debug site-assets` fails on the Debug placeholder).
       - name: Smoke test in a stock container
         if: matrix.rid == 'linux-x64' || matrix.rid == 'linux-musl-x64'
         env:
@@ -246,6 +291,7 @@ jobs:
               exit 1
             fi
             /opt/mysync/mysync self-check
+            /opt/mysync/mysync debug site-assets
           "
 
       - name: Package

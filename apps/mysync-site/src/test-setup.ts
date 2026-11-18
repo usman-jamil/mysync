@@ -1,5 +1,8 @@
 import { cleanup } from '@testing-library/react';
-import { afterEach } from 'vitest';
+import { afterEach, vi } from 'vitest';
+
+// jsdom doesn't implement scrolling; the virtualized list asks for it.
+window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
 
 afterEach(() => {
   cleanup();

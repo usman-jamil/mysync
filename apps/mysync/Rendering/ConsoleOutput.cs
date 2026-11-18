@@ -120,6 +120,10 @@ internal static class ConsoleOutput
     public static void Info(string message) =>
         Stderr.MarkupLine($"[dim]{Markup.Escape(message)}[/]");
 
+    /// <summary>Plain text on stdout, e.g. a listing a script reads.</summary>
+    public static void Line(string text) =>
+        AnsiConsole.MarkupLine(Markup.Escape(text));
+
     public static void Success(string message) =>
         AnsiConsole.MarkupLine($"[green]{Markup.Escape(message)}[/]");
 

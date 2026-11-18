@@ -14,27 +14,31 @@ public class LayerTests
 {
     [Fact]
     public void SharedKernel_Should_NotDependOnAnyMySyncProject() =>
-        ShouldNotDependOn(SharedKernelAssembly, DomainNamespace, ApplicationNamespace, InfrastructureNamespace, StorageNamespace, UpdatesNamespace, CliNamespace);
+        ShouldNotDependOn(SharedKernelAssembly, DomainNamespace, ApplicationNamespace, InfrastructureNamespace, StorageNamespace, UpdatesNamespace, SiteAssetsNamespace, CliNamespace);
 
     [Fact]
     public void Domain_Should_DependOnlyOnSharedKernel() =>
-        ShouldNotDependOn(DomainAssembly, ApplicationNamespace, InfrastructureNamespace, StorageNamespace, UpdatesNamespace, CliNamespace, AzurePackages, SpectreConsolePackage, ConsoleAppFrameworkPackage);
+        ShouldNotDependOn(DomainAssembly, ApplicationNamespace, InfrastructureNamespace, StorageNamespace, UpdatesNamespace, SiteAssetsNamespace, CliNamespace, AzurePackages, SpectreConsolePackage, ConsoleAppFrameworkPackage);
 
     [Fact]
     public void Application_Should_NotDependOnOuterLayersOrPresentationPackages() =>
-        ShouldNotDependOn(ApplicationAssembly, InfrastructureNamespace, StorageNamespace, UpdatesNamespace, CliNamespace, AzurePackages, SpectreConsolePackage, ConsoleAppFrameworkPackage);
+        ShouldNotDependOn(ApplicationAssembly, InfrastructureNamespace, StorageNamespace, UpdatesNamespace, SiteAssetsNamespace, CliNamespace, AzurePackages, SpectreConsolePackage, ConsoleAppFrameworkPackage);
 
     [Fact]
     public void Infrastructure_Should_NotDependOnStorageProvidersOrTheCli() =>
-        ShouldNotDependOn(InfrastructureAssembly, StorageNamespace, UpdatesNamespace, CliNamespace, AzurePackages, SpectreConsolePackage, ConsoleAppFrameworkPackage);
+        ShouldNotDependOn(InfrastructureAssembly, StorageNamespace, UpdatesNamespace, SiteAssetsNamespace, CliNamespace, AzurePackages, SpectreConsolePackage, ConsoleAppFrameworkPackage);
 
     [Fact]
     public void StorageProviders_Should_NotDependOnInfrastructureOrTheCli() =>
-        ShouldNotDependOn(StorageAzureAssembly, InfrastructureNamespace, UpdatesNamespace, CliNamespace, SpectreConsolePackage, ConsoleAppFrameworkPackage);
+        ShouldNotDependOn(StorageAzureAssembly, InfrastructureNamespace, UpdatesNamespace, SiteAssetsNamespace, CliNamespace, SpectreConsolePackage, ConsoleAppFrameworkPackage);
 
     [Fact]
     public void TheGitHubReleaseSource_Should_DependOnlyOnTheApplication() =>
-        ShouldNotDependOn(UpdatesGitHubAssembly, InfrastructureNamespace, StorageNamespace, CliNamespace, AzurePackages, SpectreConsolePackage, ConsoleAppFrameworkPackage);
+        ShouldNotDependOn(UpdatesGitHubAssembly, InfrastructureNamespace, StorageNamespace, SiteAssetsNamespace, CliNamespace, AzurePackages, SpectreConsolePackage, ConsoleAppFrameworkPackage);
+
+    [Fact]
+    public void TheSiteAssets_Should_DependOnlyOnTheApplication() =>
+        ShouldNotDependOn(SiteAssetsAssembly, InfrastructureNamespace, StorageNamespace, UpdatesNamespace, CliNamespace, AzurePackages, SpectreConsolePackage, ConsoleAppFrameworkPackage);
 
     [Fact]
     public void Cli_Should_NotReferenceAzureDirectly() =>

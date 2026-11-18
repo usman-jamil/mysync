@@ -21,6 +21,9 @@ repo="$(cd "$(dirname "$0")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# Release builds embed the publication page (MySync.SiteAssets) and fail without it.
+[ -f "$repo/dist/apps/mysync-site/index.html" ] || { echo "Build the site first: npx nx build mysync-site" >&2; exit 1; }
+
 archive_ext=tar.gz
 exe=mysync
 case "$rid" in win-*) archive_ext=zip; exe=mysync.exe ;; esac

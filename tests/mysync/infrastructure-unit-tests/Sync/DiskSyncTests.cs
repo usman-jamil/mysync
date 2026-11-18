@@ -184,6 +184,7 @@ public sealed class DiskSyncTests : IDisposable
         services.AddSingleton<IShareStore>(_store);
         services.AddSingleton<TimeProvider>(new InstantTimeProvider());
         services.AddSingleton<MySync.Application.Abstractions.Updates.IReleaseSource>(new NoReleases());
+        services.AddSingleton<MySync.Application.Abstractions.Publishing.ISiteAssetSource>(new InMemorySiteAssetSource());
         services.AddApplication();
         services.AddInfrastructure();
 

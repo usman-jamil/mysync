@@ -12,6 +12,7 @@ internal static class Assemblies
     public static readonly Assembly ApplicationAssembly = typeof(ICommand).Assembly;
     public static readonly Assembly InfrastructureAssembly = typeof(MySync.Infrastructure.DependencyInjection).Assembly;
     public static readonly Assembly UpdatesGitHubAssembly = typeof(MySync.Updates.GitHub.DependencyInjection).Assembly;
+    public static readonly Assembly SiteAssetsAssembly = typeof(MySync.SiteAssets.DependencyInjection).Assembly;
     public static readonly Assembly StorageAzureAssembly = typeof(MySync.Storage.Azure.AzureStorageOptions).Assembly;
     public static readonly Assembly CliAssembly = Assembly.Load("mysync"); // every CLI type is internal; the assembly is named after the executable
 
@@ -21,6 +22,7 @@ internal static class Assemblies
     public const string InfrastructureNamespace = "MySync.Infrastructure";
     public const string StorageNamespace = "MySync.Storage";
     public const string UpdatesNamespace = "MySync.Updates";
+    public const string SiteAssetsNamespace = "MySync.SiteAssets";
     public const string CliNamespace = "MySync.Cli";
 
     public const string AzurePackages = "Azure";

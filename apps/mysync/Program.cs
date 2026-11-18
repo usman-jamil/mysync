@@ -9,6 +9,7 @@ using MySync.Cli.Commands;
 using MySync.Cli.Hosting;
 using MySync.Cli.Rendering;
 using MySync.Infrastructure;
+using MySync.SiteAssets;
 using MySync.Storage.Azure;
 using Serilog;
 using Serilog.Core;
@@ -55,7 +56,8 @@ builder.Services.AddTransient<CommandRunner>();
 
 builder.Services
     .AddApplication()
-    .AddInfrastructure();
+    .AddInfrastructure()
+    .AddSiteAssets();
 
 // An unknown provider registers nothing here; it is reported as ConfigurationErrors.UnknownProvider
 // (exit 2) by the first command that needs storage, so --help and --version still work.
