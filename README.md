@@ -327,18 +327,84 @@ Download everything:
   irm https://teampublish.z13.web.core.windows.net/p/4fQ9xK2mT7bV1nR8sL3pZa/download.ps1 | iex
 ```
 
-**Set up once:** a storage account with static website hosting on, ideally a separate one used only for publishing:
+### Setting up publishing (once per team)
+
+Publishing needs a storage account with Azure's **static website** hosting turned on. Use a **separate account** just for publishing: its public address then names nothing about the account that holds your shares. The steps below use the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) (`az login` first); the [Azure portal](https://portal.azure.com) equivalents are in brackets.
+
+**1. Create the publishing account** (skip this if you already have one). It must be a general-purpose v2 account. [Portal: *Storage accounts* → *Create*, Performance *Standard*, Redundancy *LRS* is enough.]
+
+```bash
+az storage account create --name teampublish --resource-group my-rg --location westeurope \
+  --kind StorageV2 --sku Standard_LRS --min-tls-version TLS1_2
+```
+
+Account names are 3–24 lowercase letters and digits, unique across Azure.
+
+**2. Turn on static website hosting**, with exactly these document names; mysync checks them. [Portal: the account → *Data management* → *Static website* → *Enabled*, index document `index.html`, error document `404.html`.]
 
 ```bash
 az storage blob service-properties update --account-name teampublish \
   --static-website --index-document index.html --404-document 404.html
-az storage account show -n teampublish --query primaryEndpoints.web -o tsv    # → MYSYNC_PUBLISH_BASE_URL
+```
 
+This creates the `$web` container. Only what's in `$web` is served publicly. You don't need to allow anonymous blob access on the account, and mysync never changes these settings itself.
+
+**3. Get the website's address.** This is `MYSYNC_PUBLISH_BASE_URL`. [Portal: *Static website* → *Primary endpoint*.]
+
+```bash
+az storage account show --name teampublish --resource-group my-rg --query primaryEndpoints.web --output tsv
+# https://teampublish.z13.web.core.windows.net/
+```
+
+**4. Get the connection string.** This is `MYSYNC_PUBLISH_CONNECTION_STRING`. Use the one with the account key: mysync needs it to check the static website settings and to write the publication. [Portal: *Security + networking* → *Access keys* → *Connection string*.]
+
+```bash
+az storage account show-connection-string --name teampublish --resource-group my-rg --output tsv
+```
+
+The connection string is a secret, like `AZURE_STORAGE_CONNECTION_STRING`: anyone who has it can publish, change or remove every publication. Share it like the other one, never in a file you commit.
+
+**5. Set both variables** on each machine that publishes, next to `AZURE_STORAGE_CONNECTION_STRING`:
+
+```bash
+# macOS / Linux (e.g. in ~/.zshrc or ~/.bashrc)
 export MYSYNC_PUBLISH_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=teampublish;AccountKey=..."
 export MYSYNC_PUBLISH_BASE_URL="https://teampublish.z13.web.core.windows.net"
 ```
 
-The publishing variables can also name the same account as `AZURE_STORAGE_CONNECTION_STRING`, as long as its static website is on. Your shares stay private (only the `$web` container is public), but the public link then names that account, and `publish` says so.
+```powershell
+# Windows PowerShell, this session only
+$env:MYSYNC_PUBLISH_CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=teampublish;AccountKey=..."
+$env:MYSYNC_PUBLISH_BASE_URL = "https://teampublish.z13.web.core.windows.net"
+```
+
+**6. Try it** in a share's folder:
+
+```bash
+mysync publish --title "Test"      # prints the link; open it in a browser
+mysync publications                # lists it
+mysync unpublish <id>              # removes it
+```
+
+Files are copied **inside Azure**, from your share's account straight to the publishing account, when `AZURE_STORAGE_CONNECTION_STRING` contains that account's key (the usual case): mysync signs a short-lived, read-only link to each file. If it's a SAS connection string instead, files are copied through your machine, and `publish` says so.
+
+Only the machines that publish need these two variables, plus any machine that runs `mysync delete` on a share that has publications.
+
+**Using the share account instead:** the two publishing variables may name the same account as `AZURE_STORAGE_CONNECTION_STRING`, once static website hosting is on there (steps 2–3). Your shares stay private, since only `$web` is public, but every public link then names that account, and `publish` says so.
+
+**If something's wrong**, `publish` stops before uploading anything and says what to fix:
+
+| Message | What to do |
+| --- | --- |
+| `MYSYNC_PUBLISH_… is not set` (exit 2) | Set both variables (step 5). |
+| `MYSYNC_PUBLISH_BASE_URL is not valid` (exit 2) | Use the full `https://` address from step 3, with no `?` or `#` part. |
+| `Static website hosting is off` / `serves '…' as its index document` (exit 2) | Run step 2; the message shows the exact command for your account. |
+| `can't read the service properties` (exit 8) | The connection string has no account key (e.g. it's a SAS). Use the one from step 4. |
+| `The publishing account rejected the credentials` (exit 8) | The key in `MYSYNC_PUBLISH_CONNECTION_STRING` is wrong or was rotated; copy it again (step 4). |
+| Published, but exit code 10 | The files are up, but the page couldn't be opened from the internet. `MYSYNC_PUBLISH_BASE_URL` is probably not this account's static website address; check step 3. |
+| `built without its publication page` | This mysync is a development build. Install a release (see [Install](#install)). |
+
+### Using it
 
 | Command | |
 | --- | --- |
@@ -346,7 +412,7 @@ The publishing variables can also name the same account as `AZURE_STORAGE_CONNEC
 | `mysync publications` | The share's publications: ID, status, link, revision, when, files and size. |
 | `mysync unpublish <id>` | Remove a publication. Its link stops working first, then its files are removed. |
 
-- **A snapshot, and a copy.** The files are copied inside Azure (they never pass through your machine when the connection string has the account key). Later syncs, `gc` or conflict resolution don't change a publication; publish again for a newer one. If this folder has changes that aren't synced, `publish` says so: it publishes the last synced state.
+- **A snapshot, and a copy.** The files are copied inside Azure (see above). Later syncs, `gc` or conflict resolution don't change a publication; publish again for a newer one. If this folder has changes that aren't synced, `publish` says so: it publishes the last synced state.
 - **The link is the secret.** Its 22-character ID is random and never derived from the share ID. Nothing public leads back to your share. Search engines are asked to stay away (`robots.txt`, `noindex`), but anyone who has the link can open it, so treat it like the files themselves.
 - **Safe to open.** Web pages, SVG, XML and scripts in a publication always download instead of opening, so a published file can't run code in the browser. Text, Markdown, CSV, JSON, PDF and images open in a new tab.
 - **Download everything:** the page and the output show one command for macOS/Linux and one for Windows. Run it in an empty folder: it downloads every file and checks each SHA-256 against `SHA256SUMS.txt`, stopping at the first mismatch.
