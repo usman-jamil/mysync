@@ -34,19 +34,22 @@ namespace MySync.Application.Shares.Delete;
 /// <item>If this folder is that share: remove <c>.mysynctool</c> and <c>.mysynctool.log</c>. Files stay.</item>
 /// </list>
 /// A share already marked deleted is swept again, so re-running finishes an interrupted delete.
+/// Afterwards every name of the share is freed, however it was referred to. A name whose share was
+/// never finished (no manifest) is deleted the same way, without a marker: there's nothing to mark.
 /// </remarks>
-/// <param name="ShareId">As typed; <c>null</c> means this folder's share.</param>
-public sealed record DeleteShareCommand(string? ShareId = null, int? Parallelism = null) : ICommand<DeleteShareResponse>;
+/// <param name="Share">Its name or ID; <c>null</c> means this folder's share.</param>
+public sealed record DeleteShareCommand(ShareReference? Share = null, int? Parallelism = null) : ICommand<DeleteShareResponse>;
 
 /// <param name="WasAlreadyDeleted">The marker was there already: this run finished an earlier delete.</param>
 /// <param name="HistoryRevisionsSwept">History manifests up to this revision were removed (missing ones count as removed).</param>
 /// <param name="LocalStateRemoved">This folder was the share, and its <c>.mysynctool</c> and log are gone.</param>
 /// <param name="RecoverableCopies">Deleted blobs the provider can still restore, until its retention ends; -1 if it couldn't say.</param>
+/// <param name="MarkerRevision">The deleted marker's revision; <c>null</c> for a share that was never finished (<see cref="WasIncomplete"/>).</param>
 /// <param name="PublicationsRemoved">Publications taken down first.</param>
 public sealed record DeleteShareResponse(
     ShareId ShareId,
-    Revision MarkerRevision,
-    ShareDeletion Deletion,
+    Revision? MarkerRevision,
+    ShareDeletion? Deletion,
     bool WasAlreadyDeleted,
     int ObjectsDeleted,
     long BytesDeleted,
@@ -56,17 +59,18 @@ public sealed record DeleteShareResponse(
     ImmutableArray<string> Warnings)
 {
     public int PublicationsRemoved { get; init; }
+
+    /// <summary>The names freed (every alias that pointed at the share).</summary>
+    public IReadOnlyList<ShareName> NamesFreed { get; init; } = [];
+
+    /// <summary>The share was never finished: no manifest, so no marker; its leftovers and name were removed.</summary>
+    public bool WasIncomplete { get; init; }
 }
 
 internal sealed class DeleteShareCommandValidator : AbstractValidator<DeleteShareCommand>
 {
     public DeleteShareCommandValidator()
     {
-        RuleFor(command => command.ShareId)
-            .Must(id => id is null || Domain.Shares.ShareId.TryParse(id, out _))
-            .WithErrorCode(ShareErrors.InvalidId().Code)
-            .WithMessage(ShareErrors.InvalidId().Description);
-
         RuleFor(command => command.Parallelism).ValidParallelism();
     }
 }
@@ -85,6 +89,8 @@ internal sealed class DeleteShareCommandHandler(
     Publishing.PublicationRegistryUpdater publications,
     Publishing.PublicationRemover remover,
     Abstractions.Publishing.IPublishTarget publishTarget,
+    ShareResolver resolver,
+    ShareNames names,
     ILogger<DeleteShareCommandHandler> logger)
     : ICommandHandler<DeleteShareCommand, DeleteShareResponse>
 {
@@ -92,7 +98,8 @@ internal sealed class DeleteShareCommandHandler(
     {
         // Which share, and is it this folder's?
         ShareState? here = null;
-        if (command.ShareId is null)
+        ShareName? typedName = null;
+        if (command.Share is null)
         {
             Result<ShareState?> loaded = await stateStore.LoadAsync(cancellationToken);
             if (loaded.IsFailure)
@@ -113,7 +120,23 @@ internal sealed class DeleteShareCommandHandler(
             here = loaded.IsSuccess ? loaded.Value : null;
         }
 
-        ShareId shareId = command.ShareId is null ? here!.ShareId : ParseValidated(command.ShareId);
+        ShareId shareId;
+        if (command.Share is null)
+        {
+            shareId = here!.ShareId;
+        }
+        else
+        {
+            Result<ResolvedShare> resolved = await resolver.ResolveAsync(command.Share, cancellationToken);
+            if (resolved.IsFailure)
+            {
+                return Result.Failure<DeleteShareResponse>(resolved.Error);
+            }
+
+            shareId = resolved.Value.ShareId;
+            typedName = resolved.Value.Name;
+        }
+
         bool thisFolder = here is not null && here.ShareId == shareId;
 
         Result<StorageLocation> location = store.GetLocation();
@@ -142,7 +165,7 @@ internal sealed class DeleteShareCommandHandler(
                 held = locked.Value;
             }
 
-            Result<DeleteShareResponse> deleted = await DeleteAsync(shareId, thisFolder, command.Parallelism ?? options.MaxParallelism, cancellationToken);
+            Result<DeleteShareResponse> deleted = await DeleteAsync(shareId, typedName, thisFolder, command.Parallelism ?? options.MaxParallelism, cancellationToken);
             if (held is not null)
             {
                 await held.DisposeAsync();
@@ -171,11 +194,21 @@ internal sealed class DeleteShareCommandHandler(
         return result;
     }
 
-    private static ShareId ParseValidated(string id) =>
-        Domain.Shares.ShareId.TryParse(id, out ShareId? parsed) ? parsed : throw new ArgumentException("Not validated.", nameof(id));
-
-    private async Task<Result<DeleteShareResponse>> DeleteAsync(ShareId shareId, bool thisFolder, int parallelism, CancellationToken cancellationToken)
+    private async Task<Result<DeleteShareResponse>> DeleteAsync(ShareId shareId, ShareName? typedName, bool thisFolder, int parallelism, CancellationToken cancellationToken)
     {
+        // A name whose share was never finished: no manifest, so nothing to mark. Sweep what the
+        // interrupted create left, then free the name.
+        Result<ManifestSnapshot?> head = await store.GetManifestAsync(shareId, cancellationToken);
+        if (head.IsFailure)
+        {
+            return Result.Failure<DeleteShareResponse>(head.Error);
+        }
+
+        if (head.Value is null)
+        {
+            return await DeleteIncompleteAsync(shareId, typedName, thisFolder, parallelism, cancellationToken);
+        }
+
         // 0. Publications first, while their record still exists.
         Result<int> unpublished = await UnpublishAllAsync(shareId, cancellationToken);
         if (unpublished.IsFailure)
@@ -226,6 +259,13 @@ internal sealed class DeleteShareCommandHandler(
             return Result.Failure<DeleteShareResponse>(records.Error);
         }
 
+        // The names last: also when this run only finishes an earlier delete.
+        Result<IReadOnlyList<ShareName>> freed = await names.FreeAsync(shareId, keep: null, cancellationToken);
+        if (freed.IsFailure)
+        {
+            return Result.Failure<DeleteShareResponse>(freed.Error);
+        }
+
         // 3. What the provider can still bring back.
         Result<int> recoverable = await store.CountRecoverableCopiesAsync(shareId, cancellationToken);
         if (recoverable.IsFailure)
@@ -253,6 +293,80 @@ internal sealed class DeleteShareCommandHandler(
             [.. warnings])
         {
             PublicationsRemoved = unpublished.Value,
+            NamesFreed = freed.Value,
+        };
+    }
+
+    private async Task<Result<DeleteShareResponse>> DeleteIncompleteAsync(
+        ShareId shareId, ShareName? typedName, bool thisFolder, int parallelism, CancellationToken cancellationToken)
+    {
+        Result<IReadOnlyList<ShareName>> known = await names.OfAsync(shareId, cancellationToken);
+        if (known.IsFailure)
+        {
+            return Result.Failure<DeleteShareResponse>(known.Error);
+        }
+
+        // No manifest and no name: there's no such share.
+        if (typedName is null && known.Value.Count == 0)
+        {
+            return Result.Failure<DeleteShareResponse>(ShareErrors.NotFound(shareId));
+        }
+
+        List<StoredObjectInfo> objects = [];
+        await foreach (Result<StoredObjectInfo> item in store.ListObjectsAsync(shareId, cancellationToken))
+        {
+            if (item.IsFailure)
+            {
+                return Result.Failure<DeleteShareResponse>(item.Error);
+            }
+
+            objects.Add(item.Value);
+        }
+
+        Result swept = await ForEachAsync(objects, item => store.DeleteObjectAsync(shareId, item.Hash, cancellationToken), parallelism, cancellationToken);
+        if (swept.IsFailure)
+        {
+            return Result.Failure<DeleteShareResponse>(swept.Error);
+        }
+
+        List<Revision> revisions = [];
+        await foreach (Result<Manifest> history in store.ListManifestHistoryAsync(shareId, cancellationToken))
+        {
+            if (history.IsSuccess)
+            {
+                revisions.Add(history.Value.Revision);
+            }
+        }
+
+        Result historyDeleted = await ForEachAsync(revisions, revision => store.DeleteManifestHistoryAsync(shareId, revision, cancellationToken), parallelism, cancellationToken);
+        if (historyDeleted.IsFailure)
+        {
+            return Result.Failure<DeleteShareResponse>(historyDeleted.Error);
+        }
+
+        Result records = await store.DeletePublicationsAsync(shareId, cancellationToken);
+        if (records.IsFailure)
+        {
+            return Result.Failure<DeleteShareResponse>(records.Error);
+        }
+
+        Result<IReadOnlyList<ShareName>> freed = await names.FreeAsync(shareId, keep: null, cancellationToken);
+        if (freed.IsFailure)
+        {
+            return Result.Failure<DeleteShareResponse>(freed.Error);
+        }
+
+        List<string> warnings = [];
+        if (thisFolder)
+        {
+            await RemoveLocalStateAsync(warnings, cancellationToken);
+        }
+
+        return new DeleteShareResponse(
+            shareId, null, null, WasAlreadyDeleted: false, objects.Count, objects.Sum(item => item.Size), revisions.Count, thisFolder, RecoverableCopies: 0, [.. warnings])
+        {
+            NamesFreed = freed.Value,
+            WasIncomplete = true,
         };
     }
 

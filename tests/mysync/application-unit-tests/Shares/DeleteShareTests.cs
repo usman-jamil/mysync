@@ -27,7 +27,7 @@ public class DeleteShareTests
         deleted.WasAlreadyDeleted.ShouldBeFalse();
         deleted.MarkerRevision.ShouldBe(Rev(3));
         deleted.ObjectsDeleted.ShouldBe(3);
-        deleted.Deletion.DeletedBy.ShouldBe("usman@DEV-LAPTOP");
+        deleted.Deletion!.DeletedBy.ShouldBe("usman@DEV-LAPTOP");
         world.Store.BlobNames.ShouldBe([ShareLayout.For(shareId).Manifest]);
         Manifest head = await world.HeadAsync(shareId);
         head.IsDeleted.ShouldBeTrue();
@@ -202,7 +202,7 @@ public class DeleteShareTests
         (await a.DeleteAsync()).ShouldFail().ShouldBe(ShareErrors.NotAShare());
         var missing = ShareId.New();
         (await a.DeleteAsync(missing.ToString())).ShouldFail().ShouldBe(ShareErrors.NotFound(missing));
-        (await a.DeleteAsync("not-a-uuid")).ShouldFail().ShouldBeOfType<ValidationError>().Errors.Single().Code.ShouldBe("Shares.InvalidId");
+        (await a.DeleteAsync("not-a-uuid")).ShouldFail().Code.ShouldBe("Shares.NameNotFound"); // not an ID, so a name nobody holds
     }
 
     [Fact]

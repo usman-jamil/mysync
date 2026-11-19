@@ -30,7 +30,7 @@ namespace MySync.Application.Publishing.Publish;
 /// </summary>
 /// <param name="Revision">A revision from the share's history; <c>null</c> for HEAD.</param>
 /// <param name="Title">Shown on the page; <c>null</c> for this folder's name.</param>
-public sealed record PublishShareCommand(string? ShareId = null, long? Revision = null, string? Title = null, int? Parallelism = null)
+public sealed record PublishShareCommand(ShareReference? Share = null, long? Revision = null, string? Title = null, int? Parallelism = null)
     : ICommand<PublishReport>;
 
 /// <summary>
@@ -62,10 +62,6 @@ internal sealed class PublishShareCommandValidator : AbstractValidator<PublishSh
 {
     public PublishShareCommandValidator()
     {
-        RuleFor(command => command.ShareId)
-            .Must(id => id is null || Domain.Shares.ShareId.TryParse(id, out _))
-            .WithErrorCode(ShareErrors.InvalidId().Code)
-            .WithMessage(ShareErrors.InvalidId().Description);
 
         RuleFor(command => command.Revision)
             .Must(revision => revision is null or >= 1)
@@ -112,7 +108,7 @@ internal sealed class PublishShareCommandHandler(
         List<string> warnings = [];
 
         // Preflight, before anything is written anywhere.
-        Result<ResolvedShare> resolved = await share.ResolveAsync(command.ShareId, cancellationToken);
+        Result<PublishingTarget> resolved = await share.ResolveAsync(command.Share, cancellationToken);
         if (resolved.IsFailure)
         {
             return Result.Failure<PublishReport>(resolved.Error);

@@ -29,6 +29,7 @@ public sealed class DiskSyncTests : IDisposable
 {
     private static readonly DateTime OldMtime = new(2026, 11, 1, 12, 0, 0, DateTimeKind.Utc);
 
+    private readonly InMemoryAliasStore _aliases = new();
     private readonly InMemoryShareStore _store = new();
     private readonly TempShareFolder _a = new();
     private readonly TempShareFolder _b = new();
@@ -46,8 +47,8 @@ public sealed class DiskSyncTests : IDisposable
             .WriteFile(".DS_Store", "finder", OldMtime)
             .CreateDirectory("logs");
 
-        CreateShareResponse created = (await Send<CreateShareCommand, CreateShareResponse>(_a, new CreateShareCommand())).Value;
-        SyncReport cloned = Ok(await Send<CloneShareCommand, SyncReport>(_b, new CloneShareCommand(created.ShareId.ToString())));
+        CreateShareResponse created = (await Send<CreateShareCommand, CreateShareResponse>(_a, new CreateShareCommand(MySync.Domain.Shares.ShareName.Create("disk-" + Guid.NewGuid().ToString("N")[..12]).Value))).Value;
+        SyncReport cloned = Ok(await Send<CloneShareCommand, SyncReport>(_b, new CloneShareCommand(MySync.Domain.Shares.ShareReference.For(created.ShareId))));
 
         cloned.Downloaded.Files.ShouldBe(4);
         _b.Files().ShouldBe(new Dictionary<string, string>
@@ -167,8 +168,8 @@ public sealed class DiskSyncTests : IDisposable
             _a.WriteFile(path, content, OldMtime);
         }
 
-        ShareId shareId = (await Send<CreateShareCommand, CreateShareResponse>(_a, new CreateShareCommand())).Value.ShareId;
-        Ok(await Send<CloneShareCommand, SyncReport>(_b, new CloneShareCommand(shareId.ToString())));
+        ShareId shareId = (await Send<CreateShareCommand, CreateShareResponse>(_a, new CreateShareCommand(MySync.Domain.Shares.ShareName.Create("disk-" + Guid.NewGuid().ToString("N")[..12]).Value))).Value.ShareId;
+        Ok(await Send<CloneShareCommand, SyncReport>(_b, new CloneShareCommand(MySync.Domain.Shares.ShareReference.For(shareId))));
         return shareId;
     }
 
@@ -182,6 +183,7 @@ public sealed class DiskSyncTests : IDisposable
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton(new ShareRoot(folder.Path));
         services.AddSingleton<IShareStore>(_store);
+        services.AddSingleton<MySync.Application.Abstractions.Storage.IAliasStore>(_aliases);
         services.AddSingleton<TimeProvider>(new InstantTimeProvider());
         services.AddSingleton<MySync.Application.Abstractions.Updates.IReleaseSource>(new NoReleases());
         services.AddSingleton<MySync.Application.Abstractions.Publishing.ISiteAssetSource>(new InMemorySiteAssetSource());

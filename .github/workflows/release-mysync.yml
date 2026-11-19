@@ -451,13 +451,14 @@ jobs:
           export AZURE_STORAGE_CONNECTION_STRING="<connection string>"   # never typed into a prompt
           export MYSYNC_CONTAINER=mysync                                  # optional
 
-          cd ~/projects/report && mysync sync          # creates a share and prints: mysync sync <id>
-          cd ~/elsewhere/report && mysync sync <id>    # on another machine, in an empty folder: clone it
-          mysync sync                                  # from then on, in either folder: two-way sync
+          cd ~/projects/report && mysync sync --name q3-report   # creates a share called q3-report
+          cd ~/elsewhere/report && mysync sync q3-report         # on another machine, in an empty folder: clone it
+          mysync sync                                            # from then on, in either folder: two-way sync
           ```
 
           `mysync status` shows what a sync would do, `mysync conflicts` lists what both sides changed,
           `mysync resolve <path> --keep local|remote` decides one, `mysync info` describes the share,
+          `mysync shares` lists every named share, `mysync rename <name>` renames this one,
           `mysync gc` removes stored files no recent revision uses, and `mysync delete --yes` removes a share
           for every machine (local files stay). Every command takes `--json`.
           NOTES

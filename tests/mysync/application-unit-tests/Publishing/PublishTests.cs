@@ -140,17 +140,17 @@ public class PublishTests
         Machine stranger = _world.Machine("stranger");
 
         (await stranger.PublishAsync()).ShouldFail().Code.ShouldBe("Shares.NotAShare");
-        (await stranger.PublishAsync(new PublishShareCommand(ShareId: Domain.Shares.ShareId.New().ToString()))).ShouldFail().Code.ShouldBe("Shares.NotFound");
+        (await stranger.PublishAsync(new PublishShareCommand(Share: Domain.Shares.ShareReference.For(Domain.Shares.ShareId.New())))).ShouldFail().Code.ShouldBe("Shares.NotFound");
     }
 
     [Fact]
     public async Task Publish_Should_RefuseADeletedShare()
     {
         Machine machine = await SharedAsync();
-        string id = machine.ShareId.ToString();
+        Domain.Shares.ShareId id = machine.ShareId;
         (await machine.DeleteAsync()).ShouldSucceed();
 
-        (await _world.Machine("other").PublishAsync(new PublishShareCommand(ShareId: id))).ShouldFail().Code.ShouldBe("Shares.Deleted");
+        (await _world.Machine("other").PublishAsync(new PublishShareCommand(Share: Domain.Shares.ShareReference.For(id)))).ShouldFail().Code.ShouldBe("Shares.Deleted");
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public class PublishTests
     {
         Machine machine = await SharedAsync();
 
-        PublishReport report = (await _world.Machine("other").PublishAsync(new PublishShareCommand(ShareId: machine.ShareId.ToString()))).ShouldSucceed();
+        PublishReport report = (await _world.Machine("other").PublishAsync(new PublishShareCommand(Share: Domain.Shares.ShareReference.For(machine.ShareId)))).ShouldSucceed();
 
         report.Title.ShouldBe("Shared files");
         report.Files.ShouldBe(3);
@@ -285,7 +285,7 @@ public class PublishTests
             {
                 raced = true;
                 _world.Store.BeforePutPublications = null;
-                (await other.PublishAsync(new PublishShareCommand(ShareId: shareId.ToString(), Title: "theirs"))).ShouldSucceed();
+                (await other.PublishAsync(new PublishShareCommand(Share: Domain.Shares.ShareReference.For(shareId), Title: "theirs"))).ShouldSucceed();
             }
         };
 

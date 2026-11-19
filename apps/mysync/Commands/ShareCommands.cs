@@ -1,14 +1,20 @@
 using ConsoleAppFramework;
 using MySync.Application.Shares.Delete;
 using MySync.Application.Shares.GetInfo;
+using MySync.Application.Shares.List;
+using MySync.Application.Shares.Rename;
+using MySync.Domain.Shares;
 using MySync.Cli.Rendering;
 using SharedKernel;
 
 namespace MySync.Cli.Commands;
 
-/// <summary><c>mysync info</c> and <c>mysync delete</c> (CLAUDE.md §10).</summary>
+/// <summary><c>mysync info</c>, <c>delete</c>, <c>shares</c> and <c>rename</c> (CLAUDE.md §10).</summary>
 internal sealed class ShareCommands(CommandRunner runner)
 {
+    private static readonly Error RenameNeedsName = Error.Validation(
+        "Cli.RenameNeedsName", "Give the new name: mysync rename <name> (3-40 letters a-z, digits and '-').");
+
     private static readonly Error DeleteNeedsYes = Error.Validation(
         "Cli.DeleteNeedsYes",
         "Deleting a share removes every file stored in it, for every machine that syncs it, and can't be undone. Run again with --yes to delete it.");
@@ -16,7 +22,7 @@ internal sealed class ShareCommands(CommandRunner runner)
     /// <summary>
     /// Delete a share for good: every stored file and its history, for every machine. Local files are kept.
     /// </summary>
-    /// <param name="shareId">The share to delete (default: this folder's).</param>
+    /// <param name="shareId">The share to delete, by name or ID (default: this folder's).</param>
     /// <param name="yes">Required: confirms the deletion. mysync never asks.</param>
     /// <param name="cancellationToken">Ctrl+C.</param>
     [Command("delete")]
@@ -34,8 +40,14 @@ internal sealed class ShareCommands(CommandRunner runner)
                 return runner.Fail(settings.Error);
             }
 
+            Result<Domain.Shares.ShareReference?> reference = CommandRunner.ParseShare(shareId);
+            if (reference.IsFailure)
+            {
+                return runner.Fail(reference.Error);
+            }
+
             Result<DeleteShareResponse> deleted = await runner.SendAsync<DeleteShareCommand, DeleteShareResponse>(
-                new DeleteShareCommand(shareId, runner.Options.Parallel), cancellationToken);
+                new DeleteShareCommand(reference.Value, runner.Options.Parallel), cancellationToken);
             if (deleted.IsFailure)
             {
                 return runner.Fail(deleted.Error);
@@ -50,10 +62,11 @@ internal sealed class ShareCommands(CommandRunner runner)
             return ExitCodes.Success;
         }, cancellationToken);
 
-    /// <summary>Show this folder's share: ID, storage, revision here and in the share, files, open conflicts.</summary>
+    /// <summary>Show a share: its names, ID, storage, revision here and in the share, files, open conflicts.</summary>
+    /// <param name="share">A share's name or ID (default: this folder's).</param>
     /// <param name="cancellationToken">Ctrl+C.</param>
     [Command("info")]
-    public Task<int> Info(CancellationToken cancellationToken = default) =>
+    public Task<int> Info([Argument] string? share = null, CancellationToken cancellationToken = default) =>
         runner.RunAsync(async () =>
         {
             Result settings = runner.CheckStorage();
@@ -62,7 +75,13 @@ internal sealed class ShareCommands(CommandRunner runner)
                 return runner.Fail(settings.Error);
             }
 
-            Result<ShareInfoResponse> info = await runner.QueryAsync<GetShareInfoQuery, ShareInfoResponse>(new GetShareInfoQuery(), cancellationToken);
+            Result<ShareReference?> reference = CommandRunner.ParseShare(share);
+            if (reference.IsFailure)
+            {
+                return runner.Fail(reference.Error);
+            }
+
+            Result<ShareInfoResponse> info = await runner.QueryAsync<GetShareInfoQuery, ShareInfoResponse>(new GetShareInfoQuery(reference.Value), cancellationToken);
             if (info.IsFailure)
             {
                 return runner.Fail(info.Error);
@@ -74,6 +93,77 @@ internal sealed class ShareCommands(CommandRunner runner)
             }
 
             ShareInfoView.Render(info.Value);
+            return ExitCodes.Success;
+        }, cancellationToken);
+
+    /// <summary>List every named share: name and share ID.</summary>
+    /// <param name="cancellationToken">Ctrl+C.</param>
+    [Command("shares")]
+    public Task<int> Shares(CancellationToken cancellationToken = default) =>
+        runner.RunAsync(async () =>
+        {
+            Result settings = runner.CheckStorage();
+            if (settings.IsFailure)
+            {
+                return runner.Fail(settings.Error);
+            }
+
+            Result<ShareListResponse> listed = await runner.QueryAsync<ListSharesQuery, ShareListResponse>(new ListSharesQuery(), cancellationToken);
+            if (listed.IsFailure)
+            {
+                return runner.Fail(listed.Error);
+            }
+
+            foreach (string warning in listed.Value.Warnings)
+            {
+                ConsoleOutput.Warn(warning);
+            }
+
+            if (runner.Options.Json)
+            {
+                return JsonOutput.Write(listed.Value, ExitCodes.Success);
+            }
+
+            ShareInfoView.Render(listed.Value);
+            return ExitCodes.Success;
+        }, cancellationToken);
+
+    /// <summary>Give this folder's share a new name (or a first name, for a share from an older mysync).</summary>
+    /// <param name="name">The new name: 3-40 letters a-z, digits and '-'.</param>
+    /// <param name="cancellationToken">Ctrl+C.</param>
+    [Command("rename")]
+    public Task<int> Rename([Argument] string? name = null, CancellationToken cancellationToken = default) =>
+        runner.RunAsync(async () =>
+        {
+            if (name is null)
+            {
+                return runner.Fail(RenameNeedsName);
+            }
+
+            Result settings = runner.CheckStorage();
+            if (settings.IsFailure)
+            {
+                return runner.Fail(settings.Error);
+            }
+
+            Result<ShareName> newName = ShareName.Create(name);
+            if (newName.IsFailure)
+            {
+                return runner.Fail(newName.Error);
+            }
+
+            Result<RenameShareResponse> renamed = await runner.SendAsync<RenameShareCommand, RenameShareResponse>(new RenameShareCommand(newName.Value), cancellationToken);
+            if (renamed.IsFailure)
+            {
+                return runner.Fail(renamed.Error);
+            }
+
+            if (runner.Options.Json)
+            {
+                return JsonOutput.Write(renamed.Value, ExitCodes.Success);
+            }
+
+            ShareInfoView.Render(renamed.Value);
             return ExitCodes.Success;
         }, cancellationToken);
 }

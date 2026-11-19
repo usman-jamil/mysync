@@ -43,6 +43,8 @@ public static class DependencyInjection
         services.AddScoped<LocalApplier>();
         services.AddScoped<SyncPipeline>();
         services.AddScoped<ShareFolder>();
+        services.AddScoped<ShareResolver>();
+        services.AddScoped<ShareNames>();
         services.AddScoped<Publishing.PublishingShare>();
         services.AddScoped<Publishing.PublicationRegistryUpdater>();
         services.AddScoped<Publishing.PublicationRemover>();

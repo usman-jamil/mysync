@@ -37,7 +37,11 @@ public sealed class CliTests : IDisposable
     [InlineData("snyc")]
     [InlineData("sync", "--no-such-option")]
     [InlineData("sync", "--parallel", "0")]
-    [InlineData("sync", "not-a-uuid")]
+    [InlineData("sync", "Not A Share!")]
+    [InlineData("sync", "next-wave", "--name", "other-name")]
+    [InlineData("sync", "--name", "Bad Name!")]
+    [InlineData("rename")]
+    [InlineData("info", "{" + "0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10" + "}")]
     public async Task UsageErrors_Should_ExitTwo_WithTheMessageOnStderr(params string[] arguments)
     {
         CliResult result = await RunAsync(_a, arguments);
@@ -60,8 +64,8 @@ public sealed class CliTests : IDisposable
         CliResult pulled = await RunAsync(_b, "sync");
 
         created.ExitCode.ShouldBe(0, created.ToString());
-        created.StdOut.ShouldContain($"Created share {shareId} (2 files, 5 B)");
-        created.StdOut.ShouldContain($"mysync sync {shareId}");
+        created.StdOut.ShouldContain($"({shareId}): 2 files, 5 B");
+        created.StdOut.ShouldContain("Share it with:  mysync sync cli-"); // by name; this test clones by ID
         cloned.ExitCode.ShouldBe(0, cloned.ToString());
         cloned.StdOut.ShouldContain($"Cloned share {shareId}");
         synced.ExitCode.ShouldBe(0, synced.ToString());
@@ -278,7 +282,7 @@ public sealed class CliTests : IDisposable
         CliResult confirmed = await RunAsync(_a, "sync", "--yes");
 
         confirmed.ExitCode.ShouldBe(0, confirmed.ToString());
-        confirmed.StdOut.ShouldContain($"({SyncThreshold + 1} files");
+        confirmed.StdOut.ShouldContain($"): {SyncThreshold + 1} files");
     }
 
     [Fact]
@@ -598,8 +602,143 @@ public sealed class CliTests : IDisposable
     private Task<CliResult> RunAsync(TempShareFolder folder, params string[] arguments) =>
         RunAsync(folder, new Dictionary<string, string?>(), arguments);
 
+    [Fact]
+    public async Task Names_Should_CarryAShareFromCreateToCloneRenameAndDelete_AndThenBeFreeAgain()
+    {
+        _a.WriteFile("docs/readme.md", "# hi").WriteFile("notes.txt", "n");
+        using TempShareFolder c = new();
+
+        CliResult created = await RunAsync(_a, "sync", "--name", "next-wave");
+        string shareId = ShareIdOf(_a);
+        created.ExitCode.ShouldBe(0, created.ToString());
+        created.StdOut.ShouldContain($"Created share next-wave ({shareId}): 2 files,");
+        created.StdOut.ShouldContain("Share it with:  mysync sync next-wave");
+
+        CliResult listed = await RunAsync(_b, "shares");
+        listed.ExitCode.ShouldBe(0, listed.ToString());
+        listed.StdOut.ShouldContain("NAME");
+        listed.StdOut.ShouldContain("SHARE ID");
+        listed.StdOut.ShouldMatch($"next-wave +{shareId}");
+
+        CliResult json = await RunAsync(_b, "shares", "--json");
+        using (var document = JsonDocument.Parse(json.StdOut))
+        {
+            JsonElement share = document.RootElement.GetProperty("shares").EnumerateArray().Single();
+            share.GetProperty("name").GetString().ShouldBe("next-wave");
+            share.GetProperty("shareId").GetString().ShouldBe(shareId);
+            share.TryGetProperty("createdUtc", out _).ShouldBeTrue();
+            share.TryGetProperty("createdBy", out _).ShouldBeTrue();
+            document.RootElement.GetProperty("warnings").GetArrayLength().ShouldBe(0);
+            document.RootElement.GetProperty("exitCode").GetInt32().ShouldBe(0);
+        }
+
+        CliResult cloned = await RunAsync(_b, "sync", "next-wave");
+        cloned.ExitCode.ShouldBe(0, cloned.ToString());
+        cloned.StdOut.ShouldContain($"Cloned share next-wave ({shareId})");
+        _b.ReadText("docs/readme.md").ShouldBe("# hi");
+
+        CliResult info = await RunAsync(c, "info", "next-wave");
+        info.ExitCode.ShouldBe(0, info.ToString());
+        info.StdOut.ShouldContain("next-wave");
+        info.StdOut.ShouldContain(shareId);
+
+        CliResult renamed = await RunAsync(_a, "rename", "renamed-wave");
+        renamed.ExitCode.ShouldBe(0, renamed.ToString());
+        (await RunAsync(c, "sync", "next-wave")).ExitCode.ShouldBe(8);
+        CliResult byNewName = await RunAsync(c, "sync", "renamed-wave");
+        byNewName.ExitCode.ShouldBe(0, byNewName.ToString());
+
+        CliResult deleted = await RunAsync(c, "delete", "renamed-wave", "--yes");
+        deleted.ExitCode.ShouldBe(0, deleted.ToString());
+        deleted.StdOut.ShouldContain("Freed the name renamed-wave");
+        (await RunAsync(_b, "shares")).StdOut.ShouldContain("No named shares yet. Name a share with: mysync rename <name>");
+
+        using TempShareFolder again = new();
+        again.WriteFile("new.txt", "new");
+        (await RunAsync(again, "sync", "--name", "next-wave")).ExitCode.ShouldBe(0);
+        (await RunAsync(again, "sync", "--name", "renamed-wave")).StdErr.ShouldContain("--name is ignored");
+    }
+
+    [Fact]
+    public async Task ANewShare_Should_NeedAName_AndSuggestOne_UploadingNothingWithout()
+    {
+        using TempShareFolder parent = new();
+        string folder = Path.Combine(parent.Path, "Q3 Reports");
+        Directory.CreateDirectory(folder);
+        await File.WriteAllTextAsync(Path.Combine(folder, "a.txt"), "a", TestContext.Current.CancellationToken);
+
+        CliResult result = await CliProcess.RunAsync(folder, Environment(), "sync");
+
+        result.ExitCode.ShouldBe(2, result.ToString());
+        result.StdErr.ShouldContain("A new share needs a name: mysync sync --name q3-reports");
+        File.Exists(Path.Combine(folder, StateFileNames.State)).ShouldBeFalse();
+        (await RunAsync(_b, "shares")).StdOut.ShouldContain("No named shares yet");
+    }
+
+    [Fact]
+    public async Task ATakenName_Should_ExitFour_NamingTheShareThatHasIt()
+    {
+        _a.WriteFile("a.txt", "a");
+        _b.WriteFile("b.txt", "b");
+        (await RunAsync(_a, "sync", "--name", "contested")).ExitCode.ShouldBe(0);
+
+        CliResult taken = await RunAsync(_b, "sync", "--name", "contested", "--json");
+
+        taken.ExitCode.ShouldBe(4, taken.ToString());
+        using var document = JsonDocument.Parse(taken.StdOut);
+        document.RootElement.GetProperty("error").GetProperty("code").GetString().ShouldBe("Shares.NameTaken");
+        document.RootElement.GetProperty("error").GetProperty("description").GetString()!.ShouldContain(ShareIdOf(_a));
+        File.Exists(Path.Combine(_b.Path, StateFileNames.State)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AnUnfinishedShare_Should_ShowInShares_RefuseToClone_AndBeRemovableByName()
+    {
+        // What an interrupted create leaves: the name was claimed, the share never committed.
+        var shareId = Guid.NewGuid();
+        Azure.Storage.Blobs.BlobContainerClient container = new(_azurite.ConnectionString, _container);
+        await container.CreateIfNotExistsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        await container.GetBlobClient("aliases/half-made").UploadAsync(
+            BinaryData.FromString("{}"),
+            new Azure.Storage.Blobs.Models.BlobUploadOptions
+            {
+                Metadata = new Dictionary<string, string> { ["mysyncshareid"] = shareId.ToString(), ["mysynccreatedutc"] = "2026-11-19T08:00:00Z", ["mysynccreatedby"] = "me" },
+            },
+            TestContext.Current.CancellationToken);
+
+        (await RunAsync(_a, "shares")).StdOut.ShouldMatch($"half-made +{shareId}");
+        CliResult clone = await RunAsync(_b, "sync", "half-made");
+        clone.ExitCode.ShouldBe(8, clone.ToString());
+        clone.StdErr.ShouldContain("was never finished");
+        clone.StdErr.ShouldContain("mysync delete half-made --yes");
+
+        CliResult deleted = await RunAsync(_a, "delete", "half-made", "--yes");
+
+        deleted.ExitCode.ShouldBe(0, deleted.ToString());
+        (await RunAsync(_a, "shares")).StdOut.ShouldContain("No named shares yet");
+    }
+
+    private Dictionary<string, string?> Environment() => new()
+    {
+        ["AZURE_STORAGE_CONNECTION_STRING"] = _azurite.ConnectionString,
+        ["MYSYNC_CONTAINER"] = _container,
+    };
+
+    /// <summary>
+    /// Runs mysync in <paramref name="folder"/>. A bare <c>sync</c> in a folder that isn't a share yet
+    /// gets a unique <c>--name</c>, as a person would type one; the name tests call the process directly.
+    /// </summary>
     private Task<CliResult> RunAsync(TempShareFolder folder, Dictionary<string, string?> overrides, params string[] arguments)
     {
+        bool creates = arguments.Length > 0 && arguments[0] == "sync"
+            && !arguments.Skip(1).Any(argument => !argument.StartsWith('-'))
+            && !arguments.Contains("--name")
+            && !File.Exists(Path.Combine(folder.Path, StateFileNames.State));
+        if (creates)
+        {
+            arguments = [.. arguments, "--name", "cli-" + Guid.NewGuid().ToString("N")[..12]];
+        }
+
         Dictionary<string, string?> environment = new()
         {
             ["AZURE_STORAGE_CONNECTION_STRING"] = _azurite.ConnectionString,

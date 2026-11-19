@@ -35,8 +35,8 @@ internal static class SyncReportView
 
         RenderWarnings(created.Warnings);
         AnsiConsole.MarkupLine(
-            $"[green]Created share {ConsoleOutput.Value(created.ShareId.ToString())}[/] ({created.FileCount} {Files(created.FileCount)}, {ConsoleOutput.Bytes(created.TotalBytes)})");
-        AnsiConsole.MarkupLine($"Share it with:  [bold]{ConsoleOutput.Value($"mysync sync {created.ShareId}")}[/]");
+            $"[green]Created share {ConsoleOutput.Value(created.Name.Value)}[/] ({ConsoleOutput.Value(created.ShareId.ToString())}): {created.FileCount} {Files(created.FileCount)}, {ConsoleOutput.Bytes(created.TotalBytes)}");
+        AnsiConsole.MarkupLine($"Share it with:  [bold]{ConsoleOutput.Value($"mysync sync {created.Name}")}[/]");
         RenderSkipped(created.Skipped);
     }
 
@@ -130,7 +130,8 @@ internal static class SyncReportView
         string revision = $"revision {report.Revision.Value}";
         if (cloned)
         {
-            return $"[green]Cloned share {ConsoleOutput.Value(report.ShareId.ToString())}[/] {ConsoleOutput.Muted($"({revision})")}";
+            string which = report.Name is { } name ? $"{name} ({report.ShareId})" : report.ShareId.ToString();
+            return $"[green]Cloned share {ConsoleOutput.Value(which)}[/] {ConsoleOutput.Muted($"({revision})")}";
         }
 
         if (report.Committed)

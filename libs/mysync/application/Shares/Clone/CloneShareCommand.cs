@@ -18,13 +18,13 @@ using SharedKernel;
 namespace MySync.Application.Shares.Clone;
 
 /// <summary>
-/// <c>mysync sync &lt;shareId&gt;</c> (CLAUDE.md §9): download a share into an empty folder. With
+/// <c>mysync sync &lt;name|shareId&gt;</c> (CLAUDE.md §9): download a share into an empty folder. With
 /// <c>--force</c> the folder may hold files; they are merged against an empty base, so nothing is
 /// overwritten: same content is a no-op, different content a conflict, local-only files are uploaded.
 /// </summary>
-/// <param name="ShareId">As typed; the validator checks it is a UUID.</param>
+/// <param name="Share">The share's name or ID; a name is resolved through its alias.</param>
 public sealed record CloneShareCommand(
-    string ShareId,
+    ShareReference Share,
     bool Force = false,
     int? Parallelism = null,
     ISyncProgressReporter? Progress = null) : ICommand<SyncReport>;
@@ -33,10 +33,7 @@ internal sealed class CloneShareCommandValidator : AbstractValidator<CloneShareC
 {
     public CloneShareCommandValidator()
     {
-        RuleFor(command => command.ShareId)
-            .Must(id => Domain.Shares.ShareId.TryParse(id, out _))
-            .WithErrorCode("Shares.InvalidId")
-            .WithMessage(ShareErrors.InvalidId().Description);
+        RuleFor(command => command.Share).NotNull();
 
         RuleFor(command => command.Parallelism).ValidParallelism();
     }
@@ -47,6 +44,7 @@ internal sealed class CloneShareCommandHandler(
     IShareStateStore stateStore,
     IShareStore store,
     ILocalFolder folder,
+    ShareResolver resolver,
     SyncPipeline pipeline,
     SyncOptions options)
     : ICommandHandler<CloneShareCommand, SyncReport>
@@ -56,11 +54,6 @@ internal sealed class CloneShareCommandHandler(
 
     public async Task<Result<SyncReport>> Handle(CloneShareCommand command, CancellationToken cancellationToken)
     {
-        if (!Domain.Shares.ShareId.TryParse(command.ShareId, out ShareId? shareId))
-        {
-            return Result.Failure<SyncReport>(ShareErrors.InvalidId());
-        }
-
         Result<IAsyncDisposable> locked = await folderLock.AcquireAsync(cancellationToken);
         if (locked.IsFailure)
         {
@@ -100,8 +93,30 @@ internal sealed class CloneShareCommandHandler(
             return Result.Failure<SyncReport>(location.Error);
         }
 
+        Result<ResolvedShare> resolved = await resolver.ResolveAsync(command.Share, cancellationToken);
+        if (resolved.IsFailure)
+        {
+            return Result.Failure<SyncReport>(resolved.Error);
+        }
+
+        ShareId shareId = resolved.Value.ShareId;
+        if (resolved.Value.Name is { } name)
+        {
+            // A name nobody finished creating: say so, rather than "share not found".
+            Result<ManifestSnapshot?> head = await store.GetManifestAsync(shareId, cancellationToken);
+            if (head.IsFailure)
+            {
+                return Result.Failure<SyncReport>(head.Error);
+            }
+
+            if (head.Value is null)
+            {
+                return Result.Failure<SyncReport>(ShareErrors.Incomplete(name, shareId));
+            }
+        }
+
         // An empty base: everything remote is new here, everything local (with --force) is new there.
-        return await pipeline.SynchronizeAsync(
+        Result<SyncReport> cloned = await pipeline.SynchronizeAsync(
             new SyncSession(
                 shareId,
                 location.Value,
@@ -114,5 +129,7 @@ internal sealed class CloneShareCommandHandler(
                 command.Progress ?? NullSyncProgressReporter.Instance,
                 command.Parallelism ?? options.MaxParallelism),
             cancellationToken);
+
+        return cloned.IsSuccess ? cloned.Value with { Name = resolved.Value.Name } : cloned;
     }
 }

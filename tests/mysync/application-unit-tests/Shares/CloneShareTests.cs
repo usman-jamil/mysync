@@ -85,17 +85,15 @@ public class CloneShareTests
         (await world.Machine("b").CloneAsync(missing)).ShouldFail().ShouldBe(ShareErrors.NotFound(missing));
     }
 
-    [Theory]
-    [InlineData("not-a-uuid")]
-    [InlineData("")]
-    [InlineData("00000000-0000-0000-0000-000000000000")]
-    public async Task Clone_Should_RejectAnIdThatIsNotAUuid_AsAUsageError(string shareId)
+    [Fact]
+    public async Task Clone_Should_TreatSomethingThatIsntAnId_AsAName_AndSayNoShareHasIt()
     {
         SyncWorld world = new();
 
-        Error error = (await world.Machine("b").CloneAsync(new CloneShareCommand(shareId))).ShouldFail();
+        Error error = (await world.Machine("b").CloneAsync("not-a-uuid")).ShouldFail();
 
-        error.ShouldBeOfType<ValidationError>().Errors.Single().Code.ShouldBe("Shares.InvalidId");
+        error.Code.ShouldBe("Shares.NameNotFound");
+        error.Type.ShouldBe(ErrorType.NotFound);
     }
 
     [Fact]

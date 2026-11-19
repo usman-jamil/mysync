@@ -6,6 +6,8 @@ using MySync.Application.Abstractions.Storage;
 using MySync.Application.Shares.Clone;
 using MySync.Application.Shares.Create;
 using MySync.Application.Shares.Delete;
+using MySync.Application.Shares.List;
+using MySync.Application.Shares.Rename;
 using MySync.Application.Sync.Run;
 using MySync.Domain.Shares;
 using MySync.Infrastructure;
@@ -40,28 +42,46 @@ internal sealed class AzureMachine(string connectionString, string container) : 
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    public async Task<ShareId> CreateAsync() =>
-        Ok(await SendAsync<CreateShareCommand, CreateShareResponse>(new CreateShareCommand())).ShareId;
+    /// <summary>Creates a share named <paramref name="name"/>, or a fresh unique name.</summary>
+    public async Task<ShareId> CreateAsync(string? name = null) =>
+        Ok(await CreateNamedAsync(name ?? "e2e-" + Guid.NewGuid().ToString("N")[..12])).ShareId;
 
-    public Task<Result<SyncReport>> CloneAsync(ShareId shareId) => SendAsync<CloneShareCommand, SyncReport>(new CloneShareCommand(shareId.ToString()));
+    public Task<Result<CreateShareResponse>> CreateNamedAsync(string name) =>
+        SendAsync<CreateShareCommand, CreateShareResponse>(new CreateShareCommand(ShareName.Create(name).Value));
+
+    public Task<Result<SyncReport>> CloneAsync(ShareId shareId) => SendAsync<CloneShareCommand, SyncReport>(new CloneShareCommand(ShareReference.For(shareId)));
+
+    public Task<Result<SyncReport>> CloneAsync(string shareOrName) => SendAsync<CloneShareCommand, SyncReport>(new CloneShareCommand(ShareReference.Parse(shareOrName).Value));
+
+    public Task<Result<RenameShareResponse>> RenameAsync(string newName) =>
+        SendAsync<RenameShareCommand, RenameShareResponse>(new RenameShareCommand(ShareName.Create(newName).Value));
+
+    public async Task<Result<ShareListResponse>> SharesAsync()
+    {
+        await using ServiceProvider provider = Services().BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+        await using AsyncServiceScope scope = provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<IQueryHandler<ListSharesQuery, ShareListResponse>>().Handle(new ListSharesQuery(), Ct);
+    }
 
     public Task<Result<SyncReport>> SyncAsync() => SendAsync<RunSyncCommand, SyncReport>(new RunSyncCommand());
 
     public Task<Result<DeleteShareResponse>> DeleteAsync(string? shareId = null) =>
-        SendAsync<DeleteShareCommand, DeleteShareResponse>(new DeleteShareCommand(shareId));
+        SendAsync<DeleteShareCommand, DeleteShareResponse>(new DeleteShareCommand(Reference(shareId)));
 
     public Task<Result<PublishReport>> PublishAsync(PublishShareCommand? command = null) =>
         SendAsync<PublishShareCommand, PublishReport>(command ?? new PublishShareCommand());
 
     public Task<Result<UnpublishReport>> UnpublishAsync(string publishId, string? shareId = null) =>
-        SendAsync<UnpublishCommand, UnpublishReport>(new UnpublishCommand(publishId, shareId));
+        SendAsync<UnpublishCommand, UnpublishReport>(new UnpublishCommand(publishId, Reference(shareId)));
 
     public async Task<Result<PublicationListResponse>> PublicationsAsync(string? shareId = null)
     {
         await using ServiceProvider provider = Services().BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
         await using AsyncServiceScope scope = provider.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<IQueryHandler<ListPublicationsQuery, PublicationListResponse>>().Handle(new ListPublicationsQuery(shareId), Ct);
+        return await scope.ServiceProvider.GetRequiredService<IQueryHandler<ListPublicationsQuery, PublicationListResponse>>().Handle(new ListPublicationsQuery(Reference(shareId)), Ct);
     }
+
+    private static ShareReference? Reference(string? shareOrName) => shareOrName is null ? null : ShareReference.Parse(shareOrName).Value;
 
     /// <summary>The store this machine's commands use, for looking at the remote side directly.</summary>
     public async Task<T> WithStoreAsync<T>(Func<IShareStore, Task<T>> look)

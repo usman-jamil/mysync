@@ -25,6 +25,12 @@ public sealed class InMemoryAliasStore : IAliasStore
     /// <summary>Runs before each create; return an error to make it fail.</summary>
     public Func<ShareName, Error?>? FailCreate { get; set; }
 
+    /// <summary>Runs after <see cref="FindByShareAsync"/> has listed, before its caller reads each name again.</summary>
+    public Action<IReadOnlyList<AliasRecord>>? AfterFindByShare { get; set; }
+
+    /// <summary>Runs before each delete is checked: lets a test re-point the name as "another machine" first.</summary>
+    public Action<ShareName>? BeforeDelete { get; set; }
+
     /// <summary>Every blob name under <c>aliases/</c>, sorted: what a test can see in the "container".</summary>
     public IReadOnlyList<string> BlobNames
     {
@@ -119,6 +125,7 @@ public sealed class InMemoryAliasStore : IAliasStore
             }
         }
 
+        AfterFindByShare?.Invoke(found);
         return found;
     }
 
@@ -127,6 +134,7 @@ public sealed class InMemoryAliasStore : IAliasStore
         ArgumentNullException.ThrowIfNull(name);
         cancellationToken.ThrowIfCancellationRequested();
         string blobName = ShareLayout.Alias(name);
+        BeforeDelete?.Invoke(name);
 
         lock (_gate)
         {
@@ -138,6 +146,18 @@ public sealed class InMemoryAliasStore : IAliasStore
             _blobs.Remove(blobName);
             Operations.Add($"delete:{name}");
             return Task.FromResult(Result.Success());
+        }
+    }
+
+    /// <summary>Points an existing name at another share, as another machine's delete-and-reclaim would.</summary>
+    public void Repoint(ShareName name, ShareId shareId)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        lock (_gate)
+        {
+            string blobName = ShareLayout.Alias(name);
+            AliasRecord current = _blobs[blobName].Alias!;
+            Put(blobName, current with { ShareId = shareId });
         }
     }
 

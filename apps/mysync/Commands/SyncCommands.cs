@@ -30,15 +30,20 @@ internal sealed class SyncCommands(CommandRunner runner)
     private static readonly Error DryRunWithShareId = Error.Validation(
         "Cli.DryRunWithShareId", "--dry-run can't be combined with a share ID: cloning only downloads. Run it in the cloned folder afterwards.");
 
+    private static readonly Error NameWithShareReference = Error.Validation(
+        "Cli.NameWithShareReference",
+        "--name names a new share; with a share name or ID, 'mysync sync' clones that share instead. Leave one of them out.");
+
     /// <summary>
     /// Sync this folder: create a share from it, clone a share into it (give the share ID), or two-way sync it if it is already a share.
     /// </summary>
-    /// <param name="shareId">Clone this share into the current (empty) folder.</param>
+    /// <param name="shareId">Clone this share, by name or ID, into the current (empty) folder.</param>
     /// <param name="dryRun">-n, Show what would happen without changing anything.</param>
     /// <param name="noDelete">Never delete, here or in the share; deletions wait for a later run.</param>
     /// <param name="allowMassDelete">Allow deleting more than half of the files (more than 10).</param>
     /// <param name="yes">-y, Don't ask before creating a large share.</param>
     /// <param name="force">Create a share in your home folder or a drive root, or clone into a folder that isn't empty.</param>
+    /// <param name="name">The new share's name (required when creating one): 3-40 letters a-z, digits and '-'.</param>
     /// <param name="cancellationToken">Ctrl+C.</param>
     [Command("sync")]
     public Task<int> Sync(
@@ -48,6 +53,7 @@ internal sealed class SyncCommands(CommandRunner runner)
         bool allowMassDelete = false,
         bool yes = false,
         bool force = false,
+        string? name = null,
         CancellationToken cancellationToken = default) =>
         runner.RunAsync(async () =>
         {
@@ -59,18 +65,51 @@ internal sealed class SyncCommands(CommandRunner runner)
 
             if (shareId is not null)
             {
+                if (name is not null)
+                {
+                    return runner.Fail(NameWithShareReference);
+                }
+
                 return dryRun ? runner.Fail(DryRunWithShareId) : await CloneAsync(shareId, force, cancellationToken);
             }
 
-            Result<NewSharePreview> preview = await runner.QueryAsync<PreviewNewShareQuery, NewSharePreview>(new PreviewNewShareQuery(), cancellationToken);
+            ShareName? newName = null;
+            if (name is not null)
+            {
+                Result<ShareName> parsedName = ShareName.Create(name);
+                if (parsedName.IsFailure)
+                {
+                    return runner.Fail(parsedName.Error);
+                }
+
+                newName = parsedName.Value;
+            }
+
+            // Without a name a new share can't be made, so don't walk the folder to find that out.
+            bool canCreate = newName is not null || dryRun;
+            Result<NewSharePreview> preview = await runner.QueryAsync<PreviewNewShareQuery, NewSharePreview>(new PreviewNewShareQuery(CountFiles: canCreate), cancellationToken);
             if (preview.IsFailure)
             {
                 return runner.Fail(preview.Error);
             }
 
-            return preview.Value.ExistingShareId is null
-                ? await CreateAsync(preview.Value, dryRun, yes, force, cancellationToken)
-                : await RunSyncAsync(dryRun, noDelete, allowMassDelete, cancellationToken);
+            if (preview.Value.ExistingShareId is not null)
+            {
+                if (newName is not null)
+                {
+                    ConsoleOutput.Warn($"--name is ignored: this folder is already a share. To rename it: mysync rename {newName}");
+                }
+
+                return await RunSyncAsync(dryRun, noDelete, allowMassDelete, cancellationToken);
+            }
+
+            if (!canCreate)
+            {
+                string folderName = Path.GetFileName(preview.Value.RootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                return runner.Fail(ShareErrors.NameRequired(ShareName.SuggestFrom(folderName)));
+            }
+
+            return await CreateAsync(preview.Value, newName, dryRun, yes, force, cancellationToken);
         }, cancellationToken);
 
     /// <summary>Show what 'mysync sync' would do now, without changing anything here or in the share.</summary>
@@ -112,7 +151,7 @@ internal sealed class SyncCommands(CommandRunner runner)
         return report.Skipped.Length > 0 ? ExitCodes.PathsSkipped : ExitCodes.Success;
     }
 
-    private async Task<int> CreateAsync(NewSharePreview preview, bool dryRun, bool yes, bool force, CancellationToken cancellationToken)
+    private async Task<int> CreateAsync(NewSharePreview preview, ShareName? newName, bool dryRun, bool yes, bool force, CancellationToken cancellationToken)
     {
         if (dryRun)
         {
@@ -151,7 +190,7 @@ internal sealed class SyncCommands(CommandRunner runner)
         }
 
         Result<CreateShareResponse> created = await SyncProgressDisplay.RunAsync(runner.Options, progress =>
-            runner.SendAsync<CreateShareCommand, CreateShareResponse>(new CreateShareCommand(force, runner.Options.Parallel, progress), cancellationToken));
+            runner.SendAsync<CreateShareCommand, CreateShareResponse>(new CreateShareCommand(newName, force, runner.Options.Parallel, progress), cancellationToken));
         if (created.IsFailure)
         {
             return runner.Fail(created.Error);
@@ -169,8 +208,14 @@ internal sealed class SyncCommands(CommandRunner runner)
 
     private async Task<int> CloneAsync(string shareId, bool force, CancellationToken cancellationToken)
     {
+        Result<ShareReference?> reference = CommandRunner.ParseShare(shareId);
+        if (reference.IsFailure)
+        {
+            return runner.Fail(reference.Error);
+        }
+
         Result<SyncReport> cloned = await SyncProgressDisplay.RunAsync(runner.Options, progress =>
-            runner.SendAsync<CloneShareCommand, SyncReport>(new CloneShareCommand(shareId, force, runner.Options.Parallel, progress), cancellationToken));
+            runner.SendAsync<CloneShareCommand, SyncReport>(new CloneShareCommand(reference.Value!, force, runner.Options.Parallel, progress), cancellationToken));
 
         return Finish(cloned, "clone");
     }

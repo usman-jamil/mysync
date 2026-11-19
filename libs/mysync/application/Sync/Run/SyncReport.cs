@@ -29,6 +29,9 @@ public sealed record SyncReport(
 {
     /// <summary><c>resolve</c> only: the named conflicts it settled. The ones still open are in <see cref="Conflicts"/>.</summary>
     public ImmutableArray<SharePath> Resolved { get; init; } = [];
+
+    /// <summary>Clone by name: the name it was cloned by.</summary>
+    public ShareName? Name { get; init; }
 }
 
 public sealed record TransferTotals(int Files, long Bytes)

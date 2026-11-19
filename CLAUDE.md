@@ -22,13 +22,13 @@ How it's used:
 
 ```text
 # Machine A — in any folder
-$ mysync sync
-Created share 0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10 (142 files, 38.2 MB)
-Share it with:  mysync sync 0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10
+$ mysync sync --name next-wave
+Created share next-wave (0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10): 142 files, 38.2 MB
+Share it with:  mysync sync next-wave
 
-# Machine B — in an EMPTY folder
-$ mysync sync 0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10
-Cloned share 0b6f3c1e… (142 files, 38.2 MB)
+# Machine B — in an EMPTY folder (the name or the share ID)
+$ mysync sync next-wave
+Cloned share next-wave (0b6f3c1e…)
 
 # Afterwards, on either machine, inside that folder
 $ mysync sync        # two-way sync: upload local changes, download remote changes
@@ -43,8 +43,8 @@ Published Q3 reports: revision 18, 142 files (38.2 MB)
 
 1. Simple CLI. **Never prompts for credentials.** They come from environment variables only.
 2. **No backend dependency.** Only the storage provider (Azure Blob for now).
-3. `sync` in a folder with no `.mysynctool` creates a **new share**, uploads the folder, writes `.mysynctool` and prints a share ID (UUID).
-4. `sync <id>` clones a share into the current folder. **Allowed only in an empty folder.**
+3. `sync --name <name>` in a folder with no `.mysynctool` creates a **new share**, uploads the folder, writes `.mysynctool` and prints its name and share ID (UUID). The name is **required and unique** (§6a).
+4. `sync <name|id>` clones a share into the current folder. **Allowed only in an empty folder.**
 5. Later `sync` runs in a shared folder do a **two-way sync** (upload and download).
 6. Change detection is **hash-based**, not timestamp-based.
 7. **Content-addressed storage layout**: blob names are content hashes, not mirrored folder paths.
@@ -138,7 +138,9 @@ Each project is an **Nx project** defined by its `project.json` (targets wrap `d
 | You are changing… | It belongs in… | Notes |
 |---|---|---|
 | Merge rules, manifest shape, path rules, conflict kinds, safety-guard thresholds | `libs/mysync/domain` | Pure logic. No I/O, no framework references. |
-| A use case (`sync`, `clone`, `resolve`, `gc`, `status`, `info`) or its sequencing | `libs/mysync/application/<Feature>/<UseCase>/` | Handlers own the sequence, not the I/O. |
+| Share-name rules (`ShareName`), what users type for a share (`ShareReference`), alias blob names | `libs/mysync/domain/Shares`, `ShareLayout` | `ShareReference.Parse` is the one parser every command uses. |
+| How names are stored in Azure | `libs/mysync/storage-azure` (`AzureAliasStore`) | Implements `IAliasStore`; shares the container with `AzureBlobShareStore` (`AzureShareContainer`). |
+| A use case (`sync`, `clone`, `resolve`, `gc`, `status`, `info`, `rename`, `shares`) or its sequencing | `libs/mysync/application/<Feature>/<UseCase>/` | Handlers own the sequence, not the I/O. |
 | A new external capability (disk, clock, storage, logging sink) | interface in `libs/mysync/application/Abstractions/`, implementation in infrastructure or a storage project | Dependency inversion, see §3. |
 | Local disk, `.mysynctool` serialization, hashing, ignore matching, conflict log | `libs/mysync/infrastructure` | |
 | How a share is stored in Azure (blob calls, ETags, error mapping) | `libs/mysync/storage-azure` | The only library that references `Azure.Storage.Blobs`. |
@@ -183,12 +185,12 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | Project (path) | Responsibility | Contains |
 |---|---|---|
 | `SharedKernel` (`libs/shared/shared-kernel/SharedKernel.csproj`) | Building blocks | `Result` / `Result<T>`, `Error`, `ErrorType`, `ValidationError`, `IDateTimeProvider`. No dependencies. |
-| `MySync.Domain` (`libs/mysync/domain/MySync.Domain.csproj`) | Sync rules | Value objects (`ShareId`, `SharePath`, `ContentHash`, `Revision`), `Manifest` / `ManifestEntry`, `ShareState`, `MergePlanner`, `SyncPlan` / `SyncAction`, `Conflict` / `ConflictKind`, `MassDeleteGuard`, `ShareLayout` (blob key scheme, provider-agnostic), `ShareState` + `StorageLocation` + `HashCacheEntry`, `CaseCollision`, `StateFileNames`, `NfcNormalizer` (our own Unicode NFC, §8), publishing (`PublishId`, `Publication` / `PublicationRegistry`, `PublicationLayout`, `ContentTypeMap`, `DispositionPolicy`, `SiteDataBuilder`, `DownloadScripts`), and **static `*Errors` classes** (`ShareErrors`, `SyncErrors`, `PathErrors`, `LocalFileErrors`, `StateErrors`, `StorageErrors`, `ConfigurationErrors`, `PublishErrors`, `UpdateErrors`). No I/O. |
+| `MySync.Domain` (`libs/mysync/domain/MySync.Domain.csproj`) | Sync rules | Value objects (`ShareId`, `ShareName`, `ShareReference`, `SharePath`, `ContentHash`, `Revision`), `AliasRecord`, `Manifest` / `ManifestEntry`, `ShareState`, `MergePlanner`, `SyncPlan` / `SyncAction`, `Conflict` / `ConflictKind`, `MassDeleteGuard`, `ShareLayout` (blob key scheme, provider-agnostic), `ShareState` + `StorageLocation` + `HashCacheEntry`, `CaseCollision`, `StateFileNames`, `NfcNormalizer` (our own Unicode NFC, §8), publishing (`PublishId`, `Publication` / `PublicationRegistry`, `PublicationLayout`, `ContentTypeMap`, `DispositionPolicy`, `SiteDataBuilder`, `DownloadScripts`), and **static `*Errors` classes** (`ShareErrors`, `SyncErrors`, `PathErrors`, `LocalFileErrors`, `StateErrors`, `StorageErrors`, `ConfigurationErrors`, `PublishErrors`, `UpdateErrors`). No I/O. |
 | `MySync.Application` (`libs/mysync/application/MySync.Application.csproj`) | Use cases | Command/query handlers, FluentValidation validators, **all abstractions** (`I...`), behaviors (decorators), response DTOs, the internal `SyncPipeline` that sequences the phases in §9. |
 | `MySync.Infrastructure` (`libs/mysync/infrastructure/MySync.Infrastructure.csproj`) | Local machine | `ShareRoot` (the folder being synced), `LocalFolder` + `PathResolver` / `FileScanner`, `Sha256ContentHasher`, `JsonShareStateStore` + `FolderLock`, `FileConflictLog`, `GitIgnoreRulesLoader` + `GitIgnoreMatcher` (our own gitignore matcher), `ManifestSerializer` + `MySyncJsonContext` (source-generated JSON), `SiteDataSerializer` + `PublicationRegistrySerializer` (`Publishing/`, source-generated), `HttpPublicationVerifier` (anonymous GET), `MachineIdentity`, `DateTimeProvider`, `DependencyInjection.AddInfrastructure()`. |
 | `MySync.Updates.GitHub` (`libs/mysync/updates-github/MySync.Updates.GitHub.csproj`) | Release source | `GitHubReleaseSource : IReleaseSource` (`api.github.com`, source-generated JSON), `DependencyInjection.AddGitHubReleaseSource(repo, version, token)`. Depends on Application only. |
 | `MySync.SiteAssets` (`libs/mysync/site-assets/MySync.SiteAssets.csproj`) | Publication page assets | `EmbeddedSiteAssetSource : ISiteAssetSource` (manifest resources `site/…` from `dist/apps/mysync-site`, `root/…` from `Root/`), `DependencyInjection.AddSiteAssets()`. Depends on Application only. |
-| `MySync.Storage.Azure` (`libs/mysync/storage-azure/MySync.Storage.Azure.csproj`) | Azure Blob provider | `AzureBlobShareStore : IShareStore`, `AzureStorageOptions`, `AzureStaticWebsitePublishTarget : IPublishTarget` + `PublishStorageOptions` + `AzureCopyLimits`, `AzureErrorMapper` (`RequestFailedException` → `StorageErrors`), `ConnectionStringRedactor`, `DependencyInjection.AddAzureBlobStorage()` / `AddAzureStaticWebsitePublishing()`. |
+| `MySync.Storage.Azure` (`libs/mysync/storage-azure/MySync.Storage.Azure.csproj`) | Azure Blob provider | `AzureBlobShareStore : IShareStore`, `AzureAliasStore : IAliasStore`, `AzureShareContainer` (the container both use), `AzureStorageOptions`, `AzureStaticWebsitePublishTarget : IPublishTarget` + `PublishStorageOptions` + `AzureCopyLimits`, `AzureErrorMapper` (`RequestFailedException` → `StorageErrors`), `ConnectionStringRedactor`, `DependencyInjection.AddAzureBlobStorage()` / `AddAzureStaticWebsitePublishing()`. |
 | `MySync.Cli` (`apps/mysync/MySync.Cli.csproj`) | Presentation / composition root | `Program.cs`, `Commands/`, `Rendering/`, `ExitCodes.cs`. Selects the provider from `MYSYNC_PROVIDER`. |
 
 ### Where abstractions live (critical)
@@ -198,6 +200,7 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | Abstraction | Folder | Implemented by |
 |---|---|---|
 | `IShareStore` (+ `ManifestSnapshot`, `StoredObjectInfo`) | `Abstractions/Storage/` | `MySync.Storage.Azure` (later `.S3`) |
+| `IAliasStore` (+ `AliasSnapshot`) | `Abstractions/Storage/` | `MySync.Storage.Azure` `AzureAliasStore` (later `.S3`) |
 | `IManifestSerializer` | `Abstractions/Storage/` | Infrastructure (shared by every provider, so manifest JSON is identical everywhere) |
 | `ILocalFolder`, `IFileScanner`, `LocalFile`, `ScannedFolder` | `Abstractions/FileSystem/` | Infrastructure |
 | `IContentHasher` | `Abstractions/Hashing/` | Infrastructure |
@@ -248,10 +251,13 @@ libs/mysync/application/
   Abstractions/{Messaging,Behaviors,Storage,FileSystem,Hashing,State,Logging,Ignore,Environment,Progress}/
   Shares/
     ShareFolder     "this folder is a share and the environment points at its storage" (status, info, resolve, gc)
+    ShareResolver   ShareReference → ShareId (a name through its alias; NameNotFound); ShareNames frees a share's names (fresh read + If-Match)
     Preview/        PreviewNewShareQuery(.cs|Handler|Validator), NewSharePreview       # counts + size, no hashing
     Create/         CreateShareCommand(.cs|Handler|Validator), CreateShareResponse
     Clone/          CloneShareCommand(.cs|Handler|Validator), CloneShareResponse
-    GetInfo/        GetShareInfoQuery(.cs|Handler), ShareInfoResponse
+    GetInfo/        GetShareInfoQuery(.cs|Handler), ShareInfoResponse                  # also from elsewhere: info <name|id>
+    Rename/         RenameShareCommand(.cs|Handler|Validator), RenameShareResponse     # `rename`: claim the new name, free the old
+    List/           ListSharesQuery(.cs|Handler), ShareListResponse                    # `shares`: the alias listing only
     Delete/         DeleteShareCommand(.cs|Handler|Validator), DeleteShareResponse     # `delete`: marker, sweep, local state
   Sync/
     Run/            RunSyncCommand(.cs|Handler|Validator), SyncReport
@@ -317,9 +323,9 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 | File | Commands |
 |---|---|
 | `CommandRunner.cs` | Not a command: scope per handler, `CheckStorage()` (settings before any work or prompt), failures to stderr (and one JSON document with `--json`), unexpected exceptions → exit `1`, redacted, stack trace only with `--verbose` |
-| `SyncCommands.cs` | `sync [<shareId>]`, `status` |
+| `SyncCommands.cs` | `sync [<name|shareId>] [--name <name>]`, `status` |
 | `ConflictCommands.cs` | `conflicts`, `resolve` |
-| `ShareCommands.cs` | `info`, `delete` |
+| `ShareCommands.cs` | `info`, `delete`, `shares`, `rename` |
 | `MaintenanceCommands.cs` | `gc` |
 
 - **Keep commands thin:** resolve the handler from a scope, invoke it, render the result, return the exit code.
@@ -374,6 +380,7 @@ Everything for a share lives under one prefix in the container. Key building is 
 
 ```text
 <container>/
+├── aliases/<name>                          # a share's name → its share ID (§6a); the only record of names
 └── shares/<shareId>/
     ├── manifest.json                       # HEAD: the current state of the share (single commit point)
     ├── manifests/<revision:D10>.json       # immutable history snapshots (best-effort, for recovery + GC safety)
@@ -431,6 +438,22 @@ Implemented by `RemoteCommitter` in `Application/Sync/Pipeline`:
 4. After a successful commit, write `manifests/<revision>.json` (best-effort; a failure only logs a warning).
 
 Files are never "half uploaded" from a reader's point of view. Readers see a new revision only after all its objects exist.
+
+---
+
+## 6a. Share names (`aliases/<name>`)
+
+Every new share has a **required, unique, human-readable name** (`next-wave`), so people type `mysync sync next-wave` instead of a UUID. The share ID stays the storage key everywhere; a name only points at it.
+
+- **The alias blob is the only record of names.** `aliases/<name>` in the share container (`ShareLayout.AliasesPrefix`, `ShareLayout.Alias(name)`), one block blob per name, `application/json`: a body `{ "shareId", "createdUtc", "createdBy" }` (for people and other providers) and **the same three values as metadata** (`mysyncshareid`, `mysynccreatedutc`, `mysynccreatedby`, the last URL-encoded because metadata is ASCII), written in **one** Put. Readers use the metadata. **Manifests and `.mysynctool` don't hold names**: no format change.
+- **`ShareName`:** trimmed, lowercased (ASCII), 3–40 of `a–z0–9-`, starting and ending with a letter or digit, never UUID-shaped. Those rules are also what keeps the name a safe blob path segment. `ShareName.SuggestFrom(folderName)` makes the suggestion in the "name required" message (accents stripped via our NFD, the rest dashed); a share is never created with a name nobody chose.
+- **`ShareReference`:** what a user types where a share is expected: a share ID if it parses as one, else a name. `ShareReference.Parse` is the one parser (CLI), and `ShareResolver` the one resolution (Application): a name goes through `IAliasStore.GetAsync`, a missing one is `NameNotFound`.
+- **Uniqueness is the conditional create.** `IAliasStore.CreateAsync` uses `If-None-Match: *`; claiming a name *is* the check that it's free. Never read-then-write.
+- **Create's order:** the name is checked first (missing → `NameRequired`, before the folder is even walked: the CLI asks `PreviewNewShareQuery(CountFiles: false)`), the container is made ready, then **the name is claimed before anything is scanned or uploaded**, then the usual create (upload, commit revision 1). A taken name is `NameTaken` naming the share that has it. If the create fails or is cancelled after the claim, the name stays and the share is **incomplete** (alias, no manifest): clone and info say `Incomplete`, `shares` lists it, and `delete <name> --yes` removes it.
+- **Rename** (`RenameShareCommand`, in a share's folder): claim the new name, then free the share's other names. Interrupted in between, the share has two names, both resolving to it; the next rename or delete cleans up. The same name again is a no-op; a share without a name (made before names) gains one.
+- **Delete frees names** (§10, `delete` step 3a), by the reverse lookup `IAliasStore.FindByShareAsync`: one listing of `aliases/` filtered by share ID, since manifests don't know their names. Deleting **frees** a name; there are no tombstones.
+- **`shares`** (`ListSharesQuery`) is **one paged listing** of `aliases/` with the metadata trait (up to 5,000 per request), sorted by name. It reads no manifest. A damaged alias is reported with its name (`Storage.InvalidAlias`) and a stray blob under `aliases/` skipped (`Storage.StrayAlias`), as warnings.
+- **Lifecycle rules:** an account-wide rule like "delete block blobs N days after creation" also deletes `aliases/<name>` (its creation date never changes): the name vanishes, stops resolving, and could be claimed by someone else, while the share may live on. Include or exclude `aliases/` deliberately.
 
 ---
 
@@ -622,18 +645,21 @@ Otherwise it's resolved explicitly with `mysync resolve` (§10).
 ## 10. CLI surface
 
 ```text
-mysync sync [<shareId>] [--dry-run] [--no-delete] [--allow-mass-delete] [--yes] [--force]
+mysync sync --name <name> [--dry-run] [--yes] [--force]   # in a folder that isn't a share: create one (name required)
+mysync sync [<name|shareId>] [--dry-run] [--no-delete] [--allow-mass-delete] [--yes] [--force]
+mysync shares            # every named share: name and full share ID (the alias listing only)
+mysync rename <name>     # in a share's folder: claim a new name, free the old one(s)
 mysync status            # read-only: the plan sync would execute, plus conflicts/warnings
-mysync info              # share id, account/container, base revision vs remote revision, file count, size, open conflicts
+mysync info [<name|shareId>]   # names, share id, account/container, base revision vs remote revision, file count, size, open conflicts
 mysync conflicts         # list open conflicts with local vs remote hash/size/mtime/who
 mysync resolve <path>... --keep local|remote [--dry-run]
 mysync resolve --all     --keep local|remote [--dry-run]
 mysync gc [--dry-run] [--keep-revisions 20] [--grace-hours 24]
-mysync delete [<shareId>] --yes   # delete a share for every machine; local files stay
+mysync delete [<name|shareId>] --yes   # delete a share for every machine and free its names; local files stay
 mysync update [--check] [--version <v>] [--prerelease]   # replace this binary with a verified release
-mysync publish [--share <id>] [--revision <n>] [--title <text>]   # public, read-only copy of a snapshot (§10a)
-mysync publications [--share <id>]                   # the share's publications
-mysync unpublish <publishId> [--share <id>]          # take one down (its link dies first)
+mysync publish [--share <name|id>] [--revision <n>] [--title <text>]   # public, read-only copy of a snapshot (§10a)
+mysync publications [--share <name|id>]                   # the share's publications
+mysync unpublish <publishId> [--share <name|id>]          # take one down (its link dies first)
 mysync --version
 mysync self-check       # runtime checks inside the shipped binary (Unicode normalization); exit 1 if any fail
 ```
@@ -668,6 +694,7 @@ How it's built (`SyncSession.Resolve`, `SyncPipeline.PlanAgainst`): for each nam
 1. **The marker first.** HEAD is replaced, conditionally (`If-Match`, retried with back-off like a commit), by `manifest.CreateDeletedRevision(now, machine)`: the next revision, format 2, no entries. Any sync in progress elsewhere then fails its commit, re-reads and stops.
 2. **Then the sweep:** every object, then the history copies of every revision up to the marker (missing = success; history lists file paths, which can be sensitive), then `publications.json`. The marker itself stays as HEAD for good.
 3. **Recoverable copies:** `IShareStore.CountRecoverableCopiesAsync` (Azure: soft-deleted blobs and old versions under the share's prefix). A non-zero count is a warning: the data can be restored until the account's retention ends.
+3a. **Its names are freed**: every alias pointing at the share (`ShareNames.FreeAsync`: find by share ID, read each again, delete with `If-Match`, so a name re-pointed meanwhile is never removed). Same whether `delete` was given a name or an ID, and also when a re-run finds the marker already written. A name whose share was **never finished** (alias, no manifest: an interrupted create) is deleted without a marker: its objects, history and records are swept, then the name (`DeleteShareResponse.WasIncomplete`). By ID, a share with no manifest and no name is still `NotFound`.
 4. **This folder**, if it is that share: `.mysynctool`, `.mysynctool.log` and the staging directory are removed (`IShareStateStore.DeleteAsync`, `IConflictLog.DeleteAsync`); **files are kept**, and the folder is an ordinary folder again (a new `sync` creates a new share). With a share ID from another folder, that folder isn't touched.
 
 - Already marked deleted → it sweeps again and succeeds (`WasAlreadyDeleted`). So re-running finishes an interrupted delete, and on another machine `mysync delete --yes` in the deleted share's folder just drops that folder's state.
@@ -710,13 +737,13 @@ Mapped from `Error.Code` (failures) or from the report (partial successes). Noth
 |---|---|---|
 | 0 | Success, nothing notable | |
 | 1 | Unexpected error | unhandled exception |
-| 2 | Usage or configuration error | `ValidationError`, `ConfigurationErrors.*`, `resolve` on a non-conflicted path; `PublishErrors.StaticWebsiteDisabled`, `IndexDocumentMismatch`, `OtherAccount`, `PublicationsNeedSettings` |
+| 2 | Usage or configuration error | `ValidationError`, `ConfigurationErrors.*`, `resolve` on a non-conflicted path; `ShareErrors.NameRequired`, `InvalidName`, `InvalidReference`; `Cli.NameWithShareReference`, `Cli.RenameNeedsName`; `PublishErrors.StaticWebsiteDisabled`, `IndexDocumentMismatch`, `OtherAccount`, `PublicationsNeedSettings` |
 | 3 | Completed, but one or more conflicts were dropped and logged (still open) | `SyncReport.Conflicts` non-empty (takes precedence over 9) |
-| 4 | Folder precondition failed | `ShareErrors.FolderNotEmpty`, `AlreadyAShare`, `NotAShare`, `UnsafeRoot`; `UpdateErrors.NotWritable`, `NotInstalledBinary` |
+| 4 | Folder precondition failed, or the name is taken | `ShareErrors.FolderNotEmpty`, `AlreadyAShare`, `NotAShare`, `UnsafeRoot`, `NameTaken`; `UpdateErrors.NotWritable`, `NotInstalledBinary` |
 | 5 | Remote concurrency retries exhausted | `SyncErrors.CommitRetriesExhausted`, `SyncErrors.ShareChangedDuringGc`, `PublishErrors.RegistryRetriesExhausted` |
 | 6 | Another mysync process holds the lock for this folder | `StateErrors.FolderLocked` |
 | 7 | Safety guard tripped (mass delete) | `SyncErrors.MassDeleteBlocked` |
-| 8 | Share not found, deleted, or storage auth failure; no such release or publication | `ShareErrors.NotFound`, `ShareErrors.Deleted`, `StorageErrors.Unauthorized`, `UpdateErrors.ReleaseNotFound` / `NoBuildForPlatform`, `PublishErrors.NotFound` / `RevisionNotFound` / `Unauthorized` / `CannotReadServiceProperties` |
+| 8 | Share not found, deleted, unfinished or no such name, or storage auth failure; no such release or publication | `ShareErrors.NotFound`, `ShareErrors.Deleted`, `NameNotFound`, `Incomplete`, `StorageErrors.Unauthorized`, `UpdateErrors.ReleaseNotFound` / `NoBuildForPlatform`, `PublishErrors.NotFound` / `RevisionNotFound` / `Unauthorized` / `CannotReadServiceProperties` |
 | 9 | Completed, but some paths were skipped (locked, unstable, invalid name) | `SyncReport.Skipped` non-empty |
 | 10 | Published, but the publication couldn't be opened anonymously (check `MYSYNC_PUBLISH_BASE_URL`) | `PublishReport.Verified` false |
 | 130 | Cancelled (Ctrl+C) | `OperationCanceledException` from the caller's token |
@@ -724,7 +751,7 @@ Mapped from `Error.Code` (failures) or from the report (partial successes). Noth
 ### Output
 
 - Default: concise progress (`↑ 12 files 4.1 MB  ↓ 3 files 220 KB  ✗ 0`) and a final summary listing conflicts and skipped paths with reasons. The summary goes to stdout; progress, warnings and failures go to stderr.
-- `--json` documents (`Rendering/JsonOutput`, source-generated `CliJsonContext`) all end with `exitCode`. `sync` / `clone`: `command`, `shareId`, `revision`, `committed`, `dryRun`, `uploaded` / `downloaded` `{files, bytes}`, `deletedLocally`, `deletedRemotely`, `conflicts` (full entries, like `.mysynctool`), `skipped` `{path, cause, detail}` (cause in kebab-case, e.g. `changed-since-scan`), `warnings`, and with `--dry-run` a `plan` of `{path, action}`. Create: `shareId`, `fileCount`, `totalBytes`, `uploaded`, `skipped`, `warnings`, `cloneCommand`. `publish`: `shareId`, `publishId`, `url`, `revision`, `title`, `files`, `bytes`, `copies` (`{put-blob-from-url|blocks-from-url|streamed: n}`), `verified`, `verificationDetail`, `shellCommand`, `powerShellCommand`, `skipped`, `warnings`. `publications`: `shareId`, `publications` (`id`, `status` pending|published|failed, `title`, `revision`, `files`, `bytes`, `createdUtc`, `createdBy`, `publishAccount`, `url`, `siteAssetsVersion`). `unpublish`: `publishId`, `url`, `blobsDeleted`. `delete` also has `publicationsRemoved`. A failure: `{ "error": { code, description, details? }, exitCode }`.
+- `--json` documents (`Rendering/JsonOutput`, source-generated `CliJsonContext`) all end with `exitCode`. `sync` / `clone`: `command`, `shareId`, `revision`, `committed`, `dryRun`, `uploaded` / `downloaded` `{files, bytes}`, `deletedLocally`, `deletedRemotely`, `conflicts` (full entries, like `.mysynctool`), `skipped` `{path, cause, detail}` (cause in kebab-case, e.g. `changed-since-scan`), `warnings`, and with `--dry-run` a `plan` of `{path, action}`. Create: `shareId`, `name`, `fileCount`, `totalBytes`, `uploaded`, `skipped`, `warnings`, `cloneCommand` (`mysync sync <name>`). `shares`: `shares` (`name`, `shareId`, `createdUtc`, `createdBy`), `warnings`. `rename`: `shareId`, `name`, `previous`, `unchanged`. `info`: also `names`; `rootPath`, `baseRevision`, `openConflicts` are `null` when this folder isn't the share. `delete`: also `namesFreed`, `wasIncomplete` (then `markerRevision`, `deletedUtc`, `deletedBy` are `null`). `publish`: `shareId`, `publishId`, `url`, `revision`, `title`, `files`, `bytes`, `copies` (`{put-blob-from-url|blocks-from-url|streamed: n}`), `verified`, `verificationDetail`, `shellCommand`, `powerShellCommand`, `skipped`, `warnings`. `publications`: `shareId`, `publications` (`id`, `status` pending|published|failed, `title`, `revision`, `files`, `bytes`, `createdUtc`, `createdBy`, `publishAccount`, `url`, `siteAssetsVersion`). `unpublish`: `publishId`, `url`, `blobsDeleted`. `delete` also has `publicationsRemoved`. A failure: `{ "error": { code, description, details? }, exitCode }`.
 - When the terminal can't redraw, no animated progress (see §4).
 - Messages say what happened and what to do next. No stack traces unless `--verbose`.
 
@@ -893,12 +920,12 @@ Every test project is xUnit v3 on the Microsoft Testing Platform with Shouldly, 
 | `MySync.Domain.UnitTests` (`tests/mysync/domain-unit-tests/`) | `type:unit-test` | `MergePlanner`, `SharePath` / `PathRules`, `MassDeleteGuard`, `ShareLayout`, value objects | none (pure) |
 | `MySync.Application.UnitTests` (`tests/mysync/application-unit-tests/`) | `type:unit-test` | Handlers, validators, `SyncPipeline`, `RemoteCommitter`, decorators | `InMemoryShareStore`, `InMemoryLocalFolder`, NSubstitute for single-failure cases |
 | `MySync.Infrastructure.UnitTests` (`tests/mysync/infrastructure-unit-tests/`) | `type:unit-test` | `LocalFolderContractTests` on disk, `LocalFolder`, `FileScanner`, `Sha256ContentHasher`, hash cache, `JsonShareStateStore`, `FolderLock`, `FileConflictLog` rotation, `GitIgnoreMatcher` (against `git`), `ManifestSerializer` (exact JSON pinned), `PublicationRegistrySerializer` (pinned), `SiteDataContractTests` (generated `site-data.js` against the site's JSON Schema, escaping), `DownloadScriptExecutionTests` (the generated `download.sh` run with real `sh` + `curl` on hostile names), and `DiskSyncTests`: the real pipeline over two temp folders with `InMemoryShareStore` | real temp directories (`TempShareFolder`), `git`, `sh`, `curl` |
-| `MySync.Storage.Azure.IntegrationTests` (`tests/mysync/storage-azure-integration-tests/`) | `type:integration-test` | `AzureBlobShareStore` against **Azurite**, plus the `IShareStore` **contract suite**; `AzureStaticWebsitePublishTarget` on Azurite's publishing accounts (static website check, headers stored, `If-None-Match` root files, server-side copies incl. multi-block, prefix delete, configuration errors, no key in errors or logs) | Azurite (four accounts) |
+| `MySync.Storage.Azure.IntegrationTests` (`tests/mysync/storage-azure-integration-tests/`) | `type:integration-test` | `AzureBlobShareStore` against **Azurite**, plus the `IShareStore` **contract suite**; `AzureAliasStore` with the `IAliasStore` contract suite and Azure-only cases (blob shape, damaged and stray aliases, no container); `AzureStaticWebsitePublishTarget` on Azurite's publishing accounts (static website check, headers stored, `If-None-Match` root files, server-side copies incl. multi-block, prefix delete, configuration errors, no key in errors or logs) | Azurite (four accounts) |
 | `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + Azure) with two temp folders as two "machines"; `Cli/CliTests` runs the **built `mysync` as a process** (`CliProcess`, fresh environment, stdin closed) for exit codes, stdout/stderr, `--json` and the no-terminal prompt rule; `PublishingTests` publish, unpublish and delete with the real embedded site | Azurite |
 | `MySync.ArchitectureTests` (`tests/mysync/architecture-tests/`) | `type:architecture-test` | The dependency rules in §3 | none |
 | `MySync.SiteAssets.UnitTests` (`tests/mysync/site-assets-unit-tests/`) | `type:unit-test`, `requires:site-build` | The embedded set is exactly the four site files plus the three root files, `index.html` loads `./site-data.js` then `./assets/app.js`, content types, the version digest, placeholder detection, and the embedded bytes equal `dist/apps/mysync-site` | the real site build (fails with advice if the placeholder is embedded) |
 | `mysync-site` (`apps/mysync-site`, Vitest) | `type:web` | Rendering from the fixture, search, hash navigation, URL encoding of awkward names, the theme switcher, the error states, the build-output check, and the fixture against the schema | jsdom, `public/site-data.js` |
-| `MySync.Testing` (`tests/mysync/testing/`) | `type:lib` | **Not a test project.** Shared fakes and builders: `InMemoryShareStore`, `InMemoryLocalFolder` (also a simple `IFileScanner`; `ExecutableBitSupported = false` simulates Windows), `PathListIgnoreMatcher`, `ManifestBuilder` (real hashes + their bytes), `ManifestAssertions.ShouldMatchManifest`, `TempShareFolder`, `FixedDateTimeProvider`, `InstantTimeProvider`, `RecordingSyncProgressReporter`, `InMemoryShareStateStore`, `InMemoryFolderLock`, `RecordingConflictLog`, `FixedMachineIdentity`, `FixedIgnoreRulesLoader`, `TestContentHasher`, `FailingStream` (throws `IOException` partway), `InMemorySiteAssetSource`, `InMemoryPublishTarget` (blobs + headers + an operation log, failure and race hooks), `InMemoryPublicationVerifier`, `TestSiteDataSerializer`, `NoReleases` / `NotInstalled`, and the abstract contract suites `Contracts/ShareStoreContractTests` and `Contracts/LocalFolderContractTests` | |
+| `MySync.Testing` (`tests/mysync/testing/`) | `type:lib` | **Not a test project.** Shared fakes and builders: `InMemoryShareStore`, `InMemoryLocalFolder` (also a simple `IFileScanner`; `ExecutableBitSupported = false` simulates Windows), `PathListIgnoreMatcher`, `ManifestBuilder` (real hashes + their bytes), `ManifestAssertions.ShouldMatchManifest`, `TempShareFolder`, `FixedDateTimeProvider`, `InstantTimeProvider`, `RecordingSyncProgressReporter`, `InMemoryShareStateStore`, `InMemoryFolderLock`, `RecordingConflictLog`, `FixedMachineIdentity`, `FixedIgnoreRulesLoader`, `TestContentHasher`, `FailingStream` (throws `IOException` partway), `InMemoryAliasStore` (with race, failure, re-point and listing hooks), `InMemorySiteAssetSource`, `InMemoryPublishTarget` (blobs + headers + an operation log, failure and race hooks), `InMemoryPublicationVerifier`, `TestSiteDataSerializer`, `NoReleases` / `NotInstalled`, and the abstract contract suites `Contracts/ShareStoreContractTests`, `Contracts/AliasStoreContractTests` and `Contracts/LocalFolderContractTests` | |
 
 ### Conventions
 

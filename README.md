@@ -28,8 +28,9 @@ Sync folders between machines through an Azure Blob Storage container. There is 
 state lives in the container, and each folder's own state lives in a `.mysynctool` file inside it.
 
 ```text
-mysync sync            # in a folder: create a new share (prints its ID), or two-way sync an existing one
-mysync sync <shareId>  # in an empty folder: clone a share
+mysync sync --name next-wave   # in a folder: create a new share called next-wave
+mysync sync next-wave          # in an empty folder, on another machine: clone it
+mysync sync                    # from then on, in either folder: two-way sync
 ```
 
 - **Two-way and hash-based.** Changes are found by SHA-256, not timestamps. An executable-bit change syncs too.
@@ -193,13 +194,13 @@ The connection string is a secret. Anyone who has it can read and change every s
 ```bash
 # Machine A, in the folder you want to share
 cd ~/projects/report
-mysync sync
-#   Created share 0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10 (142 files, 38.2 MB)
-#   Share it with:  mysync sync 0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10
+mysync sync --name q3-report
+#   Created share q3-report (0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10): 142 files, 38.2 MB
+#   Share it with:  mysync sync q3-report
 
 # Machine B, in an empty folder
 mkdir ~/report && cd ~/report
-mysync sync 0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10
+mysync sync q3-report
 
 # From then on, on either machine, inside the folder
 mysync sync
@@ -211,14 +212,17 @@ Each `mysync sync` uploads what changed here and downloads what changed there. I
 
 | Command | What it does |
 | --- | --- |
-| `mysync sync` | Create a share from this folder, or two-way sync it if it already is one. |
-| `mysync sync <shareId>` | Clone a share into this (empty) folder. |
+| `mysync sync --name <name>` | Create a share from this folder, with that name. |
+| `mysync sync` | Two-way sync this folder's share. |
+| `mysync sync <name>` | Clone a share into this (empty) folder, by its name (or its share ID). |
+| `mysync shares` | List every named share: its name and share ID. |
+| `mysync rename <name>` | Give this folder's share a new name (or a first one, for a share from an older version). |
 | `mysync status` | Show what `sync` would do, plus conflicts and warnings. Changes nothing. |
-| `mysync info` | The share ID, storage, this folder's revision against the share's, file count and size, open conflicts. |
+| `mysync info [<name>]` | The share's names and ID, storage, this folder's revision against the share's, file count and size, open conflicts. |
 | `mysync conflicts` | List open conflicts: path, kind, both versions, and who changed the share. Works offline. |
 | `mysync resolve <path>... --keep local\|remote` | Decide conflicts. `--all` instead of paths decides every one. |
 | `mysync gc` | Delete stored files no recent revision uses, and old history. |
-| `mysync delete [<shareId>] --yes` | Delete a share for every machine: its stored files, history and publications. Local files stay. |
+| `mysync delete [<name>] --yes` | Delete a share for every machine: its stored files, history and publications, and free its name. Local files stay. |
 | `mysync publish` | Publish a snapshot of the share as a read-only website anyone with the link can browse and download from. |
 | `mysync publications` | List the share's publications and their links. |
 | `mysync unpublish <id>` | Take a publication down; its link stops working at once. |
@@ -231,6 +235,7 @@ Options for `sync`:
 - `--no-delete`: delete nothing, here or in the share; deletions wait for a later run.
 - `--allow-mass-delete`: see [Safety checks](#safety-checks).
 - `-y, --yes`: don't ask before creating a large share.
+- `--name <name>`: the new share's name (required when creating one; ignored, with a warning, in a folder that's already a share).
 - `--force`: create a share in your home folder or a drive root, or clone into a folder that isn't empty.
 
 Options for `resolve`: `--all`, `-n, --dry-run`.
@@ -246,6 +251,18 @@ Every command also takes:
 - `--json`: one JSON document on stdout.
 - `--verbose` / `--quiet`: more or less logging, on stderr.
 - `--parallel <n>`: concurrent transfers for this run.
+
+## Names
+
+Every share has a name, like `q3-report`, so you can type `mysync sync q3-report` on a server instead of a long share ID. Anywhere mysync asks for a share (`sync`, `info`, `delete`, `--share`), the name and the share ID both work.
+
+- **Required and unique.** `mysync sync` in a new folder asks for one, and suggests a name from the folder's name. No two shares can have the same name; mysync says which share already has it.
+- **Lowercase letters, digits and `-`**, 3 to 40 characters, starting and ending with a letter or digit. Capitals are lowercased (`Q3-Report` is `q3-report`). A name can't look like a share ID.
+- **`mysync shares`** lists every name with its share ID.
+- **`mysync rename <name>`** gives a share a new name (the old one is freed), or names a share created by an older version of mysync.
+- **Deleting a share frees its name**, whether you deleted it by name or by ID, so the name can be used again.
+- **If creating a share was interrupted**, its name is taken but the share was never finished. `mysync shares` still lists it; `mysync delete <name> --yes` removes it and frees the name.
+- **Storage lifecycle rules:** names are small blobs under `aliases/` in the container. A rule such as "delete blobs 90 days after creation" deletes them too: the name disappears from `mysync shares`, stops working, and someone else could claim it, while the share itself may live on. When you write lifecycle rules, include or exclude `aliases/` on purpose.
 
 ## Conflicts
 
@@ -429,11 +446,11 @@ With `--json`, every command prints exactly one JSON document on stdout, even wh
 | 1 | Unexpected error (details with `--verbose`) |
 | 2 | Usage or configuration error (bad option, missing or invalid environment variable, `resolve` on a path not in conflict, the publishing account's static website is off) |
 | 3 | Finished, but conflicts are open (takes precedence over 9) |
-| 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; `update` can't replace this binary |
+| 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; the name is taken; `update` can't replace this binary |
 | 5 | Another machine kept committing; try again |
 | 6 | Another mysync is working in this folder |
 | 7 | The mass-delete safety check stopped the sync |
-| 8 | Share not found or deleted, the storage account rejected the credentials, or no such release or publication |
+| 8 | Share not found, deleted, never finished, or no share has that name; the storage account rejected the credentials; or no such release or publication |
 | 9 | Finished, but some paths were skipped (busy, unreadable, invalid name) |
 | 10 | Published, but the publication couldn't be opened from the internet (check `MYSYNC_PUBLISH_BASE_URL`) |
 | 130 | Cancelled (Ctrl+C) |

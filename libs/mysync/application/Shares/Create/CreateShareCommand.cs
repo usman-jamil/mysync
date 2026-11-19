@@ -15,6 +15,7 @@ using MySync.Domain.Manifests;
 using MySync.Domain.Paths;
 using MySync.Domain.Shares;
 using MySync.Domain.State;
+using MySync.Domain.Storage;
 using SharedKernel;
 
 namespace MySync.Application.Shares.Create;
@@ -23,8 +24,10 @@ namespace MySync.Application.Shares.Create;
 /// <c>mysync sync</c> in a folder with no <c>.mysynctool</c> (CLAUDE.md §9): a new share from
 /// everything in the folder. Confirmation for large folders happens in the command, before this.
 /// </summary>
+/// <param name="Name">Required: the share's name (<c>--name</c>). Claimed before anything is scanned or uploaded.</param>
 /// <param name="Force">Allow the home directory or a drive root.</param>
 public sealed record CreateShareCommand(
+    ShareName? Name = null,
     bool Force = false,
     int? Parallelism = null,
     ISyncProgressReporter? Progress = null) : ICommand<CreateShareResponse>;
@@ -32,6 +35,7 @@ public sealed record CreateShareCommand(
 /// <param name="FileCount">Files in the new share (skipped ones excluded).</param>
 public sealed record CreateShareResponse(
     ShareId ShareId,
+    ShareName Name,
     int FileCount,
     long TotalBytes,
     TransferTotals Uploaded,
@@ -52,6 +56,7 @@ internal sealed class CreateShareCommandHandler(
     IIgnoreRulesLoader ignoreRules,
     IMachineIdentity machine,
     IDateTimeProvider clock,
+    IAliasStore aliases,
     ObjectTransfers transfers,
     RemoteCommitter committer,
     SyncOptions options,
@@ -86,6 +91,12 @@ internal sealed class CreateShareCommandHandler(
             return Result.Failure<CreateShareResponse>(ShareErrors.UnsafeRoot(folder.RootPath));
         }
 
+        // A name is required, and nothing is scanned or uploaded without one.
+        if (command.Name is not { } name)
+        {
+            return Result.Failure<CreateShareResponse>(ShareErrors.NameRequired(ShareName.SuggestFrom(Path.GetFileName(folder.RootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)))));
+        }
+
         Result<StorageLocation> location = store.GetLocation();
         if (location.IsFailure)
         {
@@ -96,6 +107,15 @@ internal sealed class CreateShareCommandHandler(
         if (ready.IsFailure)
         {
             return Result.Failure<CreateShareResponse>(ready.Error);
+        }
+
+        // The name first: claiming it is the uniqueness check (If-None-Match: *). If anything after this
+        // fails or is cancelled, the name stays and the share shows up as incomplete (delete frees it).
+        var shareId = ShareId.New();
+        Result claimed = await ClaimAsync(name, shareId, cancellationToken);
+        if (claimed.IsFailure)
+        {
+            return Result.Failure<CreateShareResponse>(claimed.Error);
         }
 
         await folder.CleanStagingAsync(cancellationToken);
@@ -120,7 +140,6 @@ internal sealed class CreateShareCommandHandler(
         }
 
         ScannedFolder scan = scanned.Value;
-        var shareId = ShareId.New();
         List<string> warnings = [.. PathRules.FindCaseCollisions(scan.Entries.Keys).Select(collision =>
             $"These local paths differ only in case and will clash on Windows and macOS: {string.Join(", ", collision.Spellings.Select(PathErrors.Display))}")];
 
@@ -169,6 +188,38 @@ internal sealed class CreateShareCommandHandler(
             .Concat(upload.Failed.Values)
             .OrderBy(skip => skip.Path, StringComparer.Ordinal)];
 
-        return new CreateShareResponse(shareId, manifest.Value.FileCount, manifest.Value.TotalSize, upload.Uploaded, skipped, [.. warnings]);
+        return new CreateShareResponse(shareId, name, manifest.Value.FileCount, manifest.Value.TotalSize, upload.Uploaded, skipped, [.. warnings]);
+    }
+
+    // Taken: say by which share. If it was freed between the claim and the read, try once more.
+    private async Task<Result> ClaimAsync(ShareName name, ShareId shareId, CancellationToken cancellationToken)
+    {
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            Result<string> created = await aliases.CreateAsync(
+                new AliasRecord(name, shareId, new DateTimeOffset(clock.UtcNow, TimeSpan.Zero), machine.Name), cancellationToken);
+            if (created.IsSuccess)
+            {
+                return Result.Success();
+            }
+
+            if (created.Error.Code != "Storage.AlreadyExists")
+            {
+                return Result.Failure(created.Error);
+            }
+
+            Result<AliasSnapshot?> holder = await aliases.GetAsync(name, cancellationToken);
+            if (holder.IsFailure)
+            {
+                return Result.Failure(holder.Error);
+            }
+
+            if (holder.Value is { } taken)
+            {
+                return Result.Failure(ShareErrors.NameTaken(name, taken.Alias.ShareId));
+            }
+        }
+
+        return Result.Failure(StorageErrors.PreconditionFailed(Domain.Storage.ShareLayout.Alias(name)));
     }
 }

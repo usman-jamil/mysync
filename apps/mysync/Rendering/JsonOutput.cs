@@ -12,6 +12,8 @@ using MySync.Application.Publishing.Unpublish;
 using MySync.Application.Shares.Create;
 using MySync.Application.Shares.Delete;
 using MySync.Application.Shares.GetInfo;
+using MySync.Application.Shares.List;
+using MySync.Application.Shares.Rename;
 using MySync.Application.Shares.Preview;
 using MySync.Application.Sync.Run;
 using MySync.Domain.Manifests;
@@ -67,12 +69,13 @@ internal static class JsonOutput
             new CreateJson(
                 "create",
                 created.ShareId.ToString(),
+                created.Name.Value,
                 created.FileCount,
                 created.TotalBytes,
                 Totals(created.Uploaded),
                 [.. created.Skipped.Select(skip => new SkippedJson(skip.Path, CauseCode(skip.Cause), skip.Detail))],
                 [.. created.Warnings],
-                $"mysync sync {created.ShareId}",
+                $"mysync sync {created.Name}",
                 exitCode),
             Context.CreateJson);
         return exitCode;
@@ -102,11 +105,12 @@ internal static class JsonOutput
             new InfoJson(
                 "info",
                 info.ShareId.ToString(),
+                [.. info.Names.Select(name => name.Value)],
                 info.RootPath,
                 info.Location.Provider,
                 info.Location.AccountName,
                 info.Location.Container,
-                info.BaseRevision.Value,
+                info.BaseRevision?.Value,
                 info.RemoteRevision.Value,
                 info.RemoteUpdatedBy,
                 Utc(info.RemoteUpdatedUtc),
@@ -127,10 +131,12 @@ internal static class JsonOutput
             new DeleteJson(
                 "delete",
                 deleted.ShareId.ToString(),
-                deleted.MarkerRevision.Value,
-                Utc(deleted.Deletion.DeletedUtc),
-                deleted.Deletion.DeletedBy,
+                deleted.MarkerRevision?.Value,
+                deleted.Deletion is { } deletion ? Utc(deletion.DeletedUtc) : null,
+                deleted.Deletion?.DeletedBy,
                 deleted.WasAlreadyDeleted,
+                deleted.WasIncomplete,
+                [.. deleted.NamesFreed.Select(name => name.Value)],
                 deleted.ObjectsDeleted,
                 deleted.BytesDeleted,
                 deleted.HistoryRevisionsSwept,
@@ -196,6 +202,30 @@ internal static class JsonOutput
                     publication.SiteAssetsVersion))],
                 exitCode),
             Context.PublicationsJson);
+        return exitCode;
+    }
+
+    public static int Write(ShareListResponse listed, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(listed);
+
+        Emit(
+            new ShareListJson(
+                "shares",
+                [.. listed.Shares.Select(alias => new ShareJson(alias.Name.Value, alias.ShareId.ToString(), Utc(alias.CreatedUtc), alias.CreatedBy))],
+                [.. listed.Warnings],
+                exitCode),
+            Context.ShareListJson);
+        return exitCode;
+    }
+
+    public static int Write(RenameShareResponse renamed, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(renamed);
+
+        Emit(
+            new RenameJson("rename", renamed.ShareId.ToString(), renamed.Name.Value, [.. renamed.Previous.Select(name => name.Value)], renamed.Unchanged, exitCode),
+            Context.RenameJson);
         return exitCode;
     }
 
@@ -370,27 +400,30 @@ internal sealed record ConflictListJson(string Command, string ShareId, List<Con
 internal sealed record InfoJson(
     string Command,
     string ShareId,
-    string RootPath,
+    List<string> Names,
+    string? RootPath,
     string Provider,
     string AccountName,
     string Container,
-    long BaseRevision,
+    long? BaseRevision,
     long RemoteRevision,
     string RemoteUpdatedBy,
     string RemoteUpdatedUtc,
     string CreatedUtc,
     int FileCount,
     long TotalBytes,
-    int OpenConflicts,
+    int? OpenConflicts,
     int ExitCode);
 
 internal sealed record DeleteJson(
     string Command,
     string ShareId,
-    long MarkerRevision,
-    string DeletedUtc,
-    string DeletedBy,
+    long? MarkerRevision,
+    string? DeletedUtc,
+    string? DeletedBy,
     bool WasAlreadyDeleted,
+    bool WasIncomplete,
+    List<string> NamesFreed,
     int ObjectsDeleted,
     long BytesDeleted,
     long HistoryRevisionsSwept,
@@ -433,6 +466,12 @@ internal sealed record PublicationJson(
 
 internal sealed record PublicationsJson(string Command, string ShareId, List<PublicationJson> Publications, int ExitCode);
 
+internal sealed record ShareJson(string Name, string ShareId, string CreatedUtc, string CreatedBy);
+
+internal sealed record ShareListJson(string Command, List<ShareJson> Shares, List<string> Warnings, int ExitCode);
+
+internal sealed record RenameJson(string Command, string ShareId, string Name, List<string> Previous, bool Unchanged, int ExitCode);
+
 internal sealed record UnpublishJson(string Command, string ShareId, string PublishId, string Url, int BlobsDeleted, int ExitCode);
 
 internal sealed record UpdateJson(
@@ -465,6 +504,7 @@ internal sealed record GcJson(
 internal sealed record CreateJson(
     string Command,
     string ShareId,
+    string Name,
     int FileCount,
     long TotalBytes,
     TotalsJson Uploaded,
@@ -495,4 +535,6 @@ internal sealed record FailureJson(ErrorJson Error, int ExitCode);
 [JsonSerializable(typeof(PublishJson))]
 [JsonSerializable(typeof(PublicationsJson))]
 [JsonSerializable(typeof(UnpublishJson))]
+[JsonSerializable(typeof(ShareListJson))]
+[JsonSerializable(typeof(RenameJson))]
 internal sealed partial class CliJsonContext : JsonSerializerContext;

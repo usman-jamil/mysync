@@ -61,6 +61,18 @@ internal sealed class CommandRunner(IServiceProvider services, GlobalOptions opt
         return await scope.ServiceProvider.GetRequiredService<IQueryHandler<TQuery, TResponse>>().Handle(query, cancellationToken);
     }
 
+    /// <summary>What was typed where a share is expected: a share ID or a name (exit 2 if it's neither). <c>null</c> stays <c>null</c>.</summary>
+    public static Result<Domain.Shares.ShareReference?> ParseShare(string? text)
+    {
+        if (text is null)
+        {
+            return Result.Success<Domain.Shares.ShareReference?>(null);
+        }
+
+        Result<Domain.Shares.ShareReference> parsed = Domain.Shares.ShareReference.Parse(text);
+        return parsed.IsSuccess ? parsed.Value : Result.Failure<Domain.Shares.ShareReference?>(parsed.Error);
+    }
+
     /// <summary>Writes the failure and returns its exit code.</summary>
     public int Fail(Error error)
     {

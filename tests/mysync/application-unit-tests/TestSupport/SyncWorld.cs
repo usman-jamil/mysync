@@ -26,6 +26,8 @@ using MySync.Testing;
 using SharedKernel;
 using Shouldly;
 using Xunit;
+using MySync.Application.Shares.Rename;
+using MySync.Application.Shares.List;
 using MySync.Application.Publishing.List;
 using MySync.Application.Publishing.Publish;
 using MySync.Application.Publishing.Unpublish;
@@ -44,6 +46,14 @@ internal sealed class SyncWorld
     public InstantTimeProvider Time { get; } = new();
 
     public InMemoryShareStore Store { get; }
+
+    /// <summary>Share names, shared by every machine like the store.</summary>
+    public InMemoryAliasStore Aliases { get; } = new();
+
+    private int _names;
+
+    /// <summary>A fresh, unused name, for tests that create shares without caring what they're called.</summary>
+    public ShareName NextName() => ShareName.Create($"share-{Interlocked.Increment(ref _names):D3}").Value;
 
     /// <summary>Parallelism 1 by default, so progress sequences are deterministic.</summary>
     public SyncOptions Options { get; set; } = new() { MaxParallelism = 1 };
@@ -90,9 +100,11 @@ internal sealed class SyncWorld
 internal sealed class Machine
 {
     private readonly ServiceProvider _services;
+    private readonly SyncWorld _world;
 
     public Machine(SyncWorld world, string name, InMemoryLocalFolder folder)
     {
+        _world = world;
         Name = name;
         Folder = folder;
 
@@ -100,6 +112,7 @@ internal sealed class Machine
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton<IShareStore>(world.Store);
+        services.AddSingleton<IAliasStore>(world.Aliases);
         services.AddSingleton<ILocalFolder>(folder);
         services.AddSingleton<IFileScanner>(folder);
         services.AddSingleton<IShareStateStore>(State);
@@ -137,11 +150,26 @@ internal sealed class Machine
 
     public Task<Result<NewSharePreview>> PreviewAsync() => Query<PreviewNewShareQuery, NewSharePreview>(new PreviewNewShareQuery());
 
+    /// <summary>Creates a share; without a name in <paramref name="command"/>, a fresh one is made up.</summary>
     public Task<Result<CreateShareResponse>> CreateAsync(CreateShareCommand? command = null) =>
-        Send<CreateShareCommand, CreateShareResponse>(command ?? new CreateShareCommand());
+        Send<CreateShareCommand, CreateShareResponse>((command ?? new CreateShareCommand()) is { Name: null } unnamed ? unnamed with { Name = _world.NextName() } : command!);
+
+    /// <summary>Creates a share with the command exactly as given (e.g. no name).</summary>
+    public Task<Result<CreateShareResponse>> CreateExactlyAsync(CreateShareCommand command) => Send<CreateShareCommand, CreateShareResponse>(command);
 
     public Task<Result<SyncReport>> CloneAsync(ShareId shareId, bool force = false) =>
-        Send<CloneShareCommand, SyncReport>(new CloneShareCommand(shareId.ToString(), force));
+        Send<CloneShareCommand, SyncReport>(new CloneShareCommand(ShareReference.For(shareId), force));
+
+    public Task<Result<SyncReport>> CloneAsync(string shareOrName, bool force = false) =>
+        Send<CloneShareCommand, SyncReport>(new CloneShareCommand(ShareReference.Parse(shareOrName).Value, force));
+
+    public Task<Result<RenameShareResponse>> RenameAsync(string newName) =>
+        Send<RenameShareCommand, RenameShareResponse>(new RenameShareCommand(ShareName.Create(newName).Value));
+
+    public Task<Result<ShareListResponse>> SharesAsync() => Query<ListSharesQuery, ShareListResponse>(new ListSharesQuery());
+
+    public Task<Result<ShareInfoResponse>> InfoAsync(string shareOrName) =>
+        Query<GetShareInfoQuery, ShareInfoResponse>(new GetShareInfoQuery(ShareReference.Parse(shareOrName).Value));
 
     public Task<Result<SyncReport>> CloneAsync(CloneShareCommand command) => Send<CloneShareCommand, SyncReport>(command);
 
@@ -158,17 +186,17 @@ internal sealed class Machine
 
     public Task<Result<SyncReport>> ResolveAsync(ResolveConflictsCommand command) => Send<ResolveConflictsCommand, SyncReport>(command);
 
-    public Task<Result<DeleteShareResponse>> DeleteAsync(string? shareId = null) =>
-        Send<DeleteShareCommand, DeleteShareResponse>(new DeleteShareCommand(shareId));
+    public Task<Result<DeleteShareResponse>> DeleteAsync(string? shareOrName = null) =>
+        Send<DeleteShareCommand, DeleteShareResponse>(new DeleteShareCommand(Reference(shareOrName)));
 
     public Task<Result<PublishReport>> PublishAsync(PublishShareCommand? command = null, CancellationToken? cancellationToken = null) =>
         Send<PublishShareCommand, PublishReport>(command ?? new PublishShareCommand(), cancellationToken);
 
     public Task<Result<PublicationListResponse>> PublicationsAsync(string? shareId = null) =>
-        Query<ListPublicationsQuery, PublicationListResponse>(new ListPublicationsQuery(shareId));
+        Query<ListPublicationsQuery, PublicationListResponse>(new ListPublicationsQuery(Reference(shareId)));
 
     public Task<Result<UnpublishReport>> UnpublishAsync(string publishId, string? shareId = null) =>
-        Send<UnpublishCommand, UnpublishReport>(new UnpublishCommand(publishId, shareId));
+        Send<UnpublishCommand, UnpublishReport>(new UnpublishCommand(publishId, Reference(shareId)));
 
     public Task<Result<GarbageReport>> GcAsync(CollectGarbageCommand? command = null) =>
         Send<CollectGarbageCommand, GarbageReport>(command ?? new CollectGarbageCommand());
@@ -176,6 +204,8 @@ internal sealed class Machine
     /// <summary>Text of every file in the folder, by path.</summary>
     public IReadOnlyDictionary<string, string> Files() =>
         Folder.AllPaths.Where(path => !Folder.IsDirectory(path)).ToDictionary(path => path, Folder.ReadText, StringComparer.Ordinal);
+
+    private static ShareReference? Reference(string? shareOrName) => shareOrName is null ? null : ShareReference.Parse(shareOrName).Value;
 
     private async Task<Result<TResponse>> Send<TCommand, TResponse>(TCommand command, CancellationToken? cancellationToken = null)
         where TCommand : ICommand<TResponse>

@@ -11,7 +11,7 @@ namespace MySync.Application.Publishing.Unpublish;
 /// <c>mysync unpublish &lt;publishId&gt; [--share &lt;id&gt;]</c>: <c>index.html</c> first (the link dies
 /// at once), then the rest of the publication, then its record.
 /// </summary>
-public sealed record UnpublishCommand(string PublishId, string? ShareId = null) : ICommand<UnpublishReport>;
+public sealed record UnpublishCommand(string PublishId, ShareReference? Share = null) : ICommand<UnpublishReport>;
 
 public sealed record UnpublishReport(ShareId ShareId, PublishId PublishId, string Url, int BlobsDeleted);
 
@@ -24,10 +24,6 @@ internal sealed class UnpublishCommandValidator : AbstractValidator<UnpublishCom
             .WithErrorCode(PublishErrors.InvalidId().Code)
             .WithMessage(PublishErrors.InvalidId().Description);
 
-        RuleFor(command => command.ShareId)
-            .Must(id => id is null || Domain.Shares.ShareId.TryParse(id, out _))
-            .WithErrorCode(ShareErrors.InvalidId().Code)
-            .WithMessage(ShareErrors.InvalidId().Description);
     }
 }
 
@@ -37,7 +33,7 @@ internal sealed class UnpublishCommandHandler(
 {
     public async Task<Result<UnpublishReport>> Handle(UnpublishCommand command, CancellationToken cancellationToken)
     {
-        Result<ResolvedShare> resolved = await share.ResolveAsync(command.ShareId, cancellationToken);
+        Result<PublishingTarget> resolved = await share.ResolveAsync(command.Share, cancellationToken);
         if (resolved.IsFailure)
         {
             return Result.Failure<UnpublishReport>(resolved.Error);

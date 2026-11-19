@@ -40,11 +40,11 @@ internal static class ExitCodes
         return error.Code switch
         {
             _ when error.Code.StartsWith("Configuration.", StringComparison.Ordinal) => UsageOrConfiguration,
-            "Shares.FolderNotEmpty" or "Shares.AlreadyAShare" or "Shares.NotAShare" or "Shares.UnsafeRoot" => FolderPrecondition,
+            "Shares.FolderNotEmpty" or "Shares.AlreadyAShare" or "Shares.NotAShare" or "Shares.UnsafeRoot" or "Shares.NameTaken" => FolderPrecondition,
             "Sync.CommitRetriesExhausted" or "Sync.ShareChangedDuringGc" => CommitRetriesExhausted,
             "State.FolderLocked" => FolderLocked,
             "Sync.MassDeleteBlocked" => MassDeleteBlocked,
-            "Shares.NotFound" or "Shares.Deleted" or "Storage.Unauthorized" => NotFoundOrUnauthorized,
+            "Shares.NotFound" or "Shares.Deleted" or "Shares.NameNotFound" or "Shares.Incomplete" or "Storage.Unauthorized" => NotFoundOrUnauthorized,
             "Update.ReleaseNotFound" or "Update.NoBuildForPlatform" => NotFoundOrUnauthorized,
             "Update.NotWritable" or "Update.NotInstalledBinary" => FolderPrecondition,
             "Publish.NotFound" or "Publish.RevisionNotFound" or "Publish.Unauthorized" or "Publish.CannotReadServiceProperties" => NotFoundOrUnauthorized,

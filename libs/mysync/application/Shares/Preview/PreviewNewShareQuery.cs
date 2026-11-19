@@ -13,7 +13,11 @@ namespace MySync.Application.Shares.Preview;
 /// and if not, how big would the new one be (counts only, no hashing). The command uses it to
 /// pick the flow and to decide whether to ask for confirmation (CLAUDE.md §9).
 /// </summary>
-public sealed record PreviewNewShareQuery : IQuery<NewSharePreview>;
+/// <param name="CountFiles">
+/// False to only answer "is this already a share?" (no walk of the folder): the command asks that
+/// first when a new share couldn't be created anyway (no <c>--name</c>), so it fails at once.
+/// </param>
+public sealed record PreviewNewShareQuery(bool CountFiles = true) : IQuery<NewSharePreview>;
 
 /// <param name="ExistingShareId">Set if the folder already has a <c>.mysynctool</c>: run a sync instead.</param>
 /// <param name="IsUnsafeRoot">Home directory or a drive root: creating needs <c>--force</c>.</param>
@@ -38,6 +42,11 @@ internal sealed class PreviewNewShareQueryHandler(
         if (state.Value is { } existing)
         {
             return new NewSharePreview(existing.ShareId, folder.RootPath, folder.IsUnsafeRoot, 0, 0);
+        }
+
+        if (!query.CountFiles)
+        {
+            return new NewSharePreview(null, folder.RootPath, folder.IsUnsafeRoot, 0, 0);
         }
 
         Result<IIgnoreMatcher> ignore = await ignoreRules.LoadAsync(cancellationToken);

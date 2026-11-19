@@ -13,7 +13,7 @@ internal sealed class PublishCommands(CommandRunner runner)
     /// <summary>
     /// Publish a snapshot of this share as a public, read-only website anyone with the link can browse and download from.
     /// </summary>
-    /// <param name="share">The share to publish (default: this folder's).</param>
+    /// <param name="share">The share to publish, by name or ID (default: this folder's).</param>
     /// <param name="revision">A revision from the share's history (default: the latest).</param>
     /// <param name="title">The page's title (default: this folder's name).</param>
     /// <param name="cancellationToken">Ctrl+C.</param>
@@ -21,6 +21,12 @@ internal sealed class PublishCommands(CommandRunner runner)
     public Task<int> Publish(string? share = null, long? revision = null, string? title = null, CancellationToken cancellationToken = default) =>
         runner.RunAsync(async () =>
         {
+            Result<Domain.Shares.ShareReference?> reference = CommandRunner.ParseShare(share);
+            if (reference.IsFailure)
+            {
+                return runner.Fail(reference.Error);
+            }
+
             Result settings = runner.CheckStorage();
             if (settings.IsSuccess)
             {
@@ -33,7 +39,7 @@ internal sealed class PublishCommands(CommandRunner runner)
             }
 
             Result<PublishReport> published = await runner.SendAsync<PublishShareCommand, PublishReport>(
-                new PublishShareCommand(share, revision, title, runner.Options.Parallel), cancellationToken);
+                new PublishShareCommand(reference.Value, revision, title, runner.Options.Parallel), cancellationToken);
             if (published.IsFailure)
             {
                 return runner.Fail(published.Error);
@@ -50,12 +56,18 @@ internal sealed class PublishCommands(CommandRunner runner)
         }, cancellationToken);
 
     /// <summary>List this share's publications: ID, status, URL, revision, when, files and size.</summary>
-    /// <param name="share">The share (default: this folder's).</param>
+    /// <param name="share">The share, by name or ID (default: this folder's).</param>
     /// <param name="cancellationToken">Ctrl+C.</param>
     [Command("publications")]
     public Task<int> Publications(string? share = null, CancellationToken cancellationToken = default) =>
         runner.RunAsync(async () =>
         {
+            Result<Domain.Shares.ShareReference?> reference = CommandRunner.ParseShare(share);
+            if (reference.IsFailure)
+            {
+                return runner.Fail(reference.Error);
+            }
+
             Result settings = runner.CheckStorage();
             if (settings.IsFailure)
             {
@@ -63,7 +75,7 @@ internal sealed class PublishCommands(CommandRunner runner)
             }
 
             Result<PublicationListResponse> listed = await runner.QueryAsync<ListPublicationsQuery, PublicationListResponse>(
-                new ListPublicationsQuery(share), cancellationToken);
+                new ListPublicationsQuery(reference.Value), cancellationToken);
             if (listed.IsFailure)
             {
                 return runner.Fail(listed.Error);
@@ -80,12 +92,18 @@ internal sealed class PublishCommands(CommandRunner runner)
 
     /// <summary>Take a publication down: its link stops working at once, then its files are removed.</summary>
     /// <param name="publishId">The publication's ID, as `mysync publications` lists it.</param>
-    /// <param name="share">The share it belongs to (default: this folder's).</param>
+    /// <param name="share">The share it belongs to, by name or ID (default: this folder's).</param>
     /// <param name="cancellationToken">Ctrl+C.</param>
     [Command("unpublish")]
     public Task<int> Unpublish([Argument] string publishId, string? share = null, CancellationToken cancellationToken = default) =>
         runner.RunAsync(async () =>
         {
+            Result<Domain.Shares.ShareReference?> reference = CommandRunner.ParseShare(share);
+            if (reference.IsFailure)
+            {
+                return runner.Fail(reference.Error);
+            }
+
             Result settings = runner.CheckStorage();
             if (settings.IsSuccess)
             {
@@ -98,7 +116,7 @@ internal sealed class PublishCommands(CommandRunner runner)
             }
 
             Result<UnpublishReport> removed = await runner.SendAsync<UnpublishCommand, UnpublishReport>(
-                new UnpublishCommand(publishId, share), cancellationToken);
+                new UnpublishCommand(publishId, reference.Value), cancellationToken);
             if (removed.IsFailure)
             {
                 return runner.Fail(removed.Error);
