@@ -31,6 +31,7 @@ public class ErrorCatalogTests
         { ShareErrors.NameNotFound(ShareName.Create("next-wave").Value), "Shares.NameNotFound" }, // exit 8
         { ShareErrors.Incomplete(ShareName.Create("next-wave").Value, Share()), "Shares.Incomplete" }, // exit 8
         { StorageErrors.Unauthorized, "Storage.Unauthorized" }, // exit 8
+        { MySync.Domain.Diffing.DiffErrors.VersionNotStored("a.txt", "remote"), "Diff.VersionNotStored" }, // exit 8
     };
 
     [Theory]
@@ -50,6 +51,10 @@ public class ErrorCatalogTests
         ShareErrors.NameRequired(null).Type.ShouldBe(ErrorType.Validation);
         ShareErrors.InvalidName("x").Type.ShouldBe(ErrorType.Validation);
         ShareErrors.InvalidReference().Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Diffing.DiffErrors.PathNotFound("a.txt").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Diffing.DiffErrors.VersionMissing("a.txt", "base").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Diffing.DiffErrors.PrintNeedsOnePath.Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Diffing.DiffErrors.PrintCombined.Type.ShouldBe(ErrorType.Validation);
         PathErrors.Empty().Type.ShouldBe(ErrorType.Validation);
         ConfigurationErrors.Missing("AZURE_STORAGE_CONNECTION_STRING").Type.ShouldBe(ErrorType.Validation);
         ConfigurationErrors.Invalid("MYSYNC_CONTAINER", "too short").Type.ShouldBe(ErrorType.Validation);
