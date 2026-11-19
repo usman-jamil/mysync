@@ -457,6 +457,7 @@ jobs:
           ```
 
           `mysync status` shows what a sync would do, `mysync conflicts` lists what both sides changed,
+          `mysync diff` shows what differs (a patch, with the resolve commands to paste),
           `mysync resolve <path> --keep local|remote` decides one, `mysync info` describes the share,
           `mysync shares` lists every named share, `mysync rename <name>` renames this one,
           `mysync gc` removes stored files no recent revision uses, and `mysync delete --yes` removes a share
