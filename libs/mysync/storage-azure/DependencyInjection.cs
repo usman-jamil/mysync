@@ -30,6 +30,7 @@ public static class DependencyInjection
             });
 
         services.TryAddSingleton<IShareStore, AzureBlobShareStore>();
+        services.TryAddSingleton<IAliasStore, AzureAliasStore>();
         services.TryAddSingleton(TimeProvider.System);
 
         return services;

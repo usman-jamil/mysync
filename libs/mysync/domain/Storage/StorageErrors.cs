@@ -21,6 +21,14 @@ public static class StorageErrors
     public static Error HashMismatch(string blobName) => Error.Problem(
         "Storage.HashMismatch", $"The content uploaded for '{blobName}' does not match its hash; it was not stored.");
 
+    /// <summary>An alias blob whose share ID can't be read (missing or malformed metadata). Reported, not fatal.</summary>
+    public static Error InvalidAlias(string name, string detail) => Error.Problem(
+        "Storage.InvalidAlias", $"The name '{name}' can't be read ({detail}). Delete it with 'mysync delete {name} --yes' or rename its share.");
+
+    /// <summary>A blob under aliases/ whose name isn't a share name. Skipped.</summary>
+    public static Error StrayAlias(string blobName) => Error.Problem(
+        "Storage.StrayAlias", $"'{blobName}' is under aliases/ but isn't a share name; it was skipped.");
+
     public static readonly Error Unauthorized = Error.Problem(
         "Storage.Unauthorized", "The storage account rejected the credentials. Check AZURE_STORAGE_CONNECTION_STRING.");
 

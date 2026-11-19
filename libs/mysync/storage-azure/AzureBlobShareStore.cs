@@ -426,49 +426,10 @@ internal sealed partial class AzureBlobShareStore : IShareStore
     public Task<Result> DeletePublicationsAsync(ShareId shareId, CancellationToken cancellationToken) =>
         DeleteAsync(ShareLayout.For(shareId).Publications, cancellationToken);
 
-    // Azure container names: 3-63 characters, lowercase letters, digits and single hyphens, starting and ending with a letter or digit.
-    [GeneratedRegex("^(?=.{3,63}$)[a-z0-9]+(-[a-z0-9]+)*$", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 1000)]
-    private static partial Regex ContainerName();
-
     private static Result<Connection> Connect(AzureStorageOptions options, AzureTransferSettings settings)
     {
-        if (string.IsNullOrWhiteSpace(options.ConnectionString))
-        {
-            return Result.Failure<Connection>(ConfigurationErrors.Missing(AzureStorageOptions.ConnectionStringVariable));
-        }
-
-        string container = options.Container;
-        if (!ContainerName().IsMatch(container))
-        {
-            return Result.Failure<Connection>(ConfigurationErrors.Invalid(
-                AzureStorageOptions.ContainerVariable,
-                $"'{container}' is not a container name (3-63 lowercase letters, digits and single hyphens)."));
-        }
-
-        BlobClientOptions clientOptions = new()
-        {
-            Retry =
-            {
-                Mode = RetryMode.Exponential,
-                MaxRetries = settings.MaxRetries,
-                Delay = TimeSpan.FromSeconds(0.8),
-                MaxDelay = TimeSpan.FromSeconds(30),
-                NetworkTimeout = settings.NetworkTimeout,
-            },
-        };
-
-        try
-        {
-            BlobServiceClient service = new(options.ConnectionString, clientOptions);
-            string account = string.IsNullOrEmpty(service.AccountName) ? service.Uri.Host : service.AccountName;
-            return new Connection(service.GetBlobContainerClient(container), new StorageLocation(ProviderName, account, container));
-        }
-        catch (Exception exception) when (exception is FormatException or ArgumentException or UriFormatException or InvalidOperationException)
-        {
-            // The SDK's message may quote the connection string, so it is not used.
-            return Result.Failure<Connection>(ConfigurationErrors.Invalid(
-                AzureStorageOptions.ConnectionStringVariable, "it is not an Azure Storage connection string."));
-        }
+        Result<AzureShareContainer> container = AzureShareContainer.Connect(options, settings);
+        return container.IsSuccess ? new Connection(container.Value.Container, container.Value.Location) : Result.Failure<Connection>(container.Error);
     }
 
     private Task<Response<BlobContentInfo>> UploadManifestAsync(
