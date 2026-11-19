@@ -28,6 +28,7 @@ public static class DependencyInjection
         // request is still logged as a failure.
         services.TryDecorate(typeof(ICommandHandler<,>), typeof(ValidationDecorator.CommandHandler<,>));
         services.TryDecorate(typeof(ICommandHandler<>), typeof(ValidationDecorator.CommandBaseHandler<>));
+        services.TryDecorate(typeof(IQueryHandler<,>), typeof(ValidationDecorator.QueryHandler<,>));
 
         services.TryDecorate(typeof(IQueryHandler<,>), typeof(LoggingDecorator.QueryHandler<,>));
         services.TryDecorate(typeof(ICommandHandler<,>), typeof(LoggingDecorator.CommandHandler<,>));
@@ -43,6 +44,7 @@ public static class DependencyInjection
         services.AddScoped<LocalApplier>();
         services.AddScoped<SyncPipeline>();
         services.AddScoped<ShareFolder>();
+        services.AddScoped<Conflicts.Diff.DiffSources>();
         services.AddScoped<ShareResolver>();
         services.AddScoped<ShareNames>();
         services.AddScoped<Publishing.PublishingShare>();

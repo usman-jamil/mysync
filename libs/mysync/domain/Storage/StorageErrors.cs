@@ -21,6 +21,10 @@ public static class StorageErrors
     public static Error HashMismatch(string blobName) => Error.Problem(
         "Storage.HashMismatch", $"The content uploaded for '{blobName}' does not match its hash; it was not stored.");
 
+    /// <summary>A stored object whose bytes, read back, don't hash to its name. Same code as an upload mismatch.</summary>
+    public static Error CorruptObject(string blobName) => Error.Problem(
+        "Storage.HashMismatch", $"The share's copy of '{blobName}' does not match its hash; it was not used.");
+
     /// <summary>An alias blob whose share ID can't be read (missing or malformed metadata). Reported, not fatal.</summary>
     public static Error InvalidAlias(string name, string detail) => Error.Problem(
         "Storage.InvalidAlias", $"The name '{name}' can't be read ({detail}). Delete it with 'mysync delete {name} --yes' or rename its share.");

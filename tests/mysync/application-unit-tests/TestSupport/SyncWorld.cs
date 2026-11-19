@@ -179,6 +179,12 @@ internal sealed class Machine
 
     public Task<Result<ShareInfoResponse>> InfoAsync() => Query<GetShareInfoQuery, ShareInfoResponse>(new GetShareInfoQuery());
 
+    public Task<Result<MySync.Application.Conflicts.Diff.DiffResponse>> DiffAsync(MySync.Application.Conflicts.Diff.DiffQuery query) =>
+        Query<MySync.Application.Conflicts.Diff.DiffQuery, MySync.Application.Conflicts.Diff.DiffResponse>(query);
+
+    public Task<Result<Stream>> PrintAsync(string path, MySync.Application.Conflicts.Diff.DiffSideKind side) =>
+        Query<MySync.Application.Conflicts.Diff.PrintVersionQuery, Stream>(new MySync.Application.Conflicts.Diff.PrintVersionQuery(path, side));
+
     public Task<Result<ConflictListResponse>> ConflictsAsync() => Query<ListConflictsQuery, ConflictListResponse>(new ListConflictsQuery());
 
     public Task<Result<SyncReport>> ResolveAsync(string keep, params string[] paths) =>
