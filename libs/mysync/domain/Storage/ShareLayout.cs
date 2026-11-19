@@ -33,7 +33,33 @@ public sealed class ShareLayout
         Publications = Prefix + "publications.json";
     }
 
+    /// <summary>Every share name: <c>aliases/&lt;name&gt;</c>, one blob each. Not per share, so not under <see cref="Prefix"/>.</summary>
+    public const string AliasesPrefix = "aliases/";
+
     public ShareId ShareId { get; }
+
+    /// <summary><c>aliases/&lt;name&gt;</c>: the share name's only record, pointing at its share ID.</summary>
+    public static string Alias(ShareName name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return AliasesPrefix + name.Value;
+    }
+
+    /// <summary>The name of an alias blob; canonical names only, so a stray blob under <c>aliases/</c> is never taken for one.</summary>
+    public static bool TryParseAlias(string blobName, [NotNullWhen(true)] out ShareName? name)
+    {
+        ArgumentNullException.ThrowIfNull(blobName);
+        name = null;
+        if (!blobName.StartsWith(AliasesPrefix, StringComparison.Ordinal)
+            || !ShareName.TryCreate(blobName[AliasesPrefix.Length..], out ShareName? parsed, out _)
+            || !string.Equals(Alias(parsed), blobName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        name = parsed;
+        return true;
+    }
 
     public string Prefix { get; }
 

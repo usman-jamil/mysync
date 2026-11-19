@@ -27,6 +27,9 @@ public class ErrorCatalogTests
         { StateErrors.FolderLocked, "State.FolderLocked" }, // exit 6
         { SyncErrors.MassDeleteBlocked(40, 50), "Sync.MassDeleteBlocked" }, // exit 7
         { ShareErrors.NotFound(Share()), "Shares.NotFound" }, // exit 8
+        { ShareErrors.NameTaken(ShareName.Create("next-wave").Value, Share()), "Shares.NameTaken" }, // exit 4
+        { ShareErrors.NameNotFound(ShareName.Create("next-wave").Value), "Shares.NameNotFound" }, // exit 8
+        { ShareErrors.Incomplete(ShareName.Create("next-wave").Value, Share()), "Shares.Incomplete" }, // exit 8
         { StorageErrors.Unauthorized, "Storage.Unauthorized" }, // exit 8
     };
 
@@ -44,6 +47,9 @@ public class ErrorCatalogTests
     public void UsageErrors_Should_BeValidationErrors_SoTheyExitWithTwo()
     {
         ShareErrors.InvalidId().Type.ShouldBe(ErrorType.Validation);
+        ShareErrors.NameRequired(null).Type.ShouldBe(ErrorType.Validation);
+        ShareErrors.InvalidName("x").Type.ShouldBe(ErrorType.Validation);
+        ShareErrors.InvalidReference().Type.ShouldBe(ErrorType.Validation);
         PathErrors.Empty().Type.ShouldBe(ErrorType.Validation);
         ConfigurationErrors.Missing("AZURE_STORAGE_CONNECTION_STRING").Type.ShouldBe(ErrorType.Validation);
         ConfigurationErrors.Invalid("MYSYNC_CONTAINER", "too short").Type.ShouldBe(ErrorType.Validation);

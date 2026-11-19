@@ -48,6 +48,34 @@ public static class ShareErrors
         "Shares.UnsupportedFormat",
         $"This share uses manifest format {formatVersion}, which is newer than this mysync supports. Upgrade mysync.");
 
+    /// <summary>A new share needs a name (<c>--name</c>); the suggestion comes from the folder's name.</summary>
+    public static Error NameRequired(ShareName? suggestion) => Error.Validation(
+        "Shares.NameRequired",
+        $"A new share needs a name: mysync sync --name {suggestion?.Value ?? "<name>"}");
+
+    // Never echoes the input, like InvalidId.
+    public static Error InvalidName(string reason) => Error.Validation(
+        "Shares.InvalidName",
+        $"That isn't a valid share name: {reason}. A name is 3-40 letters a-z, digits and '-', starting and ending with a letter or digit.");
+
+    /// <summary>What's typed where a share is expected is neither a share ID nor a valid name.</summary>
+    public static Error InvalidReference() => Error.Validation(
+        "Shares.InvalidReference",
+        "Name a share by its name (3-40 letters a-z, digits and '-') or its share ID (a UUID). 'mysync shares' lists them.");
+
+    public static Error NameTaken(ShareName name, ShareId existingShareId) => Error.Conflict(
+        "Shares.NameTaken",
+        $"The name '{name}' is already taken by share {existingShareId}. Pick another name.");
+
+    public static Error NameNotFound(ShareName name) => Error.NotFound(
+        "Shares.NameNotFound",
+        $"No share is named '{name}'. 'mysync shares' lists the names.");
+
+    /// <summary>The name was claimed, but its share was never finished (an interrupted create).</summary>
+    public static Error Incomplete(ShareName name, ShareId shareId) => Error.NotFound(
+        "Shares.Incomplete",
+        $"The share behind '{name}' ({shareId}) was never finished. 'mysync delete {name} --yes' removes it and frees the name.");
+
     public static Error InvalidManifest(string detail) => Error.Problem(
         "Shares.InvalidManifest",
         $"The share's manifest is invalid: {detail}");

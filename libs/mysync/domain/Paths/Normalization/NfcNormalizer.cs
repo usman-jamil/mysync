@@ -81,6 +81,35 @@ internal static class NfcNormalizer
         return string.Equals(result, value, StringComparison.Ordinal) ? value : result;
     }
 
+    /// <summary>
+    /// Canonical decomposition (NFD: decompose, then canonical ordering), from the same generated
+    /// data. Used to strip accents for share-name suggestions (<c>ShareName.SuggestFrom</c>).
+    /// </summary>
+    internal static string Decompose(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        List<int> codePoints = new(value.Length + 8);
+
+        int i = 0;
+        while (i < value.Length)
+        {
+            int codePoint = value[i];
+            int width = 1;
+
+            if (char.IsHighSurrogate(value[i]) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+            {
+                codePoint = char.ConvertToUtf32(value[i], value[i + 1]);
+                width = 2;
+            }
+
+            AppendDecomposition(codePoint, codePoints);
+            i += width;
+        }
+
+        ApplyCanonicalOrdering(codePoints);
+        return ToString(codePoints, value.Length);
+    }
+
     internal static int GetCombiningClass(int codePoint)
     {
         ReadOnlySpan<int> ranges = UnicodeNormalizationData.CombiningClassRanges;
