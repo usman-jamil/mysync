@@ -20,7 +20,11 @@ internal static class CliProcess
 {
     private static readonly Lazy<string> CliPath = new(FindCli);
 
-    public static async Task<CliResult> RunAsync(string workingDirectory, IReadOnlyDictionary<string, string?> environment, params string[] arguments)
+    public static async Task<CliResult> RunAsync(string workingDirectory, IReadOnlyDictionary<string, string?> environment, params string[] arguments) =>
+        (await RunForBytesAsync(workingDirectory, environment, arguments)).Result;
+
+    /// <summary>The same run, with stdout also kept as raw bytes (for <c>diff --print</c>).</summary>
+    public static async Task<(CliResult Result, byte[] StdOut)> RunForBytesAsync(string workingDirectory, IReadOnlyDictionary<string, string?> environment, params string[] arguments)
     {
         ProcessStartInfo start = new(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
@@ -54,7 +58,7 @@ internal static class CliProcess
 
         using Process process = Process.Start(start)!;
         process.StandardInput.Close(); // no keyboard: a prompt must never wait for one
-        Task<string> stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<byte[]> stdout = ReadAllAsync(process.StandardOutput.BaseStream);
         Task<string> stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -69,7 +73,15 @@ internal static class CliProcess
             throw;
         }
 
-        return new CliResult(process.ExitCode, await stdout, await stderr);
+        byte[] raw = await stdout;
+        return (new CliResult(process.ExitCode, Encoding.UTF8.GetString(raw), await stderr), raw);
+    }
+
+    private static async Task<byte[]> ReadAllAsync(Stream stream)
+    {
+        using MemoryStream bytes = new();
+        await stream.CopyToAsync(bytes, TestContext.Current.CancellationToken);
+        return bytes.ToArray();
     }
 
     // <repo>/tests/.../bin/<Configuration>/<framework>/ → <repo>/apps/mysync/bin/<Configuration>/<framework>/mysync.dll

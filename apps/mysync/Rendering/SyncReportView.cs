@@ -98,7 +98,8 @@ internal static class SyncReportView
         }
 
         AnsiConsole.Write(table);
-        AnsiConsole.MarkupLine(ConsoleOutput.Muted("Decide with: mysync resolve <path> --keep local|remote (or --all). Making both sides the same, or putting the local file back, also clears it."));
+        AnsiConsole.MarkupLine(ConsoleOutput.Muted("See what differs:  mysync diff            (or mysync diff <path>)"));
+        AnsiConsole.MarkupLine(ConsoleOutput.Muted("Decide with:       mysync resolve <path> --keep local|remote   (or --all)"));
     }
 
     public static void RenderSkipped(IReadOnlyCollection<SkippedPath> skipped)

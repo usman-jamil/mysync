@@ -31,4 +31,10 @@
     <ProjectReference Include="..\..\..\apps\mysync\MySync.Cli.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 
+  <!-- Pure, BCL-only CLI helpers, unit-tested here: the CLI assembly itself is only run as a process. -->
+  <ItemGroup>
+    <Compile Include="..\..\..\apps\mysync\Rendering\ShellQuote.cs" Link="Cli\Linked\ShellQuote.cs" />
+    <Compile Include="..\..\..\apps\mysync\Rendering\TerminalText.cs" Link="Cli\Linked\TerminalText.cs" />
+  </ItemGroup>
+
 </Project>

@@ -3,6 +3,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MySync.Application.Abstractions.Publishing;
+using MySync.Application.Conflicts.Diff;
 using MySync.Application.Conflicts.List;
 using MySync.Application.Maintenance.CollectGarbage;
 using MySync.Application.Maintenance.Update;
@@ -204,6 +205,80 @@ internal static class JsonOutput
             Context.PublicationsJson);
         return exitCode;
     }
+
+    public static int Write(DiffResponse diff, bool statOnly, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(diff);
+
+        Emit(new DiffJson("diff", diff.ShareId.ToString(), [.. diff.Items.Select(item => DiffItem(item, statOnly))], exitCode), Context.DiffJson);
+        return exitCode;
+    }
+
+    private static DiffItemJson DiffItem(PathDiff item, bool statOnly) => new(
+        item.Path.Value,
+        item.Kind?.ToCode(),
+        DiffSide(item.Local),
+        DiffSide(item.Remote),
+        DiffSide(item.Base),
+        [.. item.Sections.Select(section => DiffSection(section, statOnly))],
+        [.. item.Notes],
+        item.Kind is null ? null : new ResolveJson(DiffView.ResolveCommand(item.Path, "local"), DiffView.ResolveCommand(item.Path, "remote")));
+
+    private static DiffSideJson? DiffSide(DiffSide? side)
+    {
+        if (side is null)
+        {
+            return null;
+        }
+
+        string? mtime = side.MtimeUtc is { } value ? Utc(value) : null;
+        return new DiffSideJson(
+            side.Type == EntryType.Directory ? "dir" : "file",
+            side.Sha256?.Value,
+            side.Size,
+            mtime,
+            side.Executable,
+            side.Revision?.Value,
+            side.UpdatedBy);
+    }
+
+    private static DiffSectionJson DiffSection(DiffSection section, bool statOnly)
+    {
+        DiffSectionJson empty = new(section.Title, section.OldLabel, section.NewLabel, "identical", null, null, null, null, null, null, null, null, null, null);
+        return section.Outcome switch
+        {
+            TextOutcome text => empty with
+            {
+                Outcome = "text",
+                Added = text.Added,
+                Removed = text.Removed,
+                Hunks = statOnly ? null : [.. text.Hunks.Select(Hunk)],
+            },
+            BinaryOutcome => empty with { Outcome = "binary" },
+            TooLargeOutcome large => empty with { Outcome = "too-large", OldSize = large.OldSize, NewSize = large.NewSize },
+            EolOnlyOutcome eol => empty with { Outcome = "eol-only", OldEol = Eol(eol.Old), NewEol = Eol(eol.New) },
+            ExecOnlyOutcome exec => empty with { Outcome = "exec-only", OldExec = exec.OldExecutable, NewExec = exec.NewExecutable },
+            TypeMismatchOutcome type => empty with { Outcome = "type-mismatch", Description = type.Description },
+            _ => empty,
+        };
+    }
+
+    private static HunkJson Hunk(Domain.Diffing.DiffHunk hunk) => new(
+        hunk.OldStart,
+        hunk.OldLines,
+        hunk.NewStart,
+        hunk.NewLines,
+        [.. hunk.Lines.Select(line => new HunkLineJson(line.Op.ToString(), line.Text))],
+        new NoNewlineJson(hunk.OldNoNewlineAtEnd, hunk.NewNoNewlineAtEnd));
+
+    private static string Eol(Domain.Diffing.LineEndingStyle style) => style switch
+    {
+        Domain.Diffing.LineEndingStyle.CrLf => "crlf",
+        Domain.Diffing.LineEndingStyle.Lf => "lf",
+        Domain.Diffing.LineEndingStyle.Cr => "cr",
+        Domain.Diffing.LineEndingStyle.Mixed => "mixed",
+        _ => "none",
+    };
 
     public static int Write(ShareListResponse listed, int exitCode)
     {
@@ -466,6 +541,51 @@ internal sealed record PublicationJson(
 
 internal sealed record PublicationsJson(string Command, string ShareId, List<PublicationJson> Publications, int ExitCode);
 
+internal sealed record DiffJson(string Command, string ShareId, List<DiffItemJson> Items, int ExitCode);
+
+internal sealed record DiffItemJson(
+    string Path,
+    string? Kind,
+    DiffSideJson? Local,
+    DiffSideJson? Remote,
+    DiffSideJson? Base,
+    List<DiffSectionJson> Sections,
+    List<string> Notes,
+    ResolveJson? Resolve);
+
+internal sealed record DiffSideJson(
+    string Type,
+    string? Sha256,
+    long? Size,
+    string? MtimeUtc,
+    bool Exec,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Revision,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? UpdatedBy);
+
+internal sealed record DiffSectionJson(
+    string Title,
+    string OldLabel,
+    string NewLabel,
+    string Outcome,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Added,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Removed,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<HunkJson>? Hunks,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? OldEol,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NewEol,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? OldExec,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? NewExec,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? OldSize,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? NewSize,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Description);
+
+internal sealed record HunkJson(int OldStart, int OldLines, int NewStart, int NewLines, List<HunkLineJson> Lines, NoNewlineJson NoNewlineAtEnd);
+
+internal sealed record HunkLineJson(string Op, string Text);
+
+internal sealed record NoNewlineJson(bool Old, bool New);
+
+internal sealed record ResolveJson(string KeepLocal, string KeepRemote);
+
 internal sealed record ShareJson(string Name, string ShareId, string CreatedUtc, string CreatedBy);
 
 internal sealed record ShareListJson(string Command, List<ShareJson> Shares, List<string> Warnings, int ExitCode);
@@ -536,5 +656,6 @@ internal sealed record FailureJson(ErrorJson Error, int ExitCode);
 [JsonSerializable(typeof(PublicationsJson))]
 [JsonSerializable(typeof(UnpublishJson))]
 [JsonSerializable(typeof(ShareListJson))]
+[JsonSerializable(typeof(DiffJson))]
 [JsonSerializable(typeof(RenameJson))]
 internal sealed partial class CliJsonContext : JsonSerializerContext;

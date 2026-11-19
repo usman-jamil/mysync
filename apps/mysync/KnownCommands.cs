@@ -3,21 +3,22 @@ namespace MySync.Cli;
 /// <summary>The command names <c>Program</c> registers, to reject a typo before ConsoleAppFramework turns it into "show help, exit 0".</summary>
 internal static class KnownCommands
 {
-    public static IReadOnlyList<string> Names { get; } = ["sync", "status", "info", "conflicts", "resolve", "gc", "delete", "update", "self-check", "debug", "publish", "publications", "unpublish", "shares", "rename"];
+    public static IReadOnlyList<string> Names { get; } = ["sync", "status", "info", "conflicts", "resolve", "gc", "delete", "update", "self-check", "debug", "publish", "publications", "unpublish", "shares", "rename", "diff"];
 
     // Options that take a value, so their value isn't mistaken for a command or a path.
-    private static readonly string[] OptionsWithValues = ["--parallel", "--keep", "--keep-revisions", "--grace-hours", "--share", "--revision", "--title"];
+    private static readonly string[] OptionsWithValues = ["--parallel", "--keep", "--keep-revisions", "--grace-hours", "--share", "--revision", "--title", "--name", "--context", "-U", "--print"];
 
     /// <summary>
-    /// <c>resolve</c> takes any number of paths, and ConsoleAppFramework gives a <c>params</c>
-    /// argument every token after the first one, options included. Moving the options in front
-    /// lets people write <c>mysync resolve a.txt b.txt --keep local</c>. Other commands are untouched.
+    /// <c>resolve</c> and <c>diff</c> take any number of paths, and ConsoleAppFramework gives a
+    /// <c>params</c> argument every token after the first one, options included. Moving the options
+    /// in front lets people write <c>mysync resolve a.txt b.txt --keep local</c> or
+    /// <c>mysync diff a.txt --stat</c>. Other commands are untouched.
     /// </summary>
     public static string[] ArrangeForParsing(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
 
-        int command = Array.IndexOf(args, "resolve");
+        int command = Array.FindIndex(args, arg => arg is "resolve" or "diff");
         if (command < 0)
         {
             return args;

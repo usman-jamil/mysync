@@ -220,6 +220,7 @@ Each `mysync sync` uploads what changed here and downloads what changed there. I
 | `mysync status` | Show what `sync` would do, plus conflicts and warnings. Changes nothing. |
 | `mysync info [<name>]` | The share's names and ID, storage, this folder's revision against the share's, file count and size, open conflicts. |
 | `mysync conflicts` | List open conflicts: path, kind, both versions, and who changed the share. Works offline. |
+| `mysync diff [<path>...]` | Show what differs between your version of a file and the share's, ending with the `resolve` commands to paste. No paths: every open conflict. |
 | `mysync resolve <path>... --keep local\|remote` | Decide conflicts. `--all` instead of paths decides every one. |
 | `mysync gc` | Delete stored files no recent revision uses, and old history. |
 | `mysync delete [<name>] --yes` | Delete a share for every machine: its stored files, history and publications, and free its name. Local files stay. |
@@ -274,14 +275,38 @@ If both machines changed the same file since they last agreed, mysync applies ne
 
 The rest of the sync goes ahead, and the run exits with code 3. Only the machine that syncs second sees the conflict, because it's the one whose change was held back.
 
-To decide:
+To decide, look first, then choose: `mysync conflicts` → `mysync diff` → `mysync resolve`.
+
+```text
+$ mysync diff reports/q3.csv
+reports/q3.csv  modify/modify  local 51.0 KB (you, 08:55)  ·  remote 50.9 KB (ali@SERVER01, rev 18, 07:12)
+--- local/reports/q3.csv
++++ remote/reports/q3.csv
+@@ -10,7 +10,7 @@
+ north,q3,1200
+-south,q3,980
++south,q3,1010
+ east,q3,1430
+Keep yours:    mysync resolve reports/q3.csv --keep local
+Keep theirs:   mysync resolve reports/q3.csv --keep remote
+Or edit the file to combine both, then keep yours.
+```
 
 ```bash
-mysync conflicts                                # what's open
-mysync resolve reports/q3.xlsx --keep local     # upload my version
-mysync resolve reports/q3.xlsx --keep remote    # take the share's version
+mysync conflicts                                # what's open, with a diff command per path
+mysync diff                                     # every open conflict, local against the share's version
+mysync diff reports/q3.csv --base               # what each side changed since you last agreed
+mysync resolve reports/q3.csv --keep local      # upload my version
+mysync resolve reports/q3.csv --keep remote     # take the share's version
 mysync resolve --all --keep remote              # every open conflict at once
 ```
+
+- **Want both changes?** Edit your file so it holds both, then `--keep local`.
+- **Prefer your own merge tool?** Save the share's version outside the folder (never inside it, or it would sync): `mysync diff reports/q3.csv --print remote > /tmp/q3.remote.csv`. `--print local` and `--print base` work too.
+- **`diff` changes nothing.** It works while a sync runs, needs storage access for the share's versions, and exits 0 whether or not there are differences (scripts use `--json`).
+- **Options:** `--base`; `-U, --context <n>` lines of context (default 3); `--stat` one line per path; `--print local|remote|base` (one path, nothing else on stdout).
+- **A path that isn't in conflict** is compared with the share's current version: what someone else changed, or what your next sync would upload.
+- **What you'll see:** binary files (and anything that isn't UTF-8 or UTF-16 with a BOM) as one line with sizes and hashes; "Only line endings differ (local: CRLF, remote: LF)" instead of a diff of every line; the executable bit when only that changed; files over 8 MiB (or 200,000 lines) as "too large", with the `--print` hint. Piped into a file, the output is a patch `git apply` accepts.
 
 `resolve` touches only the paths you name. If the share's version changed again since the conflict was recorded, it stays a conflict rather than being overwritten. A conflict also clears on its own at the next sync in two cases:
 - you make both sides identical;

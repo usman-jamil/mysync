@@ -371,7 +371,15 @@ public sealed class CliTests : IDisposable
     [InlineData("resolve", "notes.txt", "--keep", "local")]              // not in conflict
     [InlineData("gc", "--keep-revisions", "0")]
     [InlineData("gc", "--grace-hours", "0")]
-    public async Task BadResolveAndGcArguments_Should_ExitTwo(params string[] arguments)
+    [InlineData("diff", "--print", "remote")]                                 // no path
+    [InlineData("diff", "report.txt", "notes.txt", "--print", "remote")]      // two paths
+    [InlineData("diff", "report.txt", "--print", "remote", "--stat")]
+    [InlineData("diff", "report.txt", "--print", "base", "--base")]
+    [InlineData("diff", "report.txt", "--print", "local", "--json")]
+    [InlineData("diff", "report.txt", "--print", "theirs")]
+    [InlineData("diff", "--context", "1001")]
+    [InlineData("diff", "no-such.txt")]
+    public async Task BadResolveGcAndDiffArguments_Should_ExitTwo(params string[] arguments)
     {
         await ConflictOnBAsync();
 
@@ -498,6 +506,145 @@ public sealed class CliTests : IDisposable
     {
         _a.Dispose();
         _b.Dispose();
+    }
+
+    [Fact]
+    public async Task Diff_Should_ShowTextAndBinaryConflicts_AsAPatchGitApplies_AndItsResolveCommandWorks()
+    {
+        await CreateAndCloneAsync(("report.txt", "region,total\nnorth,1200\nsouth,980\neast,1430\n"), ("tool.bin", "MZ\0base"));
+        _a.WriteFile("report.txt", "region,total\nnorth,1200\nsouth,1010\neast,1430\n");
+        await File.WriteAllBytesAsync(Path.Combine(_a.Path, "tool.bin"), [0x4D, 0x5A, 0, 0xFF, 1, 2], TestContext.Current.CancellationToken);
+        (await RunAsync(_a, "sync")).ExitCode.ShouldBe(0);
+        _b.WriteFile("report.txt", "region,total\nnorth,1300\nsouth,999\neast,1430");
+        _b.WriteFile("tool.bin", "MZ\0b's build");
+        (await RunAsync(_b, "sync")).ExitCode.ShouldBe(3);
+
+        CliResult diff = await RunAsync(_b, "diff");
+        diff.ExitCode.ShouldBe(0, diff.ToString());
+        diff.StdOut.ShouldContain("report.txt  modify/modify  local");
+        diff.StdOut.ShouldContain("--- local/report.txt\n+++ remote/report.txt\n@@ ");
+        diff.StdOut.ShouldContain("-south,999");
+        diff.StdOut.ShouldContain("+south,1010");
+        diff.StdOut.ShouldContain("\\ No newline at end of file");
+        diff.StdOut.ShouldContain("Binary files differ: local");
+        diff.StdOut.ShouldContain("Keep theirs:   mysync resolve tool.bin --keep remote");
+        diff.StdOut.ShouldNotContain("\u001b"); // no colours without a terminal
+
+        CliResult printed = await CliRawAsync(_b, "diff", "tool.bin", "--print", "remote");
+        printed.ExitCode.ShouldBe(0, printed.ToString());
+        _lastBytes.ShouldBe(await File.ReadAllBytesAsync(Path.Combine(_a.Path, "tool.bin"), TestContext.Current.CancellationToken));
+
+        CliResult patch = await RunAsync(_b, "diff", "report.txt");
+        if (GitIsAvailable())
+        {
+            string patchFile = Path.Combine(Path.GetTempPath(), $"mysync-{Guid.NewGuid():N}.patch");
+            await File.WriteAllTextAsync(patchFile, patch.StdOut, TestContext.Current.CancellationToken);
+            string copy = Path.Combine(Path.GetTempPath(), $"mysync-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(copy);
+            File.Copy(Path.Combine(_b.Path, "report.txt"), Path.Combine(copy, "report.txt"));
+            try
+            {
+                Git(copy, "apply", patchFile).ShouldBe(0);
+                (await File.ReadAllTextAsync(Path.Combine(copy, "report.txt"), TestContext.Current.CancellationToken)).ShouldBe(_a.ReadText("report.txt"));
+            }
+            finally
+            {
+                File.Delete(patchFile);
+                Directory.Delete(copy, recursive: true);
+            }
+        }
+
+        CliResult json = await RunAsync(_b, "diff", "report.txt", "--json");
+        json.ExitCode.ShouldBe(0, json.ToString());
+        using var document = JsonDocument.Parse(json.StdOut);
+        JsonElement item = document.RootElement.GetProperty("items").EnumerateArray().Single();
+        item.GetProperty("kind").GetString().ShouldBe("modify/modify");
+        JsonElement section = item.GetProperty("sections").EnumerateArray().Single();
+        section.GetProperty("outcome").GetString().ShouldBe("text");
+        section.GetProperty("hunks").GetArrayLength().ShouldBeGreaterThan(0);
+        string keepRemote = item.GetProperty("resolve").GetProperty("keepRemote").GetString()!;
+        keepRemote.ShouldBe("mysync resolve report.txt --keep remote");
+
+        CliResult resolved = await RunAsync(_b, keepRemote.Split(' ')[1..]);
+        resolved.ExitCode.ShouldBe(0, resolved.ToString());
+        _b.ReadText("report.txt").ShouldBe(_a.ReadText("report.txt"));
+        (await RunAsync(_b, "diff", "--stat")).StdOut.ShouldStartWith("tool.bin  binary");
+    }
+
+    [Theory]
+    [InlineData("diff", "report.txt", "--stat")]
+    [InlineData("diff", "--stat", "report.txt")]
+    [InlineData("diff", "-U", "0", "report.txt", "notes.txt", "--stat")]
+    public async Task DiffOptions_Should_ParseBeforeOrAfterThePaths(params string[] arguments)
+    {
+        await ConflictOnBAsync();
+
+        CliResult result = await RunAsync(_b, arguments);
+
+        result.ExitCode.ShouldBe(0, result.ToString());
+        result.StdOut.ShouldStartWith("report.txt  +1 −1");
+    }
+
+    [Fact]
+    public async Task Diff_Should_PrintFileContentLiterally_WhenItIsNotATerminal()
+    {
+        await CreateAndCloneAsync(("evil.txt", "safe\n"), ("notes.txt", "n"));
+        _a.WriteFile("evil.txt", "[red]boom[/] \u001b[31mred\u001b[0m\n");
+        (await RunAsync(_a, "sync")).ExitCode.ShouldBe(0);
+
+        CliResult result = await RunAsync(_b, "diff", "evil.txt");
+
+        result.ExitCode.ShouldBe(0, result.ToString());
+        result.StdOut.ShouldContain("+[red]boom[/] \u001b[31mred\u001b[0m\n"); // byte-exact patch line, not interpreted
+        result.StdOut.Split('\u001b').Length.ShouldBe(3); // the file's two ESC bytes, no styling of ours
+        result.StdOut.ShouldNotContain("Keep yours"); // not a conflict: no resolve footer
+    }
+
+    [Fact]
+    public async Task Conflicts_Should_ListADiffCommandPerPath()
+    {
+        await ConflictOnBAsync();
+
+        CliResult result = await RunAsync(_b, "conflicts");
+
+        result.StdOut.ShouldContain("See what differs:  mysync diff");
+        result.StdOut.ShouldContain("  mysync diff report.txt");
+    }
+
+    private byte[] _lastBytes = [];
+
+    private async Task<CliResult> CliRawAsync(TempShareFolder folder, params string[] arguments)
+    {
+        (CliResult result, byte[] bytes) = await CliProcess.RunForBytesAsync(folder.Path, Environment(), arguments);
+        _lastBytes = bytes;
+        return result;
+    }
+
+    private static bool GitIsAvailable()
+    {
+        try
+        {
+            return Git(Path.GetTempPath(), "--version") == 0;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static int Git(string directory, params string[] arguments)
+    {
+        System.Diagnostics.ProcessStartInfo start = new("git") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (string argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using System.Diagnostics.Process git = System.Diagnostics.Process.Start(start)!;
+        git.StandardOutput.ReadToEnd();
+        git.StandardError.ReadToEnd();
+        git.WaitForExit();
+        return git.ExitCode;
     }
 
     // a and b both edit report.txt; a syncs first, so b holds the conflict. notes.txt is not in conflict.

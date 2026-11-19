@@ -138,6 +138,7 @@ Each project is an **Nx project** defined by its `project.json` (targets wrap `d
 | You are changing… | It belongs in… | Notes |
 |---|---|---|
 | Merge rules, manifest shape, path rules, conflict kinds, safety-guard thresholds | `libs/mysync/domain` | Pure logic. No I/O, no framework references. |
+| How two versions of a file are compared (line diff, hunks, binary/encoding/line-ending detection, limits) | `libs/mysync/domain/Diffing` | Pure; `DiffLimits` is the one place for the limits. |
 | Share-name rules (`ShareName`), what users type for a share (`ShareReference`), alias blob names | `libs/mysync/domain/Shares`, `ShareLayout` | `ShareReference.Parse` is the one parser every command uses. |
 | How names are stored in Azure | `libs/mysync/storage-azure` (`AzureAliasStore`) | Implements `IAliasStore`; shares the container with `AzureBlobShareStore` (`AzureShareContainer`). |
 | A use case (`sync`, `clone`, `resolve`, `gc`, `status`, `info`, `rename`, `shares`) or its sequencing | `libs/mysync/application/<Feature>/<UseCase>/` | Handlers own the sequence, not the I/O. |
@@ -267,6 +268,7 @@ libs/mysync/application/
     SyncOptions     max parallelism (MYSYNC_PARALLELISM), commit attempts, back-off base
   Conflicts/
     List/           ListConflictsQuery(.cs|Handler), ConflictListResponse
+    Diff/           DiffQuery(.cs|Handler|Validator), PrintVersionQuery, DiffSources       # `diff`: read-only
     Resolve/        ResolveConflictsCommand(.cs|Handler|Validator) → SyncReport (+ Resolved)
   Maintenance/
     CollectGarbage/ CollectGarbageCommand(.cs|Handler|Validator), GarbageReport
@@ -287,7 +289,7 @@ The matching command lives in `apps/mysync/Commands/<Feature>Commands.cs`.
 
 Validation and logging are **not** written inside handlers. They're decorators in `Abstractions/Behaviors`, applied with Scrutor's `Decorate(...)` in `MySync.Application/DependencyInjection.cs`:
 
-- `ValidationDecorator` runs every FluentValidation `IValidator<TCommand>` before the handler. On failure it returns `Result.Failure(ValidationError)` without calling the handler. Validators cover argument shape: share ID is a UUID, `--keep` is `local|remote`, `resolve` has paths or `--all` (not both), `--parallel` is 1–64, and so on.
+- `ValidationDecorator` runs every FluentValidation `IValidator<TCommand>` (and `IValidator<TQuery>`) before the handler. On failure it returns `Result.Failure(ValidationError)` without calling the handler. Validators cover argument shape: share ID is a UUID, `--keep` is `local|remote`, `resolve` has paths or `--all` (not both), `--parallel` is 1–64, and so on.
 - `LoggingDecorator` logs start/finish of each command and query and pushes the `Error` onto the Serilog `LogContext` on failure. **It must never log request properties that could hold secrets.**
 
 Decorator registration order defines wrapping order. New concerns (timing, metrics) become new decorators, never inline code.
@@ -324,7 +326,7 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 |---|---|
 | `CommandRunner.cs` | Not a command: scope per handler, `CheckStorage()` (settings before any work or prompt), failures to stderr (and one JSON document with `--json`), unexpected exceptions → exit `1`, redacted, stack trace only with `--verbose` |
 | `SyncCommands.cs` | `sync [<name|shareId>] [--name <name>]`, `status` |
-| `ConflictCommands.cs` | `conflicts`, `resolve` |
+| `ConflictCommands.cs` | `conflicts`, `diff` (its `--print` combinations are checked here; raw bytes to stdout), `resolve` |
 | `ShareCommands.cs` | `info`, `delete`, `shares`, `rename` |
 | `MaintenanceCommands.cs` | `gc` |
 
@@ -340,6 +342,7 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 |---|---|
 | `ConsoleOutput` | The one way to write: `Fail` / `Warn` / `Success`, `Value` / `Muted` / `Label` (escaped), byte and count formatting, `IsInteractive`, `CanRedraw` |
 | `SyncProgressDisplay` | `ISyncProgressReporter` for `sync`, `clone` and `resolve`, **on stderr**: live bars when stderr can redraw, one line per phase and planned transfer otherwise, nothing with `--quiet` / `--json` |
+| `DiffView`, `TerminalText`, `ShellQuote` | `diff` output (colour on a terminal, a plain patch otherwise), untrusted text made safe for the screen, paths quoted for pasting |
 | `SyncReportView` | End-of-run summary: transferred, deleted, **conflicts**, skipped (with reasons); `RenderConflicts` is also the `conflicts` table (path, kind, local vs remote hash/size/mtime, remote `updatedBy` and revision); `RenderResolve` for `resolve` |
 | `PlanView` | `status` / `--dry-run` output |
 | `ShareInfoView` | `info` field list |
@@ -652,6 +655,7 @@ mysync rename <name>     # in a share's folder: claim a new name, free the old o
 mysync status            # read-only: the plan sync would execute, plus conflicts/warnings
 mysync info [<name|shareId>]   # names, share id, account/container, base revision vs remote revision, file count, size, open conflicts
 mysync conflicts         # list open conflicts with local vs remote hash/size/mtime/who
+mysync diff [<path>...] [--base] [-U|--context <n>] [--stat] [--print local|remote|base]   # what differs (read-only)
 mysync resolve <path>... --keep local|remote [--dry-run]
 mysync resolve --all     --keep local|remote [--dry-run]
 mysync gc [--dry-run] [--keep-revisions 20] [--grace-hours 24]
@@ -685,6 +689,19 @@ How it's built (`SyncSession.Resolve`, `SyncPipeline.PlanAgainst`): for each nam
 - `info`: state plus HEAD, so it needs storage. Shows base revision against HEAD revision, who changed HEAD last, file count and size, open conflicts.
 - `conflicts`: `.mysynctool` alone, offline, no lock. Exit `0` whether or not any are open; scripts read `--json`.
 - All of them, like `sync` and `gc`, fail outside a share with `ShareErrors.NotAShare` → exit `4`.
+
+### `diff` (seeing what differs before `resolve`)
+
+`DiffQuery` / `PrintVersionQuery` (`Application/Conflicts/Diff`), engine in `Domain/Diffing` (Myers line diff, `UnifiedDiff`, `TextContent`, one `DiffLimits`). A **query**: no lock, no state (not even the hash cache), no staging, no `.mysynctool.log`, nothing written into the share folder (there is no `--write`).
+
+- **No paths:** every open conflict, in path order. **A conflicted path** is compared with the remote version **recorded in the conflict** (`Conflict.Remote`, what `--keep remote` applies), noting when HEAD has moved on; **any other path** with HEAD (read once per query). The local side is always the file on disk now, noting when it no longer matches the conflict's local hash. Neither local nor in HEAD → `Diff.PathNotFound` (exit 2).
+- **By kind:** modify/modify and add/add local → remote (`--base`: base → local "your changes" and base → remote "their changes"); modify/delete base → local plus "the share deleted this file"; delete/modify base → remote plus "you deleted this file"; `type` a description only.
+- **Outcomes:** identical, text (hunks), binary (NUL in the first 8 KiB, or not valid UTF-8/UTF-16-with-BOM), too-large (> 8 MiB or 200,000 lines a side; never buffered: at most 8 MiB + 1 byte is read into memory, a larger stored object isn't downloaded), eol-only (lines equal once `\r` is ignored), exec-only, type-mismatch. Lines split on `\n`, `\r` kept for comparison and the patch, hidden on screen. An encoding or BOM difference is a note.
+- **Stored versions are hashed before use** (`DiffSources`); a missing object is `Diff.VersionNotStored` (exit 8, e.g. after `gc`), a mismatch `Storage.HashMismatch`. The local executable bit comes from the recorded conflict side (or base) when the content matches, since `ILocalFolder` doesn't report it.
+- **Output** (`Rendering/DiffView`): on a terminal that can redraw, colours with file content escaped (`Markup.Escape`) and control characters shown (`TerminalText.Visible`, ESC → `␛`); otherwise plain UTF-8 in exactly the patch form (labels `local/`, `remote/`, `base/`, `/dev/null` for an absent side), so `mysync diff x > x.patch` applies with `git apply`. Conflicts end with `resolve` commands for that kind (`DiffView.Labels`), paths quoted by `ShellQuote` (POSIX `'\''`, PowerShell `''`, bare when only `[A-Za-z0-9._/-]`).
+- **`--print`:** one path; not with `--stat`, `--base` or `--json` (`Diff.PrintNeedsOnePath` / `PrintCombined`, exit 2); raw bytes through `Console.OpenStandardOutput()`; unlimited, a stored version's hash checked as the stream ends. `--print local` needs no storage.
+- Options go before or after the paths (`KnownCommands.ArrangeForParsing`, as for `resolve`). Exit `0` whether or not anything differs.
+- `conflicts` and every conflict summary point at `mysync diff`; `conflicts` lists a `mysync diff <path>` per conflict.
 
 ### `delete` (removing a share, e.g. sensitive data after a work session)
 
@@ -737,13 +754,13 @@ Mapped from `Error.Code` (failures) or from the report (partial successes). Noth
 |---|---|---|
 | 0 | Success, nothing notable | |
 | 1 | Unexpected error | unhandled exception |
-| 2 | Usage or configuration error | `ValidationError`, `ConfigurationErrors.*`, `resolve` on a non-conflicted path; `ShareErrors.NameRequired`, `InvalidName`, `InvalidReference`; `Cli.NameWithShareReference`, `Cli.RenameNeedsName`; `PublishErrors.StaticWebsiteDisabled`, `IndexDocumentMismatch`, `OtherAccount`, `PublicationsNeedSettings` |
+| 2 | Usage or configuration error | `ValidationError`, `ConfigurationErrors.*`, `resolve` on a non-conflicted path; `ShareErrors.NameRequired`, `InvalidName`, `InvalidReference`; `Cli.NameWithShareReference`, `Cli.RenameNeedsName`; `DiffErrors.PathNotFound`, `VersionMissing`, `PrintNeedsOnePath`, `PrintCombined`, `Diff.InvalidContext`, `Diff.InvalidPrint`; `PublishErrors.StaticWebsiteDisabled`, `IndexDocumentMismatch`, `OtherAccount`, `PublicationsNeedSettings` |
 | 3 | Completed, but one or more conflicts were dropped and logged (still open) | `SyncReport.Conflicts` non-empty (takes precedence over 9) |
 | 4 | Folder precondition failed, or the name is taken | `ShareErrors.FolderNotEmpty`, `AlreadyAShare`, `NotAShare`, `UnsafeRoot`, `NameTaken`; `UpdateErrors.NotWritable`, `NotInstalledBinary` |
 | 5 | Remote concurrency retries exhausted | `SyncErrors.CommitRetriesExhausted`, `SyncErrors.ShareChangedDuringGc`, `PublishErrors.RegistryRetriesExhausted` |
 | 6 | Another mysync process holds the lock for this folder | `StateErrors.FolderLocked` |
 | 7 | Safety guard tripped (mass delete) | `SyncErrors.MassDeleteBlocked` |
-| 8 | Share not found, deleted, unfinished or no such name, or storage auth failure; no such release or publication | `ShareErrors.NotFound`, `ShareErrors.Deleted`, `NameNotFound`, `Incomplete`, `StorageErrors.Unauthorized`, `UpdateErrors.ReleaseNotFound` / `NoBuildForPlatform`, `PublishErrors.NotFound` / `RevisionNotFound` / `Unauthorized` / `CannotReadServiceProperties` |
+| 8 | Share not found, deleted, unfinished or no such name, or storage auth failure; no such release or publication | `ShareErrors.NotFound`, `ShareErrors.Deleted`, `NameNotFound`, `Incomplete`, `DiffErrors.VersionNotStored`, `StorageErrors.Unauthorized`, `UpdateErrors.ReleaseNotFound` / `NoBuildForPlatform`, `PublishErrors.NotFound` / `RevisionNotFound` / `Unauthorized` / `CannotReadServiceProperties` |
 | 9 | Completed, but some paths were skipped (locked, unstable, invalid name) | `SyncReport.Skipped` non-empty |
 | 10 | Published, but the publication couldn't be opened anonymously (check `MYSYNC_PUBLISH_BASE_URL`) | `PublishReport.Verified` false |
 | 130 | Cancelled (Ctrl+C) | `OperationCanceledException` from the caller's token |
@@ -751,7 +768,7 @@ Mapped from `Error.Code` (failures) or from the report (partial successes). Noth
 ### Output
 
 - Default: concise progress (`↑ 12 files 4.1 MB  ↓ 3 files 220 KB  ✗ 0`) and a final summary listing conflicts and skipped paths with reasons. The summary goes to stdout; progress, warnings and failures go to stderr.
-- `--json` documents (`Rendering/JsonOutput`, source-generated `CliJsonContext`) all end with `exitCode`. `sync` / `clone`: `command`, `shareId`, `revision`, `committed`, `dryRun`, `uploaded` / `downloaded` `{files, bytes}`, `deletedLocally`, `deletedRemotely`, `conflicts` (full entries, like `.mysynctool`), `skipped` `{path, cause, detail}` (cause in kebab-case, e.g. `changed-since-scan`), `warnings`, and with `--dry-run` a `plan` of `{path, action}`. Create: `shareId`, `name`, `fileCount`, `totalBytes`, `uploaded`, `skipped`, `warnings`, `cloneCommand` (`mysync sync <name>`). `shares`: `shares` (`name`, `shareId`, `createdUtc`, `createdBy`), `warnings`. `rename`: `shareId`, `name`, `previous`, `unchanged`. `info`: also `names`; `rootPath`, `baseRevision`, `openConflicts` are `null` when this folder isn't the share. `delete`: also `namesFreed`, `wasIncomplete` (then `markerRevision`, `deletedUtc`, `deletedBy` are `null`). `publish`: `shareId`, `publishId`, `url`, `revision`, `title`, `files`, `bytes`, `copies` (`{put-blob-from-url|blocks-from-url|streamed: n}`), `verified`, `verificationDetail`, `shellCommand`, `powerShellCommand`, `skipped`, `warnings`. `publications`: `shareId`, `publications` (`id`, `status` pending|published|failed, `title`, `revision`, `files`, `bytes`, `createdUtc`, `createdBy`, `publishAccount`, `url`, `siteAssetsVersion`). `unpublish`: `publishId`, `url`, `blobsDeleted`. `delete` also has `publicationsRemoved`. A failure: `{ "error": { code, description, details? }, exitCode }`.
+- `--json` documents (`Rendering/JsonOutput`, source-generated `CliJsonContext`) all end with `exitCode`. `sync` / `clone`: `command`, `shareId`, `revision`, `committed`, `dryRun`, `uploaded` / `downloaded` `{files, bytes}`, `deletedLocally`, `deletedRemotely`, `conflicts` (full entries, like `.mysynctool`), `skipped` `{path, cause, detail}` (cause in kebab-case, e.g. `changed-since-scan`), `warnings`, and with `--dry-run` a `plan` of `{path, action}`. Create: `shareId`, `name`, `fileCount`, `totalBytes`, `uploaded`, `skipped`, `warnings`, `cloneCommand` (`mysync sync <name>`). `shares`: `shares` (`name`, `shareId`, `createdUtc`, `createdBy`), `warnings`. `diff`: `shareId`, `items` (`path`, `kind` or `null`, `local` / `remote` (+ `revision`, `updatedBy`) / `base` as `{type, sha256, size, mtimeUtc, exec}` or `null`, `sections` (`title`, `oldLabel`, `newLabel`, `outcome` identical|text|binary|too-large|eol-only|exec-only|type-mismatch, `added`, `removed`, `hunks` (`oldStart`, `oldLines`, `newStart`, `newLines`, `lines` `{op, text}`, `noNewlineAtEnd {old, new}`; omitted with `--stat`), `oldEol`/`newEol`, `oldExec`/`newExec`, `oldSize`/`newSize`, `description` as they apply), `notes`, `resolve` `{keepLocal, keepRemote}` or `null`). `rename`: `shareId`, `name`, `previous`, `unchanged`. `info`: also `names`; `rootPath`, `baseRevision`, `openConflicts` are `null` when this folder isn't the share. `delete`: also `namesFreed`, `wasIncomplete` (then `markerRevision`, `deletedUtc`, `deletedBy` are `null`). `publish`: `shareId`, `publishId`, `url`, `revision`, `title`, `files`, `bytes`, `copies` (`{put-blob-from-url|blocks-from-url|streamed: n}`), `verified`, `verificationDetail`, `shellCommand`, `powerShellCommand`, `skipped`, `warnings`. `publications`: `shareId`, `publications` (`id`, `status` pending|published|failed, `title`, `revision`, `files`, `bytes`, `createdUtc`, `createdBy`, `publishAccount`, `url`, `siteAssetsVersion`). `unpublish`: `publishId`, `url`, `blobsDeleted`. `delete` also has `publicationsRemoved`. A failure: `{ "error": { code, description, details? }, exitCode }`.
 - When the terminal can't redraw, no animated progress (see §4).
 - Messages say what happened and what to do next. No stack traces unless `--verbose`.
 
@@ -919,9 +936,9 @@ Every test project is xUnit v3 on the Microsoft Testing Platform with Shouldly, 
 |---|---|---|---|
 | `MySync.Domain.UnitTests` (`tests/mysync/domain-unit-tests/`) | `type:unit-test` | `MergePlanner`, `SharePath` / `PathRules`, `MassDeleteGuard`, `ShareLayout`, value objects | none (pure) |
 | `MySync.Application.UnitTests` (`tests/mysync/application-unit-tests/`) | `type:unit-test` | Handlers, validators, `SyncPipeline`, `RemoteCommitter`, decorators | `InMemoryShareStore`, `InMemoryLocalFolder`, NSubstitute for single-failure cases |
-| `MySync.Infrastructure.UnitTests` (`tests/mysync/infrastructure-unit-tests/`) | `type:unit-test` | `LocalFolderContractTests` on disk, `LocalFolder`, `FileScanner`, `Sha256ContentHasher`, hash cache, `JsonShareStateStore`, `FolderLock`, `FileConflictLog` rotation, `GitIgnoreMatcher` (against `git`), `ManifestSerializer` (exact JSON pinned), `PublicationRegistrySerializer` (pinned), `SiteDataContractTests` (generated `site-data.js` against the site's JSON Schema, escaping), `DownloadScriptExecutionTests` (the generated `download.sh` run with real `sh` + `curl` on hostile names), and `DiskSyncTests`: the real pipeline over two temp folders with `InMemoryShareStore` | real temp directories (`TempShareFolder`), `git`, `sh`, `curl` |
+| `MySync.Infrastructure.UnitTests` (`tests/mysync/infrastructure-unit-tests/`) | `type:unit-test` | `LocalFolderContractTests` on disk, `LocalFolder`, `FileScanner`, `Sha256ContentHasher`, hash cache, `JsonShareStateStore`, `FolderLock`, `FileConflictLog` rotation, `GitIgnoreMatcher` (against `git`), `ManifestSerializer` (exact JSON pinned), `PublicationRegistrySerializer` (pinned), `SiteDataContractTests` (generated `site-data.js` against the site's JSON Schema, escaping), `DownloadScriptExecutionTests` (the generated `download.sh` run with real `sh` + `curl` on hostile names), `PatchAppliesWithGitTests` (every `diff` patch turns A into B with `git apply`), and `DiskSyncTests`: the real pipeline over two temp folders with `InMemoryShareStore` | real temp directories (`TempShareFolder`), `git`, `sh`, `curl` |
 | `MySync.Storage.Azure.IntegrationTests` (`tests/mysync/storage-azure-integration-tests/`) | `type:integration-test` | `AzureBlobShareStore` against **Azurite**, plus the `IShareStore` **contract suite**; `AzureAliasStore` with the `IAliasStore` contract suite and Azure-only cases (blob shape, damaged and stray aliases, no container); `AzureStaticWebsitePublishTarget` on Azurite's publishing accounts (static website check, headers stored, `If-None-Match` root files, server-side copies incl. multi-block, prefix delete, configuration errors, no key in errors or logs) | Azurite (four accounts) |
-| `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + Azure) with two temp folders as two "machines"; `Cli/CliTests` runs the **built `mysync` as a process** (`CliProcess`, fresh environment, stdin closed) for exit codes, stdout/stderr, `--json` and the no-terminal prompt rule; `PublishingTests` publish, unpublish and delete with the real embedded site | Azurite |
+| `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + Azure) with two temp folders as two "machines"; `Cli/ShellQuoteTests` and `Cli/TerminalTextTests` unit-test those two BCL-only CLI helpers (compiled in as linked source); `Cli/CliTests` runs the **built `mysync` as a process** (`CliProcess`, fresh environment, stdin closed) for exit codes, stdout/stderr, `--json` and the no-terminal prompt rule; `PublishingTests` publish, unpublish and delete with the real embedded site | Azurite |
 | `MySync.ArchitectureTests` (`tests/mysync/architecture-tests/`) | `type:architecture-test` | The dependency rules in §3 | none |
 | `MySync.SiteAssets.UnitTests` (`tests/mysync/site-assets-unit-tests/`) | `type:unit-test`, `requires:site-build` | The embedded set is exactly the four site files plus the three root files, `index.html` loads `./site-data.js` then `./assets/app.js`, content types, the version digest, placeholder detection, and the embedded bytes equal `dist/apps/mysync-site` | the real site build (fails with advice if the placeholder is embedded) |
 | `mysync-site` (`apps/mysync-site`, Vitest) | `type:web` | Rendering from the fixture, search, hash navigation, URL encoding of awkward names, the theme switcher, the error states, the build-output check, and the fixture against the schema | jsdom, `public/site-data.js` |
@@ -955,6 +972,7 @@ Both Azurite-backed suites use `Testcontainers.Azurite` with the image `mcr.micr
 
 **Domain:**
 - `MergePlanner`: every row of the decision table, plus all combinations of `B/L/R ∈ {absent, h1, h2, dir}`, generated exhaustively.
+- `LineDiff`: on random inputs the script turns A into B and is minimal (`|A|+|B|−2·LCS`, LCS by a plain DP in the test); `UnifiedDiff` hunks, headers and no-newline markers; `TextContent` detection.
 - Paths: NFC/NFD (`NfcNormalizer` against the Unicode conformance file), `..` traversal, absolute paths, drive letters, Windows reserved names, case collisions.
 - `MassDeleteGuard` thresholds at and around the boundaries.
 
