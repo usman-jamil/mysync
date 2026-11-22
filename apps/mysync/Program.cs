@@ -111,6 +111,7 @@ app.Add<ShareCommands>();
 app.Add<MaintenanceCommands>();
 app.Add<DiagnosticsCommands>();
 app.Add<PublishCommands>();
+app.Add<PushCommands>();
 
 await app.RunAsync(KnownCommands.ArrangeForParsing(args));
 

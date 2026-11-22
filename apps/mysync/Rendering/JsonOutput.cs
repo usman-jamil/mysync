@@ -83,6 +83,33 @@ internal static class JsonOutput
         return exitCode;
     }
 
+    public static int Write(Application.Sync.Push.PushReport report, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        Emit(
+            new PushJson(
+                "push",
+                report.ShareId?.ToString(),
+                report.ShareName?.Value,
+                report.Target,
+                report.Revision?.Value,
+                report.Committed,
+                report.DryRun,
+                report.Created,
+                report.Files,
+                report.Bytes,
+                Totals(report.Uploaded, sent: true),
+                Totals(report.AlreadyStored),
+                report.CommitAttempts,
+                [.. report.Skipped.Select(skip => new SkippedJson(skip.Path, CauseCode(skip.Cause), skip.Detail))],
+                [.. report.Warnings],
+                report.IgnoredByShare,
+                exitCode),
+            Context.PushJson);
+        return exitCode;
+    }
+
     public static int Write(NewSharePreview preview)
     {
         ArgumentNullException.ThrowIfNull(preview);
@@ -389,20 +416,7 @@ internal static class JsonOutput
         return exitCode;
     }
 
-    public static string CauseCode(SkipCause cause) => cause switch
-    {
-        SkipCause.Unstable => "unstable",
-        SkipCause.Unreadable => "unreadable",
-        SkipCause.InvalidName => "invalid-name",
-        SkipCause.Symlink => "symlink",
-        SkipCause.NoDelete => "no-delete",
-        SkipCause.ChangedSinceScan => "changed-since-scan",
-        SkipCause.ApplyFailed => "apply-failed",
-        SkipCause.CaseCollision => "case-collision",
-        SkipCause.WindowsInvalidName => "windows-invalid-name",
-        SkipCause.IgnoredLocally => "ignored-locally",
-        _ => cause.ToString(),
-    };
+    public static string CauseCode(SkipCause cause) => SkipCauseCodes.Of(cause);
 
     public static string ActionCode(SyncActionKind kind) => kind switch
     {
@@ -658,6 +672,26 @@ internal sealed record CreateJson(
     string Compression,
     int ExitCode);
 
+/// <param name="ShareId"><c>null</c> only for a dry run of <c>--create</c>.</param>
+internal sealed record PushJson(
+    string Command,
+    string? ShareId,
+    string? ShareName,
+    string Target,
+    long? Revision,
+    bool Committed,
+    bool DryRun,
+    bool Created,
+    int Files,
+    long Bytes,
+    TotalsJson Uploaded,
+    TotalsJson AlreadyStored,
+    int CommitAttempts,
+    List<SkippedJson> Skipped,
+    List<string> Warnings,
+    int IgnoredByShare,
+    int ExitCode);
+
 internal sealed record PreviewJson(string Command, bool DryRun, string RootPath, int FileCount, long TotalBytes, bool IsUnsafeRoot, int ExitCode);
 
 internal sealed record ErrorJson(
@@ -670,6 +704,7 @@ internal sealed record FailureJson(ErrorJson Error, int ExitCode);
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true, IndentSize = 2, NewLine = "\n")]
 [JsonSerializable(typeof(SyncJson))]
 [JsonSerializable(typeof(CreateJson))]
+[JsonSerializable(typeof(PushJson))]
 [JsonSerializable(typeof(PreviewJson))]
 [JsonSerializable(typeof(FailureJson))]
 [JsonSerializable(typeof(ConflictListJson))]

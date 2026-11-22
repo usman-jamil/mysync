@@ -77,6 +77,9 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
     /// <summary>True once <see cref="EnsureReadyForNewShareAsync"/> has run (the create flow must call it).</summary>
     public bool IsReady { get; private set; }
 
+    /// <summary>Objects actually stored by <see cref="UploadObjectAsync"/> (not ones that were already there).</summary>
+    public int ObjectUploads { get; private set; }
+
     /// <summary>Every stored blob name, sorted: what a test can see in the "container".</summary>
     public IReadOnlyList<string> BlobNames
     {
@@ -87,6 +90,26 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
                 return [.. _blobs.Keys.Order(StringComparer.Ordinal)];
             }
         }
+    }
+
+    /// <summary>An object's uncompressed content (gzip objects decoded), for assertions.</summary>
+    public byte[] ReadObject(ShareId shareId, ContentHash hash)
+    {
+        Blob blob;
+        lock (_gate)
+        {
+            blob = _blobs[ShareLayout.For(shareId).ObjectBlob(hash)];
+        }
+
+        if (blob.ContentEncoding != "gzip")
+        {
+            return [.. blob.Bytes!];
+        }
+
+        using System.IO.Compression.GZipStream gzip = new(new MemoryStream(blob.Bytes!), System.IO.Compression.CompressionMode.Decompress);
+        using MemoryStream decoded = new();
+        gzip.CopyTo(decoded);
+        return decoded.ToArray();
     }
 
     public Result<StorageLocation> GetLocation() => location ?? DefaultLocation;
@@ -256,6 +279,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
             if (!_blobs.ContainsKey(name))
             {
                 Put(name, bytes, manifest: null, contentEncoding: upload.Encoding.ToContentEncoding());
+                ObjectUploads++;
             }
         }
 

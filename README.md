@@ -226,6 +226,7 @@ Each `mysync sync` uploads what changed here and downloads what changed there. I
 | `mysync resolve <path>... --keep local\|remote` | Decide conflicts. `--all` instead of paths decides every one. |
 | `mysync gc` | Delete stored files no recent revision uses, and old history. |
 | `mysync delete [<name>] --yes` | Delete a share for every machine: its stored files, history and publications, and free its name. Local files stay. |
+| `mysync push <name> [<path>...]` | Upload files into a new folder `<host>/<time>/` of a share, without syncing: for collecting logs and data from servers. See [Collecting from servers](#collecting-from-servers). |
 | `mysync publish` | Publish a snapshot of the share as a read-only website anyone with the link can browse and download from. |
 | `mysync publications` | List the share's publications and their links. |
 | `mysync unpublish <id>` | Take a publication down; its link stops working at once. |
@@ -243,6 +244,8 @@ Options for `sync`:
 - `--force`: create a share in your home folder or a drive root, or clone into a folder that isn't empty.
 
 Options for `resolve`: `--all`, `-n, --dry-run`.
+
+Options for `push`: `--host <name>`, `--create`, `--no-info`, `-n, --dry-run`, `--force`. See [Collecting from servers](#collecting-from-servers).
 
 Options for `gc`:
 
@@ -378,6 +381,57 @@ build/
 - **Interrupting is safe.** Ctrl+C (exit 130), a crash or a lost connection never leaves a half-applied change in the share, and the next `sync` carries on from where things stand.
 - **Concurrent syncs merge.** Two machines syncing at once both succeed. If another machine committed first, mysync re-plans and retries.
 
+## Collecting from servers
+
+`mysync push` uploads files into a share **one way**: it only adds, into a folder of its own, and never downloads, deletes or raises a conflict. It keeps nothing on the server: no `.mysynctool`, no lock, no log. It's made for collecting logs and data from servers into a share people have cloned on their laptops.
+
+```text
+$ mysync push incident-logs /var/log/app /etc/app/config.yml
+Pushed 214 files (1.3 GB; 187 uploaded, 27 already stored) to incident-logs
+  folder:  web01/20261121-051207Z/
+  revision 42
+Get them with:  mysync sync incident-logs      (or mysync sync, in a folder already cloned from it)
+```
+
+Every push lands in a new folder, `<host>/<UTC time>/`:
+
+```text
+incident-logs/
+├── notes.md                         # synced as usual
+├── web01/
+│   ├── 20261121-051207Z/            # one push
+│   │   ├── app/…                    # /var/log/app keeps its name
+│   │   ├── config.yml
+│   │   └── _mysync-push.json        # where it came from: host, user, OS, sources, counts, skipped files
+│   └── 20261121-061207Z/            # the next one
+└── db01/
+    └── 20261121-051210Z/
+```
+
+- **What gets pushed:** with no paths, the contents of the current folder; a file keeps its name, and a folder keeps its own name (`/var/log/app` → `app/…`). Everything is pushed except mysync's own files and OS clutter (`.DS_Store`, `Thumbs.db`, …). A `.mysyncignore` in a pushed folder is not applied: it's pushed like any other file.
+- **The host:** the machine's name, or `--host <name>`. Two pushes in the same second get `…-2`, `…-3`.
+- **Many servers at once:** each writes its own folder, so twenty servers can push to one share at the same moment.
+- **Getting the files:** on a laptop, `mysync sync incident-logs` in an empty folder, or `mysync sync` in a folder already cloned from it. The pushed folders are ordinary synced files from then on: edit or delete them and sync as usual.
+- **A new share:** `--create` creates the share (by name) if it doesn't exist yet.
+- **Trying it first:** `-n, --dry-run` reads the files and shows the target folder and what would be uploaded, without changing anything.
+- **Refused:** pushing a folder that already syncs with that share (use `mysync sync` there), and the home folder or a drive root without `--force`.
+- Files that can't be read (locked, removed meanwhile, symlinks) are skipped and listed; the rest is pushed and the exit code is 9.
+
+Scheduling it, e.g. hourly with cron:
+
+```bash
+0 * * * *  cd /var/log && AZURE_STORAGE_CONNECTION_STRING=… /usr/local/bin/mysync push incident-logs app --json >> /var/log/mysync-push.json 2>&1
+```
+
+or with Windows Task Scheduler: `mysync.exe push incident-logs C:\ProgramData\App\logs --json`.
+
+Good to know:
+
+- A push needs the same storage credentials as any other command, so a server that can push can also read the share.
+- Every push adds entries to the share's manifest, so a share that collects for months grows. Remove old runs by deleting their folders in a clone and syncing, then `mysync gc`.
+- A file that's being written is captured as it was when it was read: a growing log is pushed up to the length it had when mysync opened it.
+- Pushing into a share that people sync puts the pushed folders on every one of their machines, and the share's `.mysyncignore` decides what they download (push warns when it matches pushed files). For collecting from servers, a share of its own is usually better.
+
 ## Publishing a share
 
 `mysync publish` makes a **public, read-only website** from a snapshot of a share: a page where anyone with the link can browse the folders, search, and download files one at a time or all at once. No login, no server. Use it to hand files to someone who doesn't use mysync.
@@ -495,7 +549,7 @@ With `--json`, every command prints exactly one JSON document on stdout, even wh
 | 1 | Unexpected error (details with `--verbose`) |
 | 2 | Usage or configuration error (bad option, missing or invalid environment variable, `resolve` on a path not in conflict, the publishing account's static website is off) |
 | 3 | Finished, but conflicts are open (takes precedence over 9) |
-| 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; the name is taken; `update` can't replace this binary |
+| 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; the name is taken; `update` can't replace this binary; `push` from a folder that already syncs with that share, or the share has a file where the host's folder would go |
 | 5 | Another machine kept committing; try again |
 | 6 | Another mysync is working in this folder |
 | 7 | The mass-delete safety check stopped the sync |

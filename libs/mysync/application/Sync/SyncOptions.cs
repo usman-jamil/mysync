@@ -15,6 +15,15 @@ public sealed record SyncOptions
     /// <summary>Commit attempts before <c>Sync.CommitRetriesExhausted</c> (CLAUDE.md §6).</summary>
     public int MaxCommitAttempts { get; init; } = 5;
 
+    /// <summary>
+    /// Commit attempts for <c>mysync push</c> (CLAUDE.md §10b): higher, because many servers may push
+    /// to one share at once, and re-planning a push is always safe (it only adds a new folder).
+    /// </summary>
+    public int MaxPushCommitAttempts { get; init; } = 20;
+
+    /// <summary>The longest single back-off, so push's many attempts never wait minutes.</summary>
+    public TimeSpan CommitRetryMaxDelay { get; init; } = TimeSpan.FromSeconds(5);
+
     /// <summary>First back-off after a lost commit race; doubles each attempt, ±50% jitter.</summary>
     public TimeSpan CommitRetryBaseDelay { get; init; } = TimeSpan.FromMilliseconds(200);
 

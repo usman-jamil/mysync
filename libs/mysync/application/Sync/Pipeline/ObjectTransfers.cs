@@ -137,10 +137,30 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
         }
     }
 
+    private Task<Result<long?>> UploadOneAsync(
+        ShareId shareId, SharePath path, FileEntry entry, CompressionSetting compression, ISyncProgressReporter progress, CancellationToken cancellationToken) =>
+        UploadOneAsync(shareId, path, entry, ct => folder.OpenReadAsync(path, ct), compression, progress, cancellationToken);
+
+    /// <summary>
+    /// One object: nothing is sent if the store already has it (in whichever form); otherwise
+    /// <paramref name="open"/> gives the file's bytes, which go to the store raw or compressed.
+    /// Used by sync for the share's folder, and by push for files anywhere.
+    /// </summary>
+    /// <param name="open">A seekable stream that reports its length, read from the start.</param>
     /// <returns>The bytes sent, or <c>null</c> when the store already had the object (in whichever form).</returns>
-    private async Task<Result<long?>> UploadOneAsync(
-        ShareId shareId, SharePath path, FileEntry entry, CompressionSetting compression, ISyncProgressReporter progress, CancellationToken cancellationToken)
+    public async Task<Result<long?>> UploadOneAsync(
+        ShareId shareId,
+        SharePath path,
+        FileEntry entry,
+        Func<CancellationToken, Task<Result<Stream>>> open,
+        CompressionSetting compression,
+        ISyncProgressReporter progress,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(entry);
+        ArgumentNullException.ThrowIfNull(open);
+        ArgumentNullException.ThrowIfNull(progress);
+
         Result<bool> exists = await store.ObjectExistsAsync(shareId, entry.Sha256, cancellationToken);
         if (exists.IsFailure)
         {
@@ -154,7 +174,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
             return Result.Success<long?>(null);
         }
 
-        Result<Stream> opened = await folder.OpenReadAsync(path, cancellationToken);
+        Result<Stream> opened = await open(cancellationToken);
         if (opened.IsFailure)
         {
             return Result.Failure<long?>(opened.Error);
@@ -185,7 +205,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
         return storedBytes;
     }
 
-    private static SkippedPath Skip(SharePath path, Error error) => error.Code switch
+    internal static SkippedPath Skip(SharePath path, Error error) => error.Code switch
     {
         "Storage.HashMismatch" => new SkippedPath(path.Value, SkipCause.Unstable, "it changed while it was being uploaded"),
         "Local.Unreadable" => new SkippedPath(path.Value, SkipCause.Unreadable, error.Description),

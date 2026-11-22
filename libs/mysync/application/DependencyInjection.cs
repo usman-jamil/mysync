@@ -42,6 +42,7 @@ public static class DependencyInjection
         services.AddScoped<RemoteCommitter>();
         services.AddScoped<ObjectCodec>();
         services.AddScoped<ObjectTransfers>();
+        services.AddScoped<Sync.Push.PushFiles>();
         services.AddScoped<LocalApplier>();
         services.AddScoped<SyncPipeline>();
         services.AddScoped<ShareFolder>();

@@ -34,11 +34,17 @@ internal sealed class GitIgnoreRulesLoader(ShareRoot root) : IIgnoreRulesLoader
             }
 
             string text = await File.ReadAllTextAsync(path, Encoding.UTF8, cancellationToken);
-            return Result.Success<IIgnoreMatcher>(new GitIgnoreMatcher(text.Split('\n').Select(line => line.TrimEnd('\r'))));
+            return Result.Success(Compile(text));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             return Result.Failure<IIgnoreMatcher>(LocalFileErrors.Unreadable(StateFileNames.IgnoreFile, exception.Message));
         }
+    }
+
+    public IIgnoreMatcher Compile(string rules)
+    {
+        ArgumentNullException.ThrowIfNull(rules);
+        return new GitIgnoreMatcher(rules.TrimStart('\uFEFF').Split('\n').Select(line => line.TrimEnd('\r')));
     }
 }

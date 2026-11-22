@@ -37,12 +37,14 @@ public static class DependencyInjection
 
         services.TryAddSingleton<ILocalFolder, LocalFolder>();
         services.TryAddSingleton<IFileScanner, FileScanner>();
+        services.TryAddSingleton<ILocalSources, LocalSources>();
         services.TryAddSingleton<IContentHasher, Sha256ContentHasher>();
         services.TryAddSingleton<IShareStateStore, JsonShareStateStore>();
         services.TryAddSingleton<IFolderLock, FolderLock>();
         services.TryAddSingleton<IIgnoreRulesLoader, GitIgnoreRulesLoader>();
         services.TryAddSingleton<IConflictLog>(provider => new FileConflictLog(provider.GetRequiredService<ShareRoot>()));
         services.TryAddSingleton<IManifestSerializer, ManifestSerializer>();
+        services.TryAddSingleton<IPushRecordSerializer, PushRecordSerializer>();
         services.TryAddSingleton<IMachineIdentity, MachineIdentity>();
         services.TryAddSingleton<IExecutableInstaller, ExecutableInstaller>();
         services.TryAddSingleton<IPublicationRegistrySerializer, PublicationRegistrySerializer>();

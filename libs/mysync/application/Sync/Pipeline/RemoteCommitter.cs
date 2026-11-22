@@ -24,12 +24,15 @@ internal sealed class RemoteCommitter(
     /// Plans against the HEAD it is given and returns the manifest to commit, or <c>null</c> if
     /// there is nothing to commit. Called once per attempt.
     /// </param>
+    /// <param name="maxAttempts">Defaults to <see cref="SyncOptions.MaxCommitAttempts"/>; push passes <see cref="SyncOptions.MaxPushCommitAttempts"/>.</param>
     public async Task<Result<CommitOutcome>> CommitAsync(
         ShareId shareId,
         Func<ManifestSnapshot, CancellationToken, Task<Result<Manifest?>>> prepare,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? maxAttempts = null)
     {
-        for (int attempt = 1; attempt <= options.MaxCommitAttempts; attempt++)
+        int attempts = maxAttempts ?? options.MaxCommitAttempts;
+        for (int attempt = 1; attempt <= attempts; attempt++)
         {
             Result<ManifestSnapshot?> head = await store.GetManifestAsync(shareId, cancellationToken);
             if (head.IsFailure)
@@ -78,13 +81,13 @@ internal sealed class RemoteCommitter(
 
             logger.LogInformation("Share {ShareId} changed while committing (attempt {Attempt}); re-planning", shareId, attempt);
 
-            if (attempt < options.MaxCommitAttempts)
+            if (attempt < attempts)
             {
                 await Task.Delay(BackOff(attempt), timeProvider, cancellationToken);
             }
         }
 
-        return Result.Failure<CommitOutcome>(SyncErrors.CommitRetriesExhausted(options.MaxCommitAttempts));
+        return Result.Failure<CommitOutcome>(SyncErrors.CommitRetriesExhausted(attempts));
     }
 
     /// <summary>Best effort (CLAUDE.md §6 step 4): a failure only logs a warning.</summary>
@@ -100,13 +103,13 @@ internal sealed class RemoteCommitter(
         return history.IsSuccess;
     }
 
-    /// <summary>base × 2^(attempt-1), scaled by a random 50–150%.</summary>
+    /// <summary>base × 2^(attempt-1), scaled by a random 50–150%, at most <see cref="SyncOptions.CommitRetryMaxDelay"/>.</summary>
     internal TimeSpan BackOff(int attempt)
     {
-        double exponential = options.CommitRetryBaseDelay.TotalMilliseconds * Math.Pow(2, attempt - 1);
+        double exponential = options.CommitRetryBaseDelay.TotalMilliseconds * Math.Pow(2, Math.Min(attempt - 1, 30));
         int jitterPercent = RandomNumberGenerator.GetInt32(50, 151);
 
-        return TimeSpan.FromMilliseconds(exponential * jitterPercent / 100);
+        return TimeSpan.FromMilliseconds(Math.Min(exponential * jitterPercent / 100, options.CommitRetryMaxDelay.TotalMilliseconds));
     }
 }
 

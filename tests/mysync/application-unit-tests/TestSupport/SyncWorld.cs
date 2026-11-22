@@ -107,6 +107,7 @@ internal sealed class Machine
         _world = world;
         Name = name;
         Folder = folder;
+        Sources = new InMemoryLocalSources(world.Clock);
 
         ServiceCollection services = new();
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
@@ -115,6 +116,8 @@ internal sealed class Machine
         services.AddSingleton<IAliasStore>(world.Aliases);
         services.AddSingleton<ILocalFolder>(folder);
         services.AddSingleton<IFileScanner>(folder);
+        services.AddSingleton<ILocalSources>(Sources);
+        services.AddSingleton<IPushRecordSerializer>(PushRecords);
         services.AddSingleton<IShareStateStore>(State);
         services.AddSingleton<IFolderLock>(Lock);
         services.AddSingleton<IConflictLog>(ConflictLog);
@@ -137,6 +140,11 @@ internal sealed class Machine
     public string Name { get; }
 
     public InMemoryLocalFolder Folder { get; }
+
+    /// <summary>The machine's disk as <c>mysync push</c> sees it (absolute paths; push runs in <see cref="InMemoryLocalSources.CurrentDirectory"/>).</summary>
+    public InMemoryLocalSources Sources { get; }
+
+    public TestPushRecordSerializer PushRecords { get; } = new();
 
     public InMemoryShareStateStore State { get; } = new();
 
@@ -209,6 +217,13 @@ internal sealed class Machine
 
     public Task<Result<UnpublishReport>> UnpublishAsync(string publishId, string? shareId = null) =>
         Send<UnpublishCommand, UnpublishReport>(new UnpublishCommand(publishId, Reference(shareId)));
+
+    public Task<Result<MySync.Application.Sync.Push.PushReport>> PushAsync(MySync.Application.Sync.Push.PushCommand command, CancellationToken? cancellationToken = null) =>
+        Send<MySync.Application.Sync.Push.PushCommand, MySync.Application.Sync.Push.PushReport>(command, cancellationToken);
+
+    /// <summary><c>mysync push &lt;share&gt; [&lt;path&gt;...]</c> with every option at its default.</summary>
+    public Task<Result<MySync.Application.Sync.Push.PushReport>> PushAsync(string share, params string[] paths) =>
+        PushAsync(new MySync.Application.Sync.Push.PushCommand(ShareReference.Parse(share).Value, paths));
 
     public Task<Result<GarbageReport>> GcAsync(CollectGarbageCommand? command = null) =>
         Send<CollectGarbageCommand, GarbageReport>(command ?? new CollectGarbageCommand());

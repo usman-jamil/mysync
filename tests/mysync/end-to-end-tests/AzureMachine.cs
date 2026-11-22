@@ -75,6 +75,10 @@ internal sealed class AzureMachine(string connectionString, string container) : 
 
     public Task<Result<SyncReport>> SyncAsync() => SendAsync<RunSyncCommand, SyncReport>(new RunSyncCommand());
 
+    /// <summary><c>mysync push</c>, run in this machine's folder (relative paths are against it).</summary>
+    public Task<Result<MySync.Application.Sync.Push.PushReport>> PushAsync(MySync.Application.Sync.Push.PushCommand command) =>
+        SendAsync<MySync.Application.Sync.Push.PushCommand, MySync.Application.Sync.Push.PushReport>(command);
+
     public Task<Result<DeleteShareResponse>> DeleteAsync(string? shareId = null) =>
         SendAsync<DeleteShareCommand, DeleteShareResponse>(new DeleteShareCommand(Reference(shareId)));
 

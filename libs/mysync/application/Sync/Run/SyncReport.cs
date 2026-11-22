@@ -90,3 +90,22 @@ public enum SkipCause
 
 /// <param name="Path">Display with <see cref="Domain.Paths.PathErrors.Display"/>: it may not be a valid share path.</param>
 public sealed record SkippedPath(string Path, SkipCause Cause, string Detail);
+
+/// <summary>The kebab-case code of a <see cref="SkipCause"/>, as in <c>--json</c> output and the push record.</summary>
+public static class SkipCauseCodes
+{
+    public static string Of(SkipCause cause) => cause switch
+    {
+        SkipCause.Unstable => "unstable",
+        SkipCause.Unreadable => "unreadable",
+        SkipCause.InvalidName => "invalid-name",
+        SkipCause.Symlink => "symlink",
+        SkipCause.NoDelete => "no-delete",
+        SkipCause.ChangedSinceScan => "changed-since-scan",
+        SkipCause.ApplyFailed => "apply-failed",
+        SkipCause.CaseCollision => "case-collision",
+        SkipCause.WindowsInvalidName => "windows-invalid-name",
+        SkipCause.IgnoredLocally => "ignored-locally",
+        _ => cause.ToString(),
+    };
+}

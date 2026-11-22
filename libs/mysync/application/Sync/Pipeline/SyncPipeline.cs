@@ -421,20 +421,7 @@ internal sealed class SyncPipeline(
     {
         ManifestEntry? entry = remote.GetValueOrDefault(path) ?? baseEntries.GetValueOrDefault(path);
 
-        if (ignore.IsIgnored(path, entry is DirectoryEntry))
-        {
-            return true;
-        }
-
-        for (SharePath? ancestor = path.Parent; ancestor is not null; ancestor = ancestor.Parent)
-        {
-            if (ignore.IsIgnored(ancestor, isDirectory: true))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return ignore.IsIgnoredOrInsideIgnored(path, entry is DirectoryEntry);
     }
 
     // Scanned files, minus what was deleted, plus what was downloaded.

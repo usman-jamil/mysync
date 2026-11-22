@@ -34,6 +34,8 @@ public class ErrorCatalogTests
         { MySync.Domain.Diffing.DiffErrors.VersionNotStored("a.txt", "remote"), "Diff.VersionNotStored" }, // exit 8
         { StorageErrors.UnsupportedEncoding("br"), "Storage.UnsupportedEncoding" }, // exit 8
         { StorageErrors.CorruptObject("shares/x/objects/ab/ab", "invalid gzip"), "Storage.CorruptObject" },
+        { MySync.Domain.Sync.Push.PushErrors.SourceIsTheShare("/srv/app", "incident-logs"), "Push.SourceIsTheShare" }, // exit 4
+        { MySync.Domain.Sync.Push.PushErrors.TargetIsAFile("web01"), "Push.TargetIsAFile" }, // exit 4
     };
 
     [Theory]
@@ -60,6 +62,10 @@ public class ErrorCatalogTests
         PathErrors.Empty().Type.ShouldBe(ErrorType.Validation);
         ConfigurationErrors.Missing("AZURE_STORAGE_CONNECTION_STRING").Type.ShouldBe(ErrorType.Validation);
         ConfigurationErrors.Invalid("MYSYNC_CONTAINER", "too short").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Push.PushErrors.DuplicateSource("app", "/a/app", "/b/app").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Push.PushErrors.SourceNotFound("missing.log").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Push.PushErrors.InvalidTarget("x").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Push.PushErrors.CreateNeedsName().Type.ShouldBe(ErrorType.Validation);
     }
 
     [Fact]
