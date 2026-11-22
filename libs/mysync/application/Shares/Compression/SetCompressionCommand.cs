@@ -22,10 +22,12 @@ public sealed record GetCompressionQuery(ShareReference? Share = null) : IQuery<
 
 /// <param name="Revision">HEAD after the command: the new revision, or the current one when nothing changed.</param>
 /// <param name="Changed">False when the share was already in the requested state.</param>
-public sealed record CompressionResponse(ShareId ShareId, CompressionSetting Setting, Revision Revision, int FormatVersion, bool Changed = false);
+/// <param name="Name">The share's name (its first, if a rename left two), or <c>null</c> for a share without one.</param>
+public sealed record CompressionResponse(ShareId ShareId, CompressionSetting Setting, Revision Revision, int FormatVersion, bool Changed = false, ShareName? Name = null);
 
 internal sealed class SetCompressionCommandHandler(
     PublishingShare share,
+    ShareNames names,
     RemoteCommitter committer,
     IMachineIdentity machine,
     SharedKernel.IDateTimeProvider clock)
@@ -59,11 +61,13 @@ internal sealed class SetCompressionCommandHandler(
         }
 
         Manifest head = commit.Value.Committed ?? commit.Value.Remote.Manifest;
-        return new CompressionResponse(target.Value.ShareId, head.Compression, head.Revision, head.FormatVersion, commit.Value.Committed is not null);
+        Result<IReadOnlyList<ShareName>> named = await names.OfAsync(target.Value.ShareId, cancellationToken);
+        return new CompressionResponse(
+            target.Value.ShareId, head.Compression, head.Revision, head.FormatVersion, commit.Value.Committed is not null, named is { IsSuccess: true, Value.Count: > 0 } ? named.Value[0] : null);
     }
 }
 
-internal sealed class GetCompressionQueryHandler(PublishingShare share, IShareStore store) : IQueryHandler<GetCompressionQuery, CompressionResponse>
+internal sealed class GetCompressionQueryHandler(PublishingShare share, ShareNames names, IShareStore store) : IQueryHandler<GetCompressionQuery, CompressionResponse>
 {
     public async Task<Result<CompressionResponse>> Handle(GetCompressionQuery query, CancellationToken cancellationToken)
     {
@@ -85,8 +89,12 @@ internal sealed class GetCompressionQueryHandler(PublishingShare share, IShareSt
             return Result.Failure<CompressionResponse>(ShareErrors.NotFound(shareId));
         }
 
-        return manifest.Deletion is { } deletion
-            ? Result.Failure<CompressionResponse>(ShareErrors.Deleted(shareId, deletion))
-            : new CompressionResponse(shareId, manifest.Compression, manifest.Revision, manifest.FormatVersion);
+        if (manifest.Deletion is { } deletion)
+        {
+            return Result.Failure<CompressionResponse>(ShareErrors.Deleted(shareId, deletion));
+        }
+
+        Result<IReadOnlyList<ShareName>> named = await names.OfAsync(shareId, cancellationToken);
+        return new CompressionResponse(shareId, manifest.Compression, manifest.Revision, manifest.FormatVersion, Name: named is { IsSuccess: true, Value.Count: > 0 } ? named.Value[0] : null);
     }
 }

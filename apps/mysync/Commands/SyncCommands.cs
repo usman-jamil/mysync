@@ -30,6 +30,8 @@ internal sealed class SyncCommands(CommandRunner runner)
     private static readonly Error DryRunWithShareId = Error.Validation(
         "Cli.DryRunWithShareId", "--dry-run can't be combined with a share ID: cloning only downloads. Run it in the cloned folder afterwards.");
 
+    private const string CompressIsASetting = "--compress is ignored: compression is a setting of the share. Turn it on with: mysync compression on";
+
     private static readonly Error NameWithShareReference = Error.Validation(
         "Cli.NameWithShareReference",
         "--name names a new share; with a share name or ID, 'mysync sync' clones that share instead. Leave one of them out.");
@@ -44,6 +46,7 @@ internal sealed class SyncCommands(CommandRunner runner)
     /// <param name="yes">-y, Don't ask before creating a large share.</param>
     /// <param name="force">Create a share in your home folder or a drive root, or clone into a folder that isn't empty.</param>
     /// <param name="name">The new share's name (required when creating one): 3-40 letters a-z, digits and '-'.</param>
+    /// <param name="compress">Store the new share's files gzip-compressed (a setting of the share; see 'mysync compression').</param>
     /// <param name="cancellationToken">Ctrl+C.</param>
     [Command("sync")]
     public Task<int> Sync(
@@ -54,6 +57,7 @@ internal sealed class SyncCommands(CommandRunner runner)
         bool yes = false,
         bool force = false,
         string? name = null,
+        bool compress = false,
         CancellationToken cancellationToken = default) =>
         runner.RunAsync(async () =>
         {
@@ -68,6 +72,11 @@ internal sealed class SyncCommands(CommandRunner runner)
                 if (name is not null)
                 {
                     return runner.Fail(NameWithShareReference);
+                }
+
+                if (compress)
+                {
+                    ConsoleOutput.Warn(CompressIsASetting);
                 }
 
                 return dryRun ? runner.Fail(DryRunWithShareId) : await CloneAsync(shareId, force, cancellationToken);
@@ -100,6 +109,11 @@ internal sealed class SyncCommands(CommandRunner runner)
                     ConsoleOutput.Warn($"--name is ignored: this folder is already a share. To rename it: mysync rename {newName}");
                 }
 
+                if (compress)
+                {
+                    ConsoleOutput.Warn(CompressIsASetting);
+                }
+
                 return await RunSyncAsync(dryRun, noDelete, allowMassDelete, cancellationToken);
             }
 
@@ -109,7 +123,7 @@ internal sealed class SyncCommands(CommandRunner runner)
                 return runner.Fail(ShareErrors.NameRequired(ShareName.SuggestFrom(folderName)));
             }
 
-            return await CreateAsync(preview.Value, newName, dryRun, yes, force, cancellationToken);
+            return await CreateAsync(preview.Value, newName, dryRun, yes, force, compress, cancellationToken);
         }, cancellationToken);
 
     /// <summary>Show what 'mysync sync' would do now, without changing anything here or in the share.</summary>
@@ -151,7 +165,7 @@ internal sealed class SyncCommands(CommandRunner runner)
         return report.Skipped.Length > 0 ? ExitCodes.PathsSkipped : ExitCodes.Success;
     }
 
-    private async Task<int> CreateAsync(NewSharePreview preview, ShareName? newName, bool dryRun, bool yes, bool force, CancellationToken cancellationToken)
+    private async Task<int> CreateAsync(NewSharePreview preview, ShareName? newName, bool dryRun, bool yes, bool force, bool compress, CancellationToken cancellationToken)
     {
         if (dryRun)
         {
@@ -190,7 +204,7 @@ internal sealed class SyncCommands(CommandRunner runner)
         }
 
         Result<CreateShareResponse> created = await SyncProgressDisplay.RunAsync(runner.Options, progress =>
-            runner.SendAsync<CreateShareCommand, CreateShareResponse>(new CreateShareCommand(newName, force, runner.Options.Parallel, progress), cancellationToken));
+            runner.SendAsync<CreateShareCommand, CreateShareResponse>(new CreateShareCommand(newName, force, runner.Options.Parallel, progress, compress), cancellationToken));
         if (created.IsFailure)
         {
             return runner.Fail(created.Error);

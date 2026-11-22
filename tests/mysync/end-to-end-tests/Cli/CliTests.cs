@@ -41,6 +41,7 @@ public sealed class CliTests : IDisposable
     [InlineData("sync", "next-wave", "--name", "other-name")]
     [InlineData("sync", "--name", "Bad Name!")]
     [InlineData("rename")]
+    [InlineData("compression", "maybe")]
     [InlineData("info", "{" + "0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10" + "}")]
     public async Task UsageErrors_Should_ExitTwo_WithTheMessageOnStderr(params string[] arguments)
     {
@@ -863,6 +864,67 @@ public sealed class CliTests : IDisposable
 
         deleted.ExitCode.ShouldBe(0, deleted.ToString());
         (await RunAsync(_a, "shares")).StdOut.ShouldContain("No named shares yet");
+    }
+
+    [Fact]
+    public async Task Compression_Should_BeASettingOfTheShare_ShownSetAndReported()
+    {
+        string log = string.Concat(Enumerable.Range(0, 3000).Select(i => $"2026-11-22 INFO request {i} served\n"));
+        _a.WriteFile("app.log", log);
+
+        CliResult created = await RunAsync(_a, "sync", "--name", "cli-logs-" + Guid.NewGuid().ToString("N")[..8], "--compress");
+        created.ExitCode.ShouldBe(0, created.ToString());
+        created.StdOut.ShouldMatch(@"files?, [0-9.]+ KB \(sent [0-9.]+ (KB|B), compressed\)");
+
+        CliResult shown = await RunAsync(_a, "compression");
+        shown.StdOut.ShouldContain("Compression is on (gzip) for cli-logs-");
+        (await RunAsync(_a, "info")).StdOut.ShouldMatch(@"Compression\s+on \(gzip\)");
+        using (var info = JsonDocument.Parse((await RunAsync(_a, "info", "--json")).StdOut))
+        {
+            info.RootElement.GetProperty("compression").GetString().ShouldBe("gzip");
+        }
+
+        CliResult ignored = await RunAsync(_a, "sync", "--compress");
+        ignored.ExitCode.ShouldBe(0, ignored.ToString());
+        ignored.StdErr.ShouldContain("--compress is ignored: compression is a setting of the share. Turn it on with: mysync compression on");
+
+        _a.WriteFile("app.log", log + "more\n");
+        CliResult synced = await RunAsync(_a, "sync", "--json");
+        using (var json = JsonDocument.Parse(synced.StdOut))
+        {
+            JsonElement uploaded = json.RootElement.GetProperty("uploaded");
+            uploaded.GetProperty("storedBytes").GetInt64().ShouldBeLessThan(uploaded.GetProperty("bytes").GetInt64());
+        }
+
+        CliResult off = await RunAsync(_a, "compression", "off", "--json");
+        off.ExitCode.ShouldBe(0, off.ToString());
+        using (var json = JsonDocument.Parse(off.StdOut))
+        {
+            json.RootElement.GetProperty("compression").GetString().ShouldBe("none");
+            json.RootElement.GetProperty("changed").GetBoolean().ShouldBeTrue();
+            json.RootElement.GetProperty("formatVersion").GetInt32().ShouldBe(3);
+        }
+
+        (await RunAsync(_a, "compression", "off")).StdOut.ShouldContain("already off");
+        (await RunAsync(_b, "compression", "on", "--share", ShareIdOf(_a))).StdOut.ShouldContain("Compression is on");
+    }
+
+    [Fact]
+    public async Task AStoredFileInAnEncodingThisMysyncDoesntKnow_Should_ExitEight_AndSayUpgrade()
+    {
+        _a.WriteFile("data.log", string.Concat(Enumerable.Repeat("line\n", 500)));
+        (await RunAsync(_a, "sync", "--name", "cli-enc-" + Guid.NewGuid().ToString("N")[..8], "--compress")).ExitCode.ShouldBe(0);
+        Azure.Storage.Blobs.BlobContainerClient container = new(_azurite.ConnectionString, _container);
+        string blob = MySync.Domain.Storage.ShareLayout.For(MySync.Domain.Shares.ShareReference.Parse(ShareIdOf(_a)).Value.Id!)
+            .ObjectBlob(ManifestBuilder.HashOf(string.Concat(Enumerable.Repeat("line\n", 500))));
+        await container.GetBlobClient(blob).SetHttpHeadersAsync(
+            new Azure.Storage.Blobs.Models.BlobHttpHeaders { ContentEncoding = "br", ContentType = "application/octet-stream" },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        CliResult printed = await RunAsync(_a, "diff", "data.log", "--print", "remote");
+
+        printed.ExitCode.ShouldBe(8, printed.ToString());
+        printed.StdErr.ShouldContain("Upgrade mysync");
     }
 
     private Dictionary<string, string?> Environment() => new()

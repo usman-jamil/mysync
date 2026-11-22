@@ -47,7 +47,7 @@ internal static class JsonOutput
             report.Revision.Value,
             report.Committed,
             report.DryRun,
-            Totals(report.Uploaded),
+            Totals(report.Uploaded, sent: true),
             Totals(report.Downloaded),
             report.DeletedLocally,
             report.DeletedRemotely,
@@ -73,10 +73,11 @@ internal static class JsonOutput
                 created.Name.Value,
                 created.FileCount,
                 created.TotalBytes,
-                Totals(created.Uploaded),
+                Totals(created.Uploaded, sent: true),
                 [.. created.Skipped.Select(skip => new SkippedJson(skip.Path, CauseCode(skip.Cause), skip.Detail))],
                 [.. created.Warnings],
                 $"mysync sync {created.Name}",
+                created.Compression.ToCode(),
                 exitCode),
             Context.CreateJson);
         return exitCode;
@@ -119,6 +120,7 @@ internal static class JsonOutput
                 info.FileCount,
                 info.TotalBytes,
                 info.OpenConflicts,
+                info.Compression.ToCode(),
                 exitCode),
             Context.InfoJson);
         return exitCode;
@@ -203,6 +205,24 @@ internal static class JsonOutput
                     publication.SiteAssetsVersion))],
                 exitCode),
             Context.PublicationsJson);
+        return exitCode;
+    }
+
+    public static int Write(Application.Shares.Compression.CompressionResponse compression, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(compression);
+
+        Emit(
+            new CompressionJson(
+                "compression",
+                compression.ShareId.ToString(),
+                compression.Name?.Value,
+                compression.Setting.ToCode(),
+                compression.Revision.Value,
+                compression.FormatVersion,
+                compression.Changed,
+                exitCode),
+            Context.CompressionJson);
         return exitCode;
     }
 
@@ -406,7 +426,7 @@ internal static class JsonOutput
         Console.Out.Flush();
     }
 
-    private static TotalsJson Totals(TransferTotals totals) => new(totals.Files, totals.Bytes);
+    private static TotalsJson Totals(TransferTotals totals, bool sent = false) => new(totals.Files, totals.Bytes, sent ? totals.StoredBytes : null);
 
     private static ConflictJson Conflict(Conflict conflict) => new(
         conflict.Path.Value,
@@ -429,7 +449,8 @@ internal static class JsonOutput
     private static string Utc(DateTimeOffset value) => value.UtcDateTime.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss.FFFFFFF'Z'", CultureInfo.InvariantCulture);
 }
 
-internal sealed record TotalsJson(int Files, long Bytes);
+/// <param name="StoredBytes">Uploads only: what went over the wire (less than <paramref name="Bytes"/> when sent compressed).</param>
+internal sealed record TotalsJson(int Files, long Bytes, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? StoredBytes = null);
 
 internal sealed record SkippedJson(string Path, string Cause, string Detail);
 
@@ -488,6 +509,7 @@ internal sealed record InfoJson(
     int FileCount,
     long TotalBytes,
     int? OpenConflicts,
+    string Compression,
     int ExitCode);
 
 internal sealed record DeleteJson(
@@ -540,6 +562,8 @@ internal sealed record PublicationJson(
     string SiteAssetsVersion);
 
 internal sealed record PublicationsJson(string Command, string ShareId, List<PublicationJson> Publications, int ExitCode);
+
+internal sealed record CompressionJson(string Command, string ShareId, string? Name, string Compression, long Revision, int FormatVersion, bool Changed, int ExitCode);
 
 internal sealed record DiffJson(string Command, string ShareId, List<DiffItemJson> Items, int ExitCode);
 
@@ -631,6 +655,7 @@ internal sealed record CreateJson(
     List<SkippedJson> Skipped,
     List<string> Warnings,
     string CloneCommand,
+    string Compression,
     int ExitCode);
 
 internal sealed record PreviewJson(string Command, bool DryRun, string RootPath, int FileCount, long TotalBytes, bool IsUnsafeRoot, int ExitCode);
@@ -657,5 +682,6 @@ internal sealed record FailureJson(ErrorJson Error, int ExitCode);
 [JsonSerializable(typeof(UnpublishJson))]
 [JsonSerializable(typeof(ShareListJson))]
 [JsonSerializable(typeof(DiffJson))]
+[JsonSerializable(typeof(CompressionJson))]
 [JsonSerializable(typeof(RenameJson))]
 internal sealed partial class CliJsonContext : JsonSerializerContext;

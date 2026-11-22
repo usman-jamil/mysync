@@ -120,7 +120,7 @@ public sealed class CompressionFormatTests
     [Fact]
     public void AReaderLimitedToFormatTwo_Should_RefuseACompressedShare()
     {
-        // What 0.7 and older do: anything above their highest format is "upgrade mysync".
+        // What 0.7.0 and older do: anything above their highest format is "upgrade mysync".
         Manifest compressed = Ok(Manifest.CreateNew(Share(), [], Created, "a", CompressionSetting.Gzip));
 
         (compressed.FormatVersion > Manifest.DeletedFormatVersion).ShouldBeTrue();

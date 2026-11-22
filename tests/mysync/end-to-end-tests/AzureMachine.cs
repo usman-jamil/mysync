@@ -49,6 +49,16 @@ internal sealed class AzureMachine(string connectionString, string container) : 
     public Task<Result<CreateShareResponse>> CreateNamedAsync(string name) =>
         SendAsync<CreateShareCommand, CreateShareResponse>(new CreateShareCommand(ShareName.Create(name).Value));
 
+    /// <summary>Creates a share with compression on (<c>sync --compress</c>).</summary>
+    public Task<Result<CreateShareResponse>> CreateCompressedAsync(string? name = null) =>
+        SendAsync<CreateShareCommand, CreateShareResponse>(new CreateShareCommand(ShareName.Create(name ?? "e2e-" + Guid.NewGuid().ToString("N")[..12]).Value, Compress: true));
+
+    public Task<Result<MySync.Application.Shares.Compression.CompressionResponse>> SetCompressionAsync(bool on) =>
+        SendAsync<MySync.Application.Shares.Compression.SetCompressionCommand, MySync.Application.Shares.Compression.CompressionResponse>(new(on));
+
+    public Task<Result<SyncReport>> ResolveAsync(string keep, params string[] paths) =>
+        SendAsync<MySync.Application.Conflicts.Resolve.ResolveConflictsCommand, SyncReport>(new([.. paths], false, keep));
+
     public Task<Result<SyncReport>> CloneAsync(ShareId shareId) => SendAsync<CloneShareCommand, SyncReport>(new CloneShareCommand(ShareReference.For(shareId)));
 
     public Task<Result<SyncReport>> CloneAsync(string shareOrName) => SendAsync<CloneShareCommand, SyncReport>(new CloneShareCommand(ShareReference.Parse(shareOrName).Value));

@@ -40,12 +40,41 @@ internal static class ShareInfoView
         Add(fields, "Last change", $"{info.RemoteUpdatedUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture)} by {Domain.Paths.PathErrors.Display(info.RemoteUpdatedBy)}");
         Add(fields, "Created", info.CreatedUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture));
         Add(fields, "Files", $"{info.FileCount} ({ConsoleOutput.Bytes(info.TotalBytes)})");
+        Add(fields, "Compression", info.Compression == Domain.Manifests.CompressionSetting.Gzip ? "on (gzip)" : "off");
         if (info.OpenConflicts is { } conflicts)
         {
             Add(fields, "Conflicts", conflicts == 0 ? "none" : $"{conflicts} open (mysync conflicts)");
         }
 
         ConsoleOutput.Write(fields);
+    }
+
+    /// <summary><c>mysync compression [on|off]</c>.</summary>
+    public static void Render(Application.Shares.Compression.CompressionResponse compression, bool changing)
+    {
+        ArgumentNullException.ThrowIfNull(compression);
+
+        string share = ConsoleOutput.Value(compression.Name?.Value ?? compression.ShareId.ToString());
+        bool on = compression.Setting == Domain.Manifests.CompressionSetting.Gzip;
+        if (!changing)
+        {
+            AnsiConsole.MarkupLine($"Compression is {(on ? "[green]on[/] (gzip)" : "off")} for {share}.");
+            return;
+        }
+
+        if (!compression.Changed)
+        {
+            AnsiConsole.MarkupLine($"Compression is already {(on ? "on" : "off")} for {share}; nothing changed.");
+            return;
+        }
+
+        AnsiConsole.MarkupLine(on
+            ? $"[green]Compression is on[/] for {share}. Files uploaded from now on are stored compressed."
+            : $"[green]Compression is off[/] for {share}. Files uploaded from now on are stored as they are; ones already stored compressed stay so.");
+        if (on)
+        {
+            AnsiConsole.MarkupLine(ConsoleOutput.Muted("Every machine that syncs this share needs mysync 0.7.5 or later; older ones say \"upgrade mysync\"."));
+        }
     }
 
     /// <summary><c>mysync shares</c>: name and full share ID (copyable), sorted by name.</summary>

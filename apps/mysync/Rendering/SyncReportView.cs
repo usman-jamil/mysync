@@ -34,8 +34,13 @@ internal static class SyncReportView
         ArgumentNullException.ThrowIfNull(created);
 
         RenderWarnings(created.Warnings);
+        string sent = created.Compression == CompressionSetting.Gzip ? " (compression on)" : string.Empty;
+        if (created.Uploaded.Compressed)
+        {
+            sent = $" (sent {ConsoleOutput.Bytes(created.Uploaded.StoredBytes)}, compressed)";
+        }
         AnsiConsole.MarkupLine(
-            $"[green]Created share {ConsoleOutput.Value(created.Name.Value)}[/] ({ConsoleOutput.Value(created.ShareId.ToString())}): {created.FileCount} {Files(created.FileCount)}, {ConsoleOutput.Bytes(created.TotalBytes)}");
+            $"[green]Created share {ConsoleOutput.Value(created.Name.Value)}[/] ({ConsoleOutput.Value(created.ShareId.ToString())}): {created.FileCount} {Files(created.FileCount)}, {ConsoleOutput.Bytes(created.TotalBytes)}{sent}");
         AnsiConsole.MarkupLine($"Share it with:  [bold]{ConsoleOutput.Value($"mysync sync {created.Name}")}[/]");
         RenderSkipped(created.Skipped);
     }
@@ -147,7 +152,8 @@ internal static class SyncReportView
     private static string Totals(SyncReport report)
     {
         int deleted = report.DeletedLocally + report.DeletedRemotely;
-        return $"↑ {report.Uploaded.Files} {Files(report.Uploaded.Files)} {ConsoleOutput.Bytes(report.Uploaded.Bytes)}  "
+        string sent = report.Uploaded.Compressed ? $" (sent {ConsoleOutput.Bytes(report.Uploaded.StoredBytes)})" : string.Empty;
+        return $"↑ {report.Uploaded.Files} {Files(report.Uploaded.Files)} {ConsoleOutput.Bytes(report.Uploaded.Bytes)}{sent}  "
             + $"↓ {report.Downloaded.Files} {Files(report.Downloaded.Files)} {ConsoleOutput.Bytes(report.Downloaded.Bytes)}  "
             + $"✗ {deleted} deleted";
     }

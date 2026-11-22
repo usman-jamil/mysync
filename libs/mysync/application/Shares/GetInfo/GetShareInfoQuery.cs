@@ -35,7 +35,8 @@ public sealed record ShareInfoResponse(
     DateTimeOffset CreatedUtc,
     int FileCount,
     long TotalBytes,
-    int? OpenConflicts);
+    int? OpenConflicts,
+    CompressionSetting Compression = CompressionSetting.None);
 
 internal sealed class GetShareInfoQueryHandler(
     ShareFolder shareFolder, IShareStateStore stateStore, IShareStore store, ILocalFolder folder, ShareResolver resolver, ShareNames names)
@@ -116,6 +117,7 @@ internal sealed class GetShareInfoQueryHandler(
             manifest.CreatedUtc,
             manifest.FileCount,
             manifest.TotalSize,
-            here?.Conflicts.Length);
+            here?.Conflicts.Length,
+            manifest.Compression);
     }
 }

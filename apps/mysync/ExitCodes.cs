@@ -44,7 +44,7 @@ internal static class ExitCodes
             "Sync.CommitRetriesExhausted" or "Sync.ShareChangedDuringGc" => CommitRetriesExhausted,
             "State.FolderLocked" => FolderLocked,
             "Sync.MassDeleteBlocked" => MassDeleteBlocked,
-            "Shares.NotFound" or "Shares.Deleted" or "Diff.VersionNotStored" or "Shares.NameNotFound" or "Shares.Incomplete" or "Storage.Unauthorized" => NotFoundOrUnauthorized,
+            "Shares.NotFound" or "Shares.Deleted" or "Diff.VersionNotStored" or "Storage.UnsupportedEncoding" or "Shares.NameNotFound" or "Shares.Incomplete" or "Storage.Unauthorized" => NotFoundOrUnauthorized,
             "Update.ReleaseNotFound" or "Update.NoBuildForPlatform" => NotFoundOrUnauthorized,
             "Update.NotWritable" or "Update.NotInstalledBinary" => FolderPrecondition,
             "Publish.NotFound" or "Publish.RevisionNotFound" or "Publish.Unauthorized" or "Publish.CannotReadServiceProperties" => NotFoundOrUnauthorized,

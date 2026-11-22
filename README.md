@@ -174,6 +174,7 @@ Environment variables only: no config file, no prompts.
 | `MYSYNC_CONTAINER` | no | `mysync` | Blob container (3–63 lowercase letters, digits and hyphens). Created when the first share is. |
 | `MYSYNC_PROVIDER` | no | `azure-blob` | Storage provider. Azure Blob is the only one today. |
 | `MYSYNC_PARALLELISM` | no | `min(cores × 2, 16)` | Concurrent transfers, 1–64. `--parallel <n>` overrides it for one run. |
+| `MYSYNC_COMPRESSION_LEVEL` | no | `fastest` | For shares with [compression](#compression) on: `fastest` or `optimal` (smaller, slower). |
 | `MYSYNC_PUBLISH_CONNECTION_STRING` | for publishing | | The storage account publications go to. Its static website must be on. See [Publishing](#publishing-a-share). |
 | `MYSYNC_PUBLISH_BASE_URL` | for publishing | | That account's static website address, `https://<account>.z13.web.core.windows.net` (or your own domain). |
 
@@ -217,6 +218,7 @@ Each `mysync sync` uploads what changed here and downloads what changed there. I
 | `mysync sync <name>` | Clone a share into this (empty) folder, by its name (or its share ID). |
 | `mysync shares` | List every named share: its name and share ID. |
 | `mysync rename <name>` | Give this folder's share a new name (or a first one, for a share from an older version). |
+| `mysync compression [on\|off]` | Show the share's compression setting, or turn it on or off for files uploaded from now on. `--share <name>` for another share. |
 | `mysync status` | Show what `sync` would do, plus conflicts and warnings. Changes nothing. |
 | `mysync info [<name>]` | The share's names and ID, storage, this folder's revision against the share's, file count and size, open conflicts. |
 | `mysync conflicts` | List open conflicts: path, kind, both versions, and who changed the share. Works offline. |
@@ -237,6 +239,7 @@ Options for `sync`:
 - `--allow-mass-delete`: see [Safety checks](#safety-checks).
 - `-y, --yes`: don't ask before creating a large share.
 - `--name <name>`: the new share's name (required when creating one; ignored, with a warning, in a folder that's already a share).
+- `--compress`: when creating a share, store its files compressed. See [Compression](#compression).
 - `--force`: create a share in your home folder or a drive root, or clone into a folder that isn't empty.
 
 Options for `resolve`: `--all`, `-n, --dry-run`.
@@ -264,6 +267,27 @@ Every share has a name, like `q3-report`, so you can type `mysync sync q3-report
 - **Deleting a share frees its name**, whether you deleted it by name or by ID, so the name can be used again.
 - **If creating a share was interrupted**, its name is taken but the share was never finished. `mysync shares` still lists it; `mysync delete <name> --yes` removes it and frees the name.
 - **Storage lifecycle rules:** names are small blobs under `aliases/` in the container. A rule such as "delete blobs 90 days after creation" deletes them too: the name disappears from `mysync shares`, stops working, and someone else could claim it, while the share itself may live on. When you write lifecycle rules, include or exclude `aliases/` on purpose.
+
+## Compression
+
+A share can store its files compressed, so large text files (logs, CSV, SQL scripts, JSON) move to and from servers faster. You only ever see your real files: every machine decompresses as it downloads.
+
+```bash
+mysync sync --name app-logs --compress   # a new share, compressed from the start
+#   Created share app-logs (…): 214 files, 1.3 GB (sent 142 MB, compressed)
+
+mysync compression on                    # an existing share, in its folder
+mysync compression                       # show the setting (also in mysync info)
+mysync compression off
+```
+
+- **It's a setting of the share,** recorded in the share itself, so every machine applies it and no one has to remember a flag. `--compress` in a folder that's already a share is ignored, with a warning pointing to `mysync compression on`.
+- **It applies to files uploaded from then on.** Files already stored stay as they are; turning it on or off never re-uploads or rewrites anything.
+- **Some files are stored as they are anyway:** files under 512 bytes; types that are already compressed (`zip`, `gz`, `7z` and other archives, images such as `jpg` and `png`, audio and video, `docx`/`xlsx`/`pptx`, `pdf`, fonts); and anything that a quick test shows doesn't shrink by at least 10%.
+- **Every machine needs a mysync that supports it** (0.7.5 or later). An older one refuses a compressed share with "upgrade mysync" rather than misreading it. This stays true after `compression off`, because some files may still be stored compressed.
+- **It costs CPU on the uploading machine.** `MYSYNC_COMPRESSION_LEVEL=optimal` compresses harder, at more CPU. Downloads cost little.
+- **Publishing works the same:** published files are served compressed and every browser, `curl` and PowerShell gets the original bytes; the checksums are of the real files.
+- The summary says how much was actually sent: `↑ 12 files 1.3 GB (sent 142 MB)`.
 
 ## Conflicts
 
@@ -475,7 +499,7 @@ With `--json`, every command prints exactly one JSON document on stdout, even wh
 | 5 | Another machine kept committing; try again |
 | 6 | Another mysync is working in this folder |
 | 7 | The mass-delete safety check stopped the sync |
-| 8 | Share not found, deleted, never finished, or no share has that name; the storage account rejected the credentials; or no such release or publication |
+| 8 | Share not found, deleted, never finished, or no share has that name; the storage account rejected the credentials; no such release or publication; or a stored file uses an encoding this mysync can't read (upgrade mysync) |
 | 9 | Finished, but some paths were skipped (busy, unreadable, invalid name) |
 | 10 | Published, but the publication couldn't be opened from the internet (check `MYSYNC_PUBLISH_BASE_URL`) |
 | 130 | Cancelled (Ctrl+C) |

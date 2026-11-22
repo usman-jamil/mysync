@@ -1,5 +1,6 @@
 using ConsoleAppFramework;
 using MySync.Application.Shares.Delete;
+using MySync.Application.Shares.Compression;
 using MySync.Application.Shares.GetInfo;
 using MySync.Application.Shares.List;
 using MySync.Application.Shares.Rename;
@@ -12,6 +13,9 @@ namespace MySync.Cli.Commands;
 /// <summary><c>mysync info</c>, <c>delete</c>, <c>shares</c> and <c>rename</c> (CLAUDE.md §10).</summary>
 internal sealed class ShareCommands(CommandRunner runner)
 {
+    private static readonly Error CompressionNeedsOnOrOff = Error.Validation(
+        "Cli.CompressionNeedsOnOrOff", "Use 'mysync compression on' or 'mysync compression off' (or no argument to show the setting).");
+
     private static readonly Error RenameNeedsName = Error.Validation(
         "Cli.RenameNeedsName", "Give the new name: mysync rename <name> (3-40 letters a-z, digits and '-').");
 
@@ -164,6 +168,54 @@ internal sealed class ShareCommands(CommandRunner runner)
             }
 
             ShareInfoView.Render(renamed.Value);
+            return ExitCodes.Success;
+        }, cancellationToken);
+
+    /// <summary>Show the share's compression setting, or turn it on or off for files uploaded from now on.</summary>
+    /// <param name="state">on or off (leave out to show the setting).</param>
+    /// <param name="share">A share's name or ID (default: this folder's).</param>
+    /// <param name="cancellationToken">Ctrl+C.</param>
+    [Command("compression")]
+    public Task<int> Compression([Argument] string? state = null, string? share = null, CancellationToken cancellationToken = default) =>
+        runner.RunAsync(async () =>
+        {
+            bool? on = state?.ToUpperInvariant() switch
+            {
+                "ON" => true,
+                "OFF" => false,
+                _ => null,
+            };
+            if (state is not null && on is null)
+            {
+                return runner.Fail(CompressionNeedsOnOrOff);
+            }
+
+            Result settings = runner.CheckStorage();
+            if (settings.IsFailure)
+            {
+                return runner.Fail(settings.Error);
+            }
+
+            Result<ShareReference?> reference = CommandRunner.ParseShare(share);
+            if (reference.IsFailure)
+            {
+                return runner.Fail(reference.Error);
+            }
+
+            Result<CompressionResponse> result = on is { } turnOn
+                ? await runner.SendAsync<SetCompressionCommand, CompressionResponse>(new SetCompressionCommand(turnOn, reference.Value), cancellationToken)
+                : await runner.QueryAsync<GetCompressionQuery, CompressionResponse>(new GetCompressionQuery(reference.Value), cancellationToken);
+            if (result.IsFailure)
+            {
+                return runner.Fail(result.Error);
+            }
+
+            if (runner.Options.Json)
+            {
+                return JsonOutput.Write(result.Value, ExitCodes.Success);
+            }
+
+            ShareInfoView.Render(result.Value, changing: on is not null);
             return ExitCodes.Success;
         }, cancellationToken);
 }
