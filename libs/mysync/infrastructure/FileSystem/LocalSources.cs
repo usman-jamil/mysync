@@ -35,12 +35,14 @@ internal sealed class LocalSources(ShareRoot current) : ILocalSources
         return Describe(path, Path.GetFullPath(path, current.FullPath));
     }
 
-    public async Task<Result<IReadOnlyList<SyncedFolder>>> FindSyncedFoldersAsync(string folder, CancellationToken cancellationToken)
+    public async Task<Result<IReadOnlyList<SyncedFolder>>> FindSyncedFoldersAsync(string path, CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrEmpty(folder);
+        ArgumentException.ThrowIfNullOrEmpty(path);
         List<SyncedFolder> found = [];
+        string fullPath = Path.GetFullPath(path);
+        DirectoryInfo? start = File.Exists(fullPath) ? new FileInfo(fullPath).Directory : new DirectoryInfo(fullPath);
 
-        for (DirectoryInfo? directory = new(Path.GetFullPath(folder)); directory is not null; directory = directory.Parent)
+        for (DirectoryInfo? directory = start; directory is not null; directory = directory.Parent)
         {
             string state = Path.Combine(directory.FullName, StateFileNames.State);
             if (!File.Exists(state) && !Directory.Exists(state))

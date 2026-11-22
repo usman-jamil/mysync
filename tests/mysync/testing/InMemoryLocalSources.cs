@@ -153,14 +153,17 @@ public sealed class InMemoryLocalSources(IDateTimeProvider? clock = null) : ILoc
         return Describe(path, FullPath(path));
     }
 
-    public Task<Result<IReadOnlyList<SyncedFolder>>> FindSyncedFoldersAsync(string folder, CancellationToken cancellationToken)
+    public Task<Result<IReadOnlyList<SyncedFolder>>> FindSyncedFoldersAsync(string path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         List<SyncedFolder> found = [];
 
         lock (_gate)
         {
-            for (string? directory = folder; directory is not null; directory = Parent(directory))
+            string fullPath = FullPath(path);
+            string? start = _nodes.TryGetValue(fullPath, out Node? node) && node.Kind != NodeKind.Folder ? Parent(fullPath) : fullPath;
+
+            for (string? directory = start; directory is not null; directory = Parent(directory))
             {
                 if (_states.TryGetValue(directory, out ShareId? shareId))
                 {

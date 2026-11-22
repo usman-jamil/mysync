@@ -387,14 +387,12 @@ internal sealed class PushCommandHandler(
     /// </summary>
     private async Task<Result> CheckNotSyncedWithAsync(PickedSources picked, PushShare share, CancellationToken cancellationToken)
     {
-        IEnumerable<string> folders = picked.Chosen
-            .Select(source => source.Info.Kind == LocalSourceKind.Folder ? source.Info.FullPath : Path.GetDirectoryName(source.Info.FullPath))
-            .OfType<string>()
-            .Distinct(StringComparer.Ordinal);
+        // A file's folder is found by the source itself: Path here would split by this OS's rules.
+        IEnumerable<string> paths = picked.Chosen.Select(source => source.Info.FullPath).Distinct(StringComparer.Ordinal);
 
-        foreach (string folder in folders)
+        foreach (string path in paths)
         {
-            Result<IReadOnlyList<SyncedFolder>> synced = await sources.FindSyncedFoldersAsync(folder, cancellationToken);
+            Result<IReadOnlyList<SyncedFolder>> synced = await sources.FindSyncedFoldersAsync(path, cancellationToken);
             if (synced.IsFailure)
             {
                 return Result.Failure(synced.Error);

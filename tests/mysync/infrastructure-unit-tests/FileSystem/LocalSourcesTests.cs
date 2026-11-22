@@ -151,6 +151,18 @@ public sealed class LocalSourcesTests : IDisposable
     }
 
     [Fact]
+    public async Task FindSyncedFolders_Should_StartAtTheFolderOfAFile()
+    {
+        var shareId = ShareId.New();
+        _temp.WriteFile("app/sub/b.log", "x");
+        await SaveStateAsync(_temp.Combine("app"), shareId);
+
+        IReadOnlyList<SyncedFolder> found = (await Sources.FindSyncedFoldersAsync(_temp.Combine(Path.Combine("app", "sub", "b.log")), Ct)).Value;
+
+        found.ShouldBe([new SyncedFolder(_temp.Combine("app"), shareId)]);
+    }
+
+    [Fact]
     public async Task FindSyncedFolders_Should_FailOnADamagedStateFile()
     {
         _temp.WriteFile("app/.mysynctool", "{ not json");

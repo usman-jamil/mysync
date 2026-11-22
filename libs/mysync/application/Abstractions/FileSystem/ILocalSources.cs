@@ -21,11 +21,13 @@ public interface ILocalSources
     LocalSourceInfo Inspect(string path);
 
     /// <summary>
-    /// Every <c>.mysynctool</c> in <paramref name="folder"/> and each of its parents, with the share
-    /// it records. Read only, nothing else of the state is used. An unreadable or damaged one is
-    /// <c>State.Corrupt</c>: push doesn't guess.
+    /// Every <c>.mysynctool</c> in the folder <paramref name="path"/> names (for a file, the folder
+    /// it is in) and each of its parents, with the share it records. Read only, nothing else of the
+    /// state is used. An unreadable or damaged one is <c>State.Corrupt</c>: push doesn't guess. The
+    /// path is the source's <see cref="LocalSourceInfo.FullPath"/>; only the implementation knows
+    /// how its paths split into folders.
     /// </summary>
-    Task<Result<IReadOnlyList<SyncedFolder>>> FindSyncedFoldersAsync(string folder, CancellationToken cancellationToken);
+    Task<Result<IReadOnlyList<SyncedFolder>>> FindSyncedFoldersAsync(string path, CancellationToken cancellationToken);
 
     /// <summary>
     /// Walks the sources: files (size, mtime, executable bit), empty folders, and what was skipped
