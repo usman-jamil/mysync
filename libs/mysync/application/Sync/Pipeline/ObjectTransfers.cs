@@ -7,22 +7,25 @@ using MySync.Domain.Content;
 using MySync.Domain.Manifests;
 using MySync.Domain.Paths;
 using MySync.Domain.Shares;
+using MySync.Domain.Storage;
 using SharedKernel;
 
 namespace MySync.Application.Sync.Pipeline;
 
 /// <summary>Moves file bytes between the local folder and the store, reporting progress in bytes.</summary>
-internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IContentHasher hasher)
+internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IContentHasher hasher, ObjectCodec codec)
 {
     private const int BufferSize = 81920;
 
     /// <summary>
-    /// Uploads files in parallel, skipping objects the store already has. Returns what was
-    /// transferred and the paths that couldn't be uploaded (left out of this commit).
+    /// Uploads files in parallel, skipping objects the store already has, compressing those the
+    /// share's <paramref name="compression"/> setting and <see cref="CompressionPolicy"/> pick.
+    /// Returns what was transferred and the paths that couldn't be uploaded (left out of this commit).
     /// </summary>
     public async Task<UploadOutcome> UploadAsync(
         ShareId shareId,
         IReadOnlyList<(SharePath Path, FileEntry Entry)> files,
+        CompressionSetting compression,
         ISyncProgressReporter progress,
         int parallelism,
         CancellationToken cancellationToken)
@@ -38,6 +41,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
         Lock gate = new();
         int count = 0;
         long bytes = 0;
+        long stored = 0;
         Dictionary<SharePath, SkippedPath> failed = [];
         HashSet<ContentHash> sent = [];
 
@@ -46,7 +50,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
             new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
             async (file, ct) =>
             {
-                Result<bool> uploaded = await UploadOneAsync(shareId, file.Path, file.Entry, progress, ct);
+                Result<long?> uploaded = await UploadOneAsync(shareId, file.Path, file.Entry, compression, progress, ct);
 
                 lock (gate)
                 {
@@ -54,16 +58,17 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
                     {
                         failed[file.Path] = Skip(file.Path, uploaded.Error);
                     }
-                    else if (uploaded.Value)
+                    else if (uploaded.Value is { } storedBytes)
                     {
                         count++;
                         bytes += file.Entry.Size;
+                        stored += storedBytes;
                         sent.Add(file.Entry.Sha256);
                     }
                 }
             });
 
-        return new UploadOutcome(new TransferTotals(count, bytes), failed, sent);
+        return new UploadOutcome(new TransferTotals(count, bytes, stored), failed, sent);
     }
 
     /// <summary>
@@ -73,7 +78,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
     public async Task<Result<IStagedFile>> DownloadToStagingAsync(
         ShareId shareId, SharePath path, FileEntry entry, ISyncProgressReporter progress, CancellationToken cancellationToken)
     {
-        Result<Stream> opened = (await store.OpenObjectReadAsync(shareId, entry.Sha256, cancellationToken)).ToContent();
+        Result<Stream> opened = await codec.OpenDecodedAsync(shareId, entry, cancellationToken);
         if (opened.IsFailure)
         {
             return Result.Failure<IStagedFile>(opened.Error);
@@ -107,11 +112,16 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
 
             if (hash.Finish() != entry.Sha256)
             {
-                return Result.Failure<IStagedFile>(LocalFileErrors.WriteFailed(path.Value, "the downloaded content does not match its hash"));
+                return Result.Failure<IStagedFile>(StorageErrors.CorruptObject(ShareLayout.For(shareId).ObjectBlob(entry.Sha256), "it doesn't match its hash"));
             }
 
             keep = true;
             return Result.Success(staged);
+        }
+        catch (CorruptObjectException exception)
+        {
+            // Invalid gzip, or more bytes than the share lists: skip this path, keep syncing the rest.
+            return Result.Failure<IStagedFile>(exception.Error);
         }
         catch (IOException exception)
         {
@@ -127,47 +137,52 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
         }
     }
 
-    private async Task<Result<bool>> UploadOneAsync(
-        ShareId shareId, SharePath path, FileEntry entry, ISyncProgressReporter progress, CancellationToken cancellationToken)
+    /// <returns>The bytes sent, or <c>null</c> when the store already had the object (in whichever form).</returns>
+    private async Task<Result<long?>> UploadOneAsync(
+        ShareId shareId, SharePath path, FileEntry entry, CompressionSetting compression, ISyncProgressReporter progress, CancellationToken cancellationToken)
     {
         Result<bool> exists = await store.ObjectExistsAsync(shareId, entry.Sha256, cancellationToken);
         if (exists.IsFailure)
         {
-            return exists;
+            return Result.Failure<long?>(exists.Error);
         }
 
         if (exists.Value)
         {
             progress.BytesTransferred(TransferDirection.Upload, entry.Size);
             progress.FileTransferred(TransferDirection.Upload, path);
-            return false;
+            return Result.Success<long?>(null);
         }
 
         Result<Stream> opened = await folder.OpenReadAsync(path, cancellationToken);
         if (opened.IsFailure)
         {
-            return Result.Failure<bool>(opened.Error);
+            return Result.Failure<long?>(opened.Error);
         }
 
+        // Progress counts the file's own bytes as they're read, so the bar matches its size.
         await using ProgressReportingStream content = new(opened.Value, progress, TransferDirection.Upload);
         Result uploaded;
+        long storedBytes;
         try
         {
-            uploaded = await store.UploadObjectAsync(shareId, entry.Sha256, ObjectUpload.Raw(content, content.Length), cancellationToken);
+            await using PreparedUpload prepared = await codec.PrepareUploadAsync(shareId, path, entry, opened.Value, content, compression, cancellationToken);
+            uploaded = await store.UploadObjectAsync(shareId, entry.Sha256, prepared.Upload, cancellationToken);
+            storedBytes = prepared.StoredBytes;
         }
         catch (IOException exception)
         {
             // Reading the local file failed mid-upload (e.g. locked or removed): skip it this run.
-            return Result.Failure<bool>(LocalFileErrors.Unreadable(path.Value, exception.Message));
+            return Result.Failure<long?>(LocalFileErrors.Unreadable(path.Value, exception.Message));
         }
 
         if (uploaded.IsFailure)
         {
-            return Result.Failure<bool>(uploaded.Error);
+            return Result.Failure<long?>(uploaded.Error);
         }
 
         progress.FileTransferred(TransferDirection.Upload, path);
-        return true;
+        return storedBytes;
     }
 
     private static SkippedPath Skip(SharePath path, Error error) => error.Code switch

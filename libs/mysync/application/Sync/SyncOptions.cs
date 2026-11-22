@@ -17,4 +17,10 @@ public sealed record SyncOptions
 
     /// <summary>First back-off after a lost commit race; doubles each attempt, ±50% jitter.</summary>
     public TimeSpan CommitRetryBaseDelay { get; init; } = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// gzip level for uploads to a share with compression on (CLAUDE.md §6). <c>Fastest</c> by
+    /// default; the CLI binds <c>MYSYNC_COMPRESSION_LEVEL=fastest|optimal</c>.
+    /// </summary>
+    public System.IO.Compression.CompressionLevel CompressionLevel { get; init; } = System.IO.Compression.CompressionLevel.Fastest;
 }

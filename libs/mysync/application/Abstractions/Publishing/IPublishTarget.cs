@@ -42,7 +42,11 @@ public interface IPublishTarget
 public sealed record PublishLocation(string AccountName, Uri BaseUrl);
 
 /// <summary>The headers a published blob is served with (the static website sends whatever the blob has).</summary>
-public sealed record PublishedBlob(string ContentType, string? ContentDisposition = null, string? CacheControl = null)
+/// <param name="ContentEncoding">
+/// <c>gzip</c> when the bytes are gzip (copied as stored from a compressed object), so browsers,
+/// <c>curl --compressed</c> and PowerShell decode them; <c>null</c> for raw bytes.
+/// </param>
+public sealed record PublishedBlob(string ContentType, string? ContentDisposition = null, string? CacheControl = null, string? ContentEncoding = null)
 {
     /// <summary>Published files never change: each publication is its own copy.</summary>
     public const string Immutable = "public, max-age=31536000, immutable";

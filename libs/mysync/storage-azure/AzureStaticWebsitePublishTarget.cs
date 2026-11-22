@@ -178,6 +178,7 @@ internal sealed class AzureStaticWebsitePublishTarget : IPublishTarget
         ContentType = blob.ContentType,
         ContentDisposition = blob.ContentDisposition,
         CacheControl = blob.CacheControl,
+        ContentEncoding = blob.ContentEncoding,
     };
 
     private static Result<Connection> Connect(PublishStorageOptions options, AzureTransferSettings settings)

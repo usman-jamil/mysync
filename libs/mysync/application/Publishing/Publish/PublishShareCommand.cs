@@ -85,6 +85,7 @@ internal sealed class PublishShareCommandHandler(
     ISiteDataSerializer serializer,
     IPublicationVerifier verifier,
     IContentHasher hasher,
+    ObjectCodec codec,
     ILocalFolder folder,
     IMachineIdentity machine,
     IDateTimeProvider clock,
@@ -335,6 +336,18 @@ internal sealed class PublishShareCommandHandler(
     private async Task<Result<ImmutableDictionary<CopyMethod, int>>> CopyFilesAsync(
         ShareId shareId, PublicationLayout layout, SiteData data, int parallelism, CancellationToken cancellationToken)
     {
+        // How each object is stored (raw or gzip, and its stored length), from one listing: no downloads.
+        Dictionary<ContentHash, StoredObjectInfo> stored = [];
+        await foreach (Result<StoredObjectInfo> item in store.ListObjectsAsync(shareId, cancellationToken))
+        {
+            if (item.IsFailure)
+            {
+                return Result.Failure<ImmutableDictionary<CopyMethod, int>>(item.Error);
+            }
+
+            stored[item.Value.Hash] = item.Value;
+        }
+
         ConcurrentDictionary<CopyMethod, int> counts = new();
         Error? first = null;
         Lock gate = new();
@@ -347,7 +360,9 @@ internal sealed class PublishShareCommandHandler(
                 new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = stop.Token },
                 async (file, token) =>
                 {
-                    Result<CopyMethod> copied = await CopyFileAsync(shareId, layout, file, token);
+                    Result<CopyMethod> copied = stored.TryGetValue(file.Sha256, out StoredObjectInfo? info)
+                        ? await CopyFileAsync(shareId, layout, file, info, token)
+                        : Result.Failure<CopyMethod>(StorageErrors.NotFound(Domain.Storage.ShareLayout.For(shareId).ObjectBlob(file.Sha256)));
                     if (copied.IsSuccess)
                     {
                         counts.AddOrUpdate(copied.Value, 1, (_, count) => count + 1);
@@ -370,7 +385,8 @@ internal sealed class PublishShareCommandHandler(
         return first is null ? counts.ToImmutableDictionary() : Result.Failure<ImmutableDictionary<CopyMethod, int>>(first);
     }
 
-    private async Task<Result<CopyMethod>> CopyFileAsync(ShareId shareId, PublicationLayout layout, SiteDataFile file, CancellationToken cancellationToken)
+    private async Task<Result<CopyMethod>> CopyFileAsync(
+        ShareId shareId, PublicationLayout layout, SiteDataFile file, StoredObjectInfo stored, CancellationToken cancellationToken)
     {
         PublishedBlob headers = new(ContentTypeMap.For(file.Path.Value), DispositionPolicy.ContentDisposition(file.Path.Value), PublishedBlob.Immutable);
         string blobName = layout.File(file.Path);
@@ -383,11 +399,14 @@ internal sealed class PublishShareCommandHandler(
 
         if (source.Value is { } readable)
         {
-            return await target.CopyAsync(readable, file.Size, blobName, headers, cancellationToken);
+            // Server-side, the bytes as stored: a gzip object stays gzip, and says so, so every
+            // client that downloads it decodes it (sizes and hashes in site-data.js are uncompressed).
+            return await target.CopyAsync(readable, stored.Size, blobName, headers with { ContentEncoding = stored.Encoding.ToContentEncoding() }, cancellationToken);
         }
 
-        // No readable URL: through this machine, checked against the object's name on the way.
-        Result<Stream> opened = (await store.OpenObjectReadAsync(shareId, file.Sha256, cancellationToken)).ToContent();
+        // No readable URL: through this machine, decoded once and checked against the object's
+        // name on the way, and published raw.
+        Result<Stream> opened = await codec.OpenDecodedAsync(shareId, FileEntry.Create(file.Sha256, file.Size, DateTimeOffset.UnixEpoch, executable: false).Value, cancellationToken);
         if (opened.IsFailure)
         {
             return Result.Failure<CopyMethod>(opened.Error);
@@ -396,7 +415,17 @@ internal sealed class PublishShareCommandHandler(
         await using Stream content = opened.Value;
         using IIncrementalContentHash hash = hasher.CreateIncremental();
         await using HashingReadStream hashing = new(content, hash);
-        Result<bool> put = await target.PutAsync(blobName, hashing, headers, onlyIfAbsent: false, cancellationToken);
+        Result<bool> put;
+        try
+        {
+            put = await target.PutAsync(blobName, hashing, headers, onlyIfAbsent: false, cancellationToken);
+        }
+        catch (CorruptObjectException exception)
+        {
+            await target.DeleteAsync(blobName, CancellationToken.None);
+            return Result.Failure<CopyMethod>(exception.Error);
+        }
+
         if (put.IsFailure)
         {
             return Result.Failure<CopyMethod>(put.Error);
@@ -405,7 +434,7 @@ internal sealed class PublishShareCommandHandler(
         if (hash.Finish() != file.Sha256)
         {
             await target.DeleteAsync(blobName, CancellationToken.None);
-            return Result.Failure<CopyMethod>(StorageErrors.HashMismatch(blobName));
+            return Result.Failure<CopyMethod>(StorageErrors.CorruptObject(Domain.Storage.ShareLayout.For(shareId).ObjectBlob(file.Sha256), "it doesn't match its hash"));
         }
 
         return CopyMethod.Streamed;

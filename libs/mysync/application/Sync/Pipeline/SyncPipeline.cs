@@ -82,8 +82,9 @@ internal sealed class SyncPipeline(
                     .Where(action => action.Kind == SyncActionKind.Upload && !uploadFailures.ContainsKey(action.Path))
                     .Select(action => (action.Path, (FileEntry)action.Local!))];
 
-                UploadOutcome upload = await transfers.UploadAsync(session.ShareId, toUpload, progress, session.Parallelism, ct);
-                uploaded = new TransferTotals(uploaded.Files + upload.Uploaded.Files, uploaded.Bytes + upload.Uploaded.Bytes);
+                // The share's setting as of this attempt's HEAD: another machine may turn it on mid-run.
+                UploadOutcome upload = await transfers.UploadAsync(session.ShareId, toUpload, snapshot.Manifest.Compression, progress, session.Parallelism, ct);
+                uploaded = uploaded.Plus(upload.Uploaded);
                 sent.UnionWith(upload.Sent);
                 foreach ((SharePath path, SkippedPath failure) in upload.Failed)
                 {

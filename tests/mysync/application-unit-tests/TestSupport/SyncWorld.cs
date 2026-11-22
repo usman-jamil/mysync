@@ -179,6 +179,12 @@ internal sealed class Machine
 
     public Task<Result<ShareInfoResponse>> InfoAsync() => Query<GetShareInfoQuery, ShareInfoResponse>(new GetShareInfoQuery());
 
+    public Task<Result<MySync.Application.Shares.Compression.CompressionResponse>> SetCompressionAsync(bool on, string? shareOrName = null) =>
+        Send<MySync.Application.Shares.Compression.SetCompressionCommand, MySync.Application.Shares.Compression.CompressionResponse>(new(on, Reference(shareOrName)));
+
+    public Task<Result<MySync.Application.Shares.Compression.CompressionResponse>> CompressionAsync(string? shareOrName = null) =>
+        Query<MySync.Application.Shares.Compression.GetCompressionQuery, MySync.Application.Shares.Compression.CompressionResponse>(new(Reference(shareOrName)));
+
     public Task<Result<MySync.Application.Conflicts.Diff.DiffResponse>> DiffAsync(MySync.Application.Conflicts.Diff.DiffQuery query) =>
         Query<MySync.Application.Conflicts.Diff.DiffQuery, MySync.Application.Conflicts.Diff.DiffResponse>(query);
 

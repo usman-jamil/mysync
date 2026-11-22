@@ -365,6 +365,7 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 | `MYSYNC_CONTAINER` | no | Blob container name. Default `mysync`. |
 | `MYSYNC_PROVIDER` | no | Default `azure-blob`. Reserved for future providers. |
 | `MYSYNC_PARALLELISM` | no | Max concurrent transfers. Default `min(ProcessorCount * 2, 16)`. `--parallel` overrides it. |
+| `MYSYNC_COMPRESSION_LEVEL` | no | gzip level for uploads to a share with compression on: `fastest` (default) or `optimal`. Anything else is `ConfigurationErrors.Invalid` (exit `2`). |
 | `MYSYNC_PUBLISH_CONNECTION_STRING` | for `publish`, `unpublish`, and `delete` of a share that has publications | The **publishing** account (static website hosting on). May be the private account (`publish` warns); a separate one is better. A secret, like the other connection string. |
 | `MYSYNC_PUBLISH_BASE_URL` | same | The public URL of that account's static website, absolute `https` (e.g. `https://<account>.z13.web.core.windows.net`, or a custom domain). A connection string can't tell it, and mysync uses no management credentials. |
 | `MYSYNC_UPDATE_SOURCE`, `GITHUB_TOKEN` | no | `update` only (§10). |

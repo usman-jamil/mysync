@@ -15,6 +15,8 @@ internal sealed class CliEnvironment
 {
     public const string ParallelismVariable = "MYSYNC_PARALLELISM";
 
+    public const string CompressionLevelVariable = "MYSYNC_COMPRESSION_LEVEL";
+
     private readonly Error? _problem;
 
     public CliEnvironment(IConfiguration configuration)
@@ -42,6 +44,17 @@ internal sealed class CliEnvironment
             SyncOptions = new SyncOptions();
             _problem ??= ConfigurationErrors.Invalid(
                 ParallelismVariable, $"'{parallelism}' is not a whole number from {SyncOptions.MinParallelism} to {SyncOptions.MaxAllowedParallelism}.");
+        }
+
+        // gzip level for uploads to a compressed share: fastest (default) or optimal.
+        string? level = configuration[CompressionLevelVariable]?.Trim();
+        if (string.Equals(level, "optimal", StringComparison.OrdinalIgnoreCase))
+        {
+            SyncOptions = SyncOptions with { CompressionLevel = System.IO.Compression.CompressionLevel.Optimal };
+        }
+        else if (!string.IsNullOrEmpty(level) && !string.Equals(level, "fastest", StringComparison.OrdinalIgnoreCase))
+        {
+            _problem ??= ConfigurationErrors.Invalid(CompressionLevelVariable, $"'{level}' is not 'fastest' or 'optimal'.");
         }
     }
 

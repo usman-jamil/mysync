@@ -40,6 +40,7 @@ public static class DependencyInjection
         services.TryAddSingleton(new SyncOptions());
         services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<RemoteCommitter>();
+        services.AddScoped<ObjectCodec>();
         services.AddScoped<ObjectTransfers>();
         services.AddScoped<LocalApplier>();
         services.AddScoped<SyncPipeline>();

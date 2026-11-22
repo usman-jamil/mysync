@@ -222,7 +222,7 @@ public class PublishTests
         _world.Store.CanMakeReadUrls = false;
         _world.Store.DownloadStream = (_, bytes) => new MemoryStream([.. bytes, (byte)'!']);
 
-        (await machine.PublishAsync()).ShouldFail().Code.ShouldBe("Storage.HashMismatch");
+        (await machine.PublishAsync()).ShouldFail().Code.ShouldBe("Storage.CorruptObject");
 
         _world.Publishing.BlobNames.ShouldNotContain(name => name.StartsWith("p/", StringComparison.Ordinal));
         (await machine.PublicationsAsync()).ShouldSucceed().Publications.Single().Status.ShouldBe(PublicationStatus.Failed);

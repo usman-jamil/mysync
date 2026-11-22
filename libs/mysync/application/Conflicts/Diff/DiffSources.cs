@@ -17,7 +17,7 @@ namespace MySync.Application.Conflicts.Diff;
 /// their hash before use). Reads at most <see cref="DiffLimits.MaxBytes"/> + 1 bytes of a side into
 /// memory; a larger side is "too large" and never buffered. Nothing here writes.
 /// </summary>
-internal sealed class DiffSources(ILocalFolder folder, IShareStore store, IContentHasher hasher)
+internal sealed class DiffSources(ILocalFolder folder, IShareStore store, IContentHasher hasher, ObjectCodec codec)
 {
     private const int BufferSize = 81920;
 
@@ -90,7 +90,7 @@ internal sealed class DiffSources(ILocalFolder folder, IShareStore store, IConte
     /// <summary>A stored version as a stream for <c>--print</c>: unlimited, its hash checked when it ends.</summary>
     public async Task<Result<Stream>> OpenStoredAsync(ShareId shareId, SharePath path, DiffSideKind kind, FileEntry file, CancellationToken cancellationToken)
     {
-        Result<Stream> opened = (await store.OpenObjectReadAsync(shareId, file.Sha256, cancellationToken)).ToContent();
+        Result<Stream> opened = await codec.OpenDecodedAsync(shareId, file, cancellationToken);
         if (opened.IsFailure)
         {
             return Result.Failure<Stream>(NotStored(opened.Error, path, kind));
@@ -113,14 +113,23 @@ internal sealed class DiffSources(ILocalFolder folder, IShareStore store, IConte
             return exists.Value ? Result.Success<byte[]?>(null) : Result.Failure<byte[]?>(DiffErrors.VersionNotStored(path.Value, DiffQueryHandler.Name(kind)));
         }
 
-        Result<Stream> opened = (await store.OpenObjectReadAsync(shareId, file.Sha256, cancellationToken)).ToContent();
+        Result<Stream> opened = await codec.OpenDecodedAsync(shareId, file, cancellationToken);
         if (opened.IsFailure)
         {
             return Result.Failure<byte[]?>(NotStored(opened.Error, path, kind));
         }
 
         await using Stream content = opened.Value;
-        (ContentHash hash, byte[]? bytes, long _) = await ReadAsync(content, cancellationToken);
+        ContentHash hash;
+        byte[]? bytes;
+        try
+        {
+            (hash, bytes, _) = await ReadAsync(content, cancellationToken);
+        }
+        catch (CorruptObjectException exception)
+        {
+            return Result.Failure<byte[]?>(exception.Error);
+        }
         return hash == file.Sha256
             ? Result.Success(bytes)
             : Result.Failure<byte[]?>(StorageErrors.CorruptObject(ShareLayout.For(shareId).ObjectBlob(file.Sha256), "it doesn't match its hash"));

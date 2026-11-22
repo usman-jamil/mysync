@@ -8,7 +8,13 @@ name: Real Azure tests
 #   1. Create a storage account used for nothing else (tests create and delete containers named t-*).
 #   2. Add a repository secret MYSYNC_REAL_AZURE_CONNECTION_STRING with its *account key* connection
 #      string (a SAS-only one can't run the wrong-key test).
-#   3. Actions → Real Azure tests → Run workflow.
+#   3. Optional, for the publishing tests: a second test-only account with static website hosting on
+#      (index document index.html). Add MYSYNC_REAL_AZURE_PUBLISH_CONNECTION_STRING (its account-key
+#      connection string) and MYSYNC_REAL_AZURE_PUBLISH_BASE_URL (its static website URL, e.g.
+#      https://<account>.z13.web.core.windows.net). With both, the run also checks that a published
+#      file with Content-Encoding: gzip is served with that header and that a plain client, a browser-like
+#      one, curl --compressed and PowerShell all end up with the original bytes (compressed shares).
+#   4. Actions → Real Azure tests → Run workflow.
 
 on:
   workflow_dispatch:
@@ -65,6 +71,8 @@ jobs:
           # Optional: a second, test-only account with static website hosting on (index.html), for the
           # publishing tests; without it they skip. Their publications are deleted at the end of the run.
           MYSYNC_TEST_PUBLISH_CONNECTION_STRING: ${{ secrets.MYSYNC_REAL_AZURE_PUBLISH_CONNECTION_STRING }}
+          # Optional, with the above: that account's static website URL, for the Content-Encoding check.
+          MYSYNC_TEST_PUBLISH_BASE_URL: ${{ secrets.MYSYNC_REAL_AZURE_PUBLISH_BASE_URL }}
           MYSYNC_TEST_LARGE: ${{ inputs.large && '1' || '' }}
         run: |
           set -euo pipefail

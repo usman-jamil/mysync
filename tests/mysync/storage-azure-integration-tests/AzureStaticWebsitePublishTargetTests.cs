@@ -40,6 +40,150 @@ public sealed class AzureStaticWebsitePublishTargetTests(AzuriteFixture azurite)
 
     private BlobContainerClient Web() => new BlobServiceClient(PublishConnection()).GetBlobContainerClient("$web");
 
+    /// <summary>The public URL of the supplied publishing account's static website, for <see cref="ARealStaticWebsite_Should_ServeGzipFiles_SoEveryClientGetsTheOriginalBytes"/>.</summary>
+    public const string PublishBaseUrlVariable = "MYSYNC_TEST_PUBLISH_BASE_URL";
+
+    private static readonly byte[] LogText = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Range(0, 2000).Select(i => $"2026-11-22 line {i} of a log\n")));
+
+    [Fact]
+    public async Task AGzipFile_Should_BePublishedAsStored_WithContentEncoding_ByPutAndByServerSideCopy()
+    {
+        string connection = PublishConnection();
+        AzureStaticWebsitePublishTarget target = Target(connection);
+        string prefix = Prefix();
+        byte[] gzip = GzipBytes(LogText);
+        PublishedBlob headers = new("text/plain; charset=utf-8", "inline", PublishedBlob.Immutable, "gzip");
+
+        // Streamed through this machine:
+        using (MemoryStream content = new(gzip))
+        {
+            (await target.PutAsync(prefix + "files/put.log", content, headers, onlyIfAbsent: false, Ct)).IsSuccess.ShouldBeTrue();
+        }
+
+        // Copied server-side from a share's gzip object:
+        AzureBlobShareStore source = AzureStores.Create(azurite.ConnectionString);
+        (await source.EnsureReadyForNewShareAsync(Ct)).IsSuccess.ShouldBeTrue();
+        var shareId = ShareId.New();
+        ContentHash hash = MySync.Testing.ManifestBuilder.HashOf(LogText);
+        using (MemoryStream stored = new(gzip))
+        {
+            (await source.UploadObjectAsync(shareId, hash, new ObjectUpload(stored, ObjectEncoding.Gzip, LogText.LongLength, () => Result.Success()), Ct)).IsSuccess.ShouldBeTrue();
+        }
+
+        Uri url = (await source.GetObjectReadUrlAsync(shareId, hash, TimeSpan.FromMinutes(5), Ct)).Value!;
+        (await target.CopyAsync(url, gzip.LongLength, prefix + "files/copy.log", headers, Ct)).IsSuccess.ShouldBeTrue();
+
+        foreach (string name in new[] { "files/put.log", "files/copy.log" })
+        {
+            BlobClient blob = Web().GetBlobClient(prefix + name);
+            BlobProperties properties = (await blob.GetPropertiesAsync(cancellationToken: Ct)).Value;
+            properties.ContentEncoding.ShouldBe("gzip", name);
+            (await blob.DownloadContentAsync(Ct)).Value.Content.ToArray().ShouldBe(gzip, name);
+        }
+
+        (await target.DeletePrefixAsync(prefix, Ct)).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ARealStaticWebsite_Should_ServeGzipFiles_SoEveryClientGetsTheOriginalBytes()
+    {
+        // Only real Azure has a static website endpoint (Azurite has none): real-azure.yml runs this.
+        string? baseUrl = Environment.GetEnvironmentVariable(PublishBaseUrlVariable);
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(baseUrl) || azurite.PublishConnectionString is null, $"Needs a real publishing account: {AzuriteEnvironment.PublishConnectionStringVariable} and {PublishBaseUrlVariable}.");
+        AzureStaticWebsitePublishTarget target = Target(azurite.PublishConnectionString, baseUrl);
+        string prefix = Prefix();
+        byte[] gzip = GzipBytes(LogText);
+        using (MemoryStream content = new(gzip))
+        {
+            (await target.PutAsync(prefix + "files/app.log", content, new PublishedBlob("text/plain; charset=utf-8", "inline", PublishedBlob.Immutable, "gzip"), onlyIfAbsent: false, Ct))
+                .IsSuccess.ShouldBeTrue();
+        }
+
+        Uri file = new(new Uri(baseUrl!.TrimEnd('/') + "/"), prefix + "files/app.log");
+        try
+        {
+            // 1. Served as stored, and saying so (no decoding in this client).
+            using HttpClientHandler rawHandler = new() { AutomaticDecompression = System.Net.DecompressionMethods.None, CheckCertificateRevocationList = true };
+            using (HttpClient raw = new(rawHandler, disposeHandler: false))
+            {
+                using HttpResponseMessage response = await raw.GetAsync(file, Ct);
+                response.EnsureSuccessStatusCode();
+                response.Content.Headers.ContentEncoding.ShouldBe(["gzip"]);
+                (await response.Content.ReadAsByteArrayAsync(Ct)).ShouldBe(gzip);
+            }
+
+            // 2. What a browser does: ask for gzip, decode it.
+            using HttpClientHandler browserHandler = new() { AutomaticDecompression = System.Net.DecompressionMethods.GZip, CheckCertificateRevocationList = true };
+            using (HttpClient browser = new(browserHandler, disposeHandler: false))
+            {
+                (await browser.GetByteArrayAsync(file, Ct)).ShouldBe(LogText);
+            }
+
+            // 3. curl --compressed (download.sh) and 4. Invoke-WebRequest -OutFile (download.ps1).
+            if (await RunsAsync("curl", "--version"))
+            {
+                (await FetchWithAsync("curl", ["-fsSL", "--compressed", "-o", "{out}", file.AbsoluteUri])).ShouldBe(LogText);
+            }
+
+            if (await RunsAsync("pwsh", "-NoProfile", "-Command", "exit 0"))
+            {
+                byte[] fetched = await FetchWithAsync("pwsh", ["-NoProfile", "-Command", $"Invoke-WebRequest -UseBasicParsing -Uri '{file.AbsoluteUri}' -OutFile '{{out}}'"]);
+                // PowerShell 7 decodes; if one doesn't, download.ps1 decodes it itself (GzipDownloadScriptTests).
+                (fetched.SequenceEqual(LogText) || fetched.SequenceEqual(gzip)).ShouldBeTrue();
+            }
+        }
+        finally
+        {
+            await target.DeletePrefixAsync(prefix, CancellationToken.None);
+        }
+    }
+
+    private static byte[] GzipBytes(byte[] content)
+    {
+        using MemoryStream output = new();
+        using (System.IO.Compression.GZipStream gzip = new(output, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true))
+        {
+            gzip.Write(content);
+        }
+
+        return output.ToArray();
+    }
+
+    private static async Task<bool> RunsAsync(string program, params string[] arguments)
+    {
+        try
+        {
+            using System.Diagnostics.Process process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(program, arguments) { RedirectStandardOutput = true, RedirectStandardError = true })!;
+            await process.WaitForExitAsync(Ct);
+            return process.ExitCode == 0;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static async Task<byte[]> FetchWithAsync(string program, string[] arguments)
+    {
+        string output = Path.Combine(Path.GetTempPath(), $"mysync-{Guid.NewGuid():N}");
+        try
+        {
+            using System.Diagnostics.Process process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(program, [.. arguments.Select(argument => argument.Replace("{out}", output, StringComparison.Ordinal))])
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+            string error = await process.StandardError.ReadToEndAsync(Ct);
+            await process.WaitForExitAsync(Ct);
+            process.ExitCode.ShouldBe(0, error);
+            return await File.ReadAllBytesAsync(output, Ct);
+        }
+        finally
+        {
+            File.Delete(output);
+        }
+    }
+
     [Fact]
     public async Task CheckStaticWebsite_Should_Pass_OnlyWithIndexHtml()
     {

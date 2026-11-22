@@ -30,9 +30,11 @@ public sealed record CreateShareCommand(
     ShareName? Name = null,
     bool Force = false,
     int? Parallelism = null,
-    ISyncProgressReporter? Progress = null) : ICommand<CreateShareResponse>;
+    ISyncProgressReporter? Progress = null,
+    bool Compress = false) : ICommand<CreateShareResponse>;
 
 /// <param name="FileCount">Files in the new share (skipped ones excluded).</param>
+/// <param name="Compression">The new share's setting: gzip with <c>--compress</c>, else none.</param>
 public sealed record CreateShareResponse(
     ShareId ShareId,
     ShareName Name,
@@ -40,7 +42,8 @@ public sealed record CreateShareResponse(
     long TotalBytes,
     TransferTotals Uploaded,
     ImmutableArray<SkippedPath> Skipped,
-    ImmutableArray<string> Warnings);
+    ImmutableArray<string> Warnings,
+    CompressionSetting Compression = CompressionSetting.None);
 
 internal sealed class CreateShareCommandValidator : AbstractValidator<CreateShareCommand>
 {
@@ -143,9 +146,11 @@ internal sealed class CreateShareCommandHandler(
         List<string> warnings = [.. PathRules.FindCaseCollisions(scan.Entries.Keys).Select(collision =>
             $"These local paths differ only in case and will clash on Windows and macOS: {string.Join(", ", collision.Spellings.Select(PathErrors.Display))}")];
 
+        CompressionSetting compression = command.Compress ? CompressionSetting.Gzip : CompressionSetting.None;
         UploadOutcome upload = await transfers.UploadAsync(
             shareId,
             [.. scan.Entries.Where(pair => pair.Value is FileEntry).Select(pair => (pair.Key, (FileEntry)pair.Value))],
+            compression,
             progress,
             command.Parallelism ?? options.MaxParallelism,
             cancellationToken);
@@ -154,7 +159,7 @@ internal sealed class CreateShareCommandHandler(
         IEnumerable<KeyValuePair<SharePath, ManifestEntry>> entries = scan.Entries.Where(pair => !upload.Failed.ContainsKey(pair.Key));
 
         progress.PhaseStarted(SyncPhase.Committing);
-        Result<Manifest> manifest = Manifest.CreateNew(shareId, entries, new DateTimeOffset(clock.UtcNow, TimeSpan.Zero), machine.Name);
+        Result<Manifest> manifest = Manifest.CreateNew(shareId, entries, new DateTimeOffset(clock.UtcNow, TimeSpan.Zero), machine.Name, compression);
         if (manifest.IsFailure)
         {
             return Result.Failure<CreateShareResponse>(manifest.Error);
@@ -188,7 +193,7 @@ internal sealed class CreateShareCommandHandler(
             .Concat(upload.Failed.Values)
             .OrderBy(skip => skip.Path, StringComparer.Ordinal)];
 
-        return new CreateShareResponse(shareId, name, manifest.Value.FileCount, manifest.Value.TotalSize, upload.Uploaded, skipped, [.. warnings]);
+        return new CreateShareResponse(shareId, name, manifest.Value.FileCount, manifest.Value.TotalSize, upload.Uploaded, skipped, [.. warnings], compression);
     }
 
     // Taken: say by which share. If it was freed between the claim and the read, try once more.

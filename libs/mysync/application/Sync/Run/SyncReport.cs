@@ -34,9 +34,25 @@ public sealed record SyncReport(
     public ShareName? Name { get; init; }
 }
 
-public sealed record TransferTotals(int Files, long Bytes)
+/// <param name="Bytes">The files' own (uncompressed) size.</param>
+/// <param name="StoredBytes">What actually went over the wire: less than <paramref name="Bytes"/> when files were sent compressed.</param>
+public sealed record TransferTotals(int Files, long Bytes, long StoredBytes)
 {
+    public TransferTotals(int files, long bytes)
+        : this(files, bytes, bytes)
+    {
+    }
+
     public static TransferTotals None { get; } = new(0, 0);
+
+    /// <summary>True when something was sent compressed.</summary>
+    public bool Compressed => StoredBytes < Bytes;
+
+    public TransferTotals Plus(TransferTotals other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        return new TransferTotals(Files + other.Files, Bytes + other.Bytes, StoredBytes + other.StoredBytes);
+    }
 }
 
 public enum SkipCause
