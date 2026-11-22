@@ -387,7 +387,7 @@ internal sealed class PublishShareCommandHandler(
         }
 
         // No readable URL: through this machine, checked against the object's name on the way.
-        Result<Stream> opened = await store.OpenObjectReadAsync(shareId, file.Sha256, cancellationToken);
+        Result<Stream> opened = (await store.OpenObjectReadAsync(shareId, file.Sha256, cancellationToken)).ToContent();
         if (opened.IsFailure)
         {
             return Result.Failure<CopyMethod>(opened.Error);

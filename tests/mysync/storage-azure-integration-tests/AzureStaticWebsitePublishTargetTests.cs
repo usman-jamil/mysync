@@ -1,3 +1,4 @@
+using MySync.Application.Abstractions.Storage;
 using System.Text;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
@@ -111,7 +112,7 @@ public sealed class AzureStaticWebsitePublishTargetTests(AzuriteFixture azurite)
         ContentHash hash = ManifestBuilder.HashOf(content);
         AzureBlobShareStore source = AzureStores.Create(azurite.ConnectionString);
         (await source.EnsureReadyForNewShareAsync(Ct)).IsSuccess.ShouldBeTrue();
-        (await source.UploadObjectAsync(shareId, hash, new MemoryStream(content), content.Length, Ct)).IsSuccess.ShouldBeTrue();
+        (await source.UploadObjectAsync(shareId, hash, ObjectUpload.Raw(new MemoryStream(content), content.Length), Ct)).IsSuccess.ShouldBeTrue();
         Uri url = (await source.GetObjectReadUrlAsync(shareId, hash, TimeSpan.FromMinutes(5), Ct)).Value!;
         string name = Prefix() + "files/docs/a b [1] #?.pdf";
         PublishedBlob headers = new(ContentTypeMap.For(name), DispositionPolicy.ContentDisposition(name), PublishedBlob.Immutable);

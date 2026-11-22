@@ -1,3 +1,4 @@
+using MySync.Application.Abstractions.Storage;
 using MySync.Application.Maintenance.CollectGarbage;
 using MySync.Application.UnitTests.TestSupport;
 using MySync.Domain.Content;
@@ -69,7 +70,7 @@ public class GarbageCollectionTests
         world.Clock.Advance(TimeSpan.FromHours(25));
         // Another machine has uploaded this but not committed it yet.
         ContentHash pending = ManifestBuilder.HashOf("pending");
-        await world.Store.UploadObjectAsync(shareId, pending, new MemoryStream("pending"u8.ToArray()), 7, SyncWorld.Ct);
+        await world.Store.UploadObjectAsync(shareId, pending, ObjectUpload.Raw(new MemoryStream("pending"u8.ToArray()), 7), SyncWorld.Ct);
 
         GarbageReport report = (await a.GcAsync()).ShouldSucceed();
 

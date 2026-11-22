@@ -306,7 +306,7 @@ public class ShareNameUseCaseTests
         var unfinished = ShareId.New();
         (await _world.Aliases.CreateAsync(new AliasRecord(Name("half-made"), unfinished, DateTimeOffset.UnixEpoch, "x"), SyncWorld.Ct)).ShouldSucceed();
         byte[] content = "uploaded before the create was interrupted"u8.ToArray();
-        (await _world.Store.UploadObjectAsync(unfinished, ManifestBuilder.HashOf(content), new MemoryStream(content), content.Length, SyncWorld.Ct)).IsSuccess.ShouldBeTrue();
+        (await _world.Store.UploadObjectAsync(unfinished, ManifestBuilder.HashOf(content), ObjectUpload.Raw(new MemoryStream(content), content.Length), SyncWorld.Ct)).IsSuccess.ShouldBeTrue();
 
         DeleteShareResponse deleted = (await _world.Machine("admin").DeleteAsync("half-made")).ShouldSucceed();
 

@@ -222,9 +222,9 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
         }
     }
 
-    public async Task<Result> UploadObjectAsync(ShareId shareId, ContentHash hash, Stream content, long length, CancellationToken cancellationToken)
+    public async Task<Result> UploadObjectAsync(ShareId shareId, ContentHash hash, ObjectUpload upload, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(upload);
         string name = ShareLayout.For(shareId).ObjectBlob(hash);
 
         lock (_gate)
@@ -236,36 +236,78 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
         }
 
         using MemoryStream buffer = new();
-        await content.CopyToAsync(buffer, cancellationToken);
+        await upload.Content.CopyToAsync(buffer, cancellationToken);
         byte[] bytes = buffer.ToArray();
 
-        if (ContentHash.FromBytes(SHA256.HashData(bytes)) != hash)
+        Result verdict = upload.Verify();
+        if (verdict.IsFailure)
+        {
+            return verdict;
+        }
+
+        if (upload.Encoding == ObjectEncoding.Identity && (ContentHash.FromBytes(SHA256.HashData(bytes)) != hash || bytes.LongLength != upload.Size))
         {
             return Result.Failure(StorageErrors.HashMismatch(name));
         }
 
         lock (_gate)
         {
-            // A concurrent upload of the same object may have won; same name, same content.
+            // A concurrent upload of the same object may have won, in either form; it stays.
             if (!_blobs.ContainsKey(name))
             {
-                Put(name, bytes, manifest: null);
+                Put(name, bytes, manifest: null, contentEncoding: upload.Encoding.ToContentEncoding());
             }
         }
 
         return Result.Success();
     }
 
-    public Task<Result<Stream>> OpenObjectReadAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken)
+    public async Task<Result<StoredObject>> OpenObjectReadAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        await Task.Yield();
         string name = ShareLayout.For(shareId).ObjectBlob(hash);
 
+        Blob? blob;
         lock (_gate)
         {
-            return Task.FromResult(_blobs.TryGetValue(name, out Blob? blob)
-                ? Result.Success<Stream>(DownloadStream?.Invoke(hash, blob.Bytes!) ?? new MemoryStream(blob.Bytes!, writable: false))
-                : Result.Failure<Stream>(StorageErrors.NotFound(name)));
+            _blobs.TryGetValue(name, out blob);
+        }
+
+        if (blob is null)
+        {
+            return Result.Failure<StoredObject>(StorageErrors.NotFound(name));
+        }
+
+        Result<ObjectEncoding> encoding = ObjectEncodings.FromContentEncoding(blob.ContentEncoding);
+        if (encoding.IsFailure)
+        {
+            return Result.Failure<StoredObject>(encoding.Error);
+        }
+
+        Stream content = DownloadStream?.Invoke(hash, blob.Bytes!) ?? new MemoryStream(blob.Bytes!, writable: false);
+        return new StoredObject(content, encoding.Value, blob.Bytes!.LongLength);
+    }
+
+    /// <summary>
+    /// Stores <paramref name="bytes"/> as the object <paramref name="hash"/> with any
+    /// <c>Content-Encoding</c> (e.g. one no client knows), bypassing every check: what another
+    /// client, a newer mysync or a crafted share could leave behind.
+    /// </summary>
+    public void PutObjectAsStored(ShareId shareId, ContentHash hash, byte[] bytes, string? contentEncoding)
+    {
+        lock (_gate)
+        {
+            Put(ShareLayout.For(shareId).ObjectBlob(hash), bytes, manifest: null, contentEncoding: contentEncoding);
+        }
+    }
+
+    /// <summary>The <c>Content-Encoding</c> an object was stored with (<c>null</c> for raw), or throws if there's none.</summary>
+    public string? ContentEncodingOf(ShareId shareId, ContentHash hash)
+    {
+        lock (_gate)
+        {
+            return _blobs[ShareLayout.For(shareId).ObjectBlob(hash)].ContentEncoding;
         }
     }
 
@@ -279,6 +321,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
         var layout = ShareLayout.For(shareId);
         List<StoredObjectInfo> objects = [];
+        Error? unreadable = null;
 
         lock (_gate)
         {
@@ -286,7 +329,14 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
             {
                 if (layout.TryParseObject(name, out ContentHash? hash))
                 {
-                    objects.Add(new StoredObjectInfo(hash, blob.Bytes!.LongLength, blob.LastModifiedUtc));
+                    Result<ObjectEncoding> encoding = ObjectEncodings.FromContentEncoding(blob.ContentEncoding);
+                    if (encoding.IsFailure)
+                    {
+                        unreadable = encoding.Error;
+                        break;
+                    }
+
+                    objects.Add(new StoredObjectInfo(hash, blob.Bytes!.LongLength, blob.LastModifiedUtc, encoding.Value));
                 }
             }
         }
@@ -296,6 +346,11 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
             yield return info;
+        }
+
+        if (unreadable is not null)
+        {
+            yield return Result.Failure<StoredObjectInfo>(unreadable);
         }
     }
 
@@ -381,14 +436,14 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
         }
     }
 
-    private Blob Put(string name, byte[]? bytes, Manifest? manifest, PublicationRegistry? registry = null)
+    private Blob Put(string name, byte[]? bytes, Manifest? manifest, PublicationRegistry? registry = null, string? contentEncoding = null)
     {
         DateTimeOffset now = clock is null ? DateTimeOffset.UtcNow : new DateTimeOffset(clock.UtcNow, TimeSpan.Zero);
         string etag = string.Create(CultureInfo.InvariantCulture, $"\"0x{++_etagCounter:X}\"");
-        Blob blob = new(bytes, manifest, etag, now, registry);
+        Blob blob = new(bytes, manifest, etag, now, registry, contentEncoding);
         _blobs[name] = blob;
         return blob;
     }
 
-    private sealed record Blob(byte[]? Bytes, Manifest? Manifest, string ETag, DateTimeOffset LastModifiedUtc, PublicationRegistry? Registry = null);
+    private sealed record Blob(byte[]? Bytes, Manifest? Manifest, string ETag, DateTimeOffset LastModifiedUtc, PublicationRegistry? Registry = null, string? ContentEncoding = null);
 }

@@ -50,16 +50,26 @@ public interface IShareStore
 
     /// <summary>
     /// Stores an object under its hash (<c>If-None-Match: *</c>; an existing object counts as
-    /// success and is left as it is). The store <b>verifies</b> that the bytes hash to
-    /// <paramref name="hash"/> and stores nothing if they don't (<c>Storage.HashMismatch</c>): a file
-    /// that changed while it was read must never become an object under the wrong name, because
-    /// objects are immutable and an existing one is never re-uploaded.
+    /// success and is left as it is, whatever form it was stored in). The bytes are stored as given,
+    /// with <see cref="ObjectUpload.Encoding"/> as the object's <c>Content-Encoding</c>.
+    /// <para>
+    /// <b>Nothing is committed under the wrong hash.</b> The store reads <see cref="ObjectUpload.Content"/>
+    /// to its end (staging what it reads, invisible to readers), then calls
+    /// <see cref="ObjectUpload.Verify"/>, and commits only if that succeeds: whoever produced the bytes
+    /// hashed the uncompressed content as it went. For raw bytes the store also checks the SHA-256 and
+    /// length itself (<c>Storage.HashMismatch</c>). A file that changed while it was read must never
+    /// become an object under the wrong name: objects are immutable, and an existing one is never
+    /// uploaded again.
+    /// </para>
     /// </summary>
-    /// <param name="content">Must be seekable and report its length, so the SDK can retry a block.</param>
-    Task<Result> UploadObjectAsync(ShareId shareId, ContentHash hash, Stream content, long length, CancellationToken cancellationToken);
+    Task<Result> UploadObjectAsync(ShareId shareId, ContentHash hash, ObjectUpload upload, CancellationToken cancellationToken);
 
-    /// <summary>The object's bytes; <c>Storage.NotFound</c> if it doesn't exist. The caller verifies the hash while reading.</summary>
-    Task<Result<Stream>> OpenObjectReadAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken);
+    /// <summary>
+    /// The object's <b>stored</b> bytes, how they are encoded, and their length; never decoded here.
+    /// <c>Storage.NotFound</c> if it doesn't exist; <c>Storage.UnsupportedEncoding</c> if its
+    /// <c>Content-Encoding</c> is one this build can't read. The caller decodes and verifies the hash.
+    /// </summary>
+    Task<Result<StoredObject>> OpenObjectReadAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken);
 
     /// <summary>Every object of the share (gc). Blobs whose name isn't a canonical object name are not listed.</summary>
     IAsyncEnumerable<Result<StoredObjectInfo>> ListObjectsAsync(ShareId shareId, CancellationToken cancellationToken);
@@ -103,4 +113,6 @@ public sealed record PublicationsSnapshot(PublicationRegistry Registry, string E
 public sealed record ManifestSnapshot(Manifest Manifest, string ETag);
 
 /// <summary>One stored object, for gc: its grace period is measured from <paramref name="LastModifiedUtc"/>.</summary>
-public sealed record StoredObjectInfo(ContentHash Hash, long Size, DateTimeOffset LastModifiedUtc);
+/// <param name="Size">The <b>stored</b> length (compressed, for a gzip object).</param>
+/// <param name="Encoding">How the object is stored, from the listing: no download needed.</param>
+public sealed record StoredObjectInfo(ContentHash Hash, long Size, DateTimeOffset LastModifiedUtc, ObjectEncoding Encoding = ObjectEncoding.Identity);

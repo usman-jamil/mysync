@@ -1,3 +1,4 @@
+using MySync.Application.Abstractions.Storage;
 using System.Text;
 using MySync.Domain.Shares;
 using MySync.Domain.Storage;
@@ -33,7 +34,7 @@ public class InMemoryShareStoreTests
 
         await store.CreateManifestAsync(builder.ShareId, builder.Build(), Ct);
         await store.PutManifestHistoryAsync(builder.ShareId, builder.Build(), Ct);
-        await store.UploadObjectAsync(builder.ShareId, ManifestBuilder.HashOf(content), new MemoryStream(content), content.Length, Ct);
+        await store.UploadObjectAsync(builder.ShareId, ManifestBuilder.HashOf(content), ObjectUpload.Raw(new MemoryStream(content), content.Length), Ct);
 
         store.BlobNames.ShouldBe(
             [layout.Manifest, layout.ManifestHistory(Domain.Manifests.Revision.Initial), layout.ObjectBlob(ManifestBuilder.HashOf(content))],
@@ -64,7 +65,7 @@ public class InMemoryShareStoreTests
         var shareId = ShareId.New();
         byte[] content = [1, 2, 3];
 
-        await store.UploadObjectAsync(shareId, ManifestBuilder.HashOf(content), new MemoryStream(content), content.Length, Ct);
+        await store.UploadObjectAsync(shareId, ManifestBuilder.HashOf(content), ObjectUpload.Raw(new MemoryStream(content), content.Length), Ct);
 
         await foreach (SharedKernel.Result<Application.Abstractions.Storage.StoredObjectInfo> item in store.ListObjectsAsync(shareId, Ct))
         {

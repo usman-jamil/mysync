@@ -27,6 +27,13 @@ public abstract class ShareStoreContractTests
     /// <summary>A fresh, isolated, empty store (its own container), not yet made ready.</summary>
     protected abstract Task<IShareStore> CreateStoreAsync();
 
+    /// <summary>
+    /// Writes <paramref name="bytes"/> as an object of <paramref name="store"/> with exactly this
+    /// <c>Content-Encoding</c>, bypassing the store's own checks: what a newer client or a crafted
+    /// share could leave behind.
+    /// </summary>
+    protected abstract Task PlantObjectAsync(IShareStore store, ShareId shareId, ContentHash hash, byte[] bytes, string contentEncoding);
+
     [Fact]
     public async Task GetLocation_Should_NameProviderAccountAndContainer()
     {
@@ -276,6 +283,146 @@ public abstract class ShareStoreContractTests
     }
 
     [Fact]
+    public async Task ARawObject_Should_ReadBackAsIdentity_WithItsLength()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        byte[] content = Encoding.UTF8.GetBytes("plain bytes");
+        ContentHash hash = ManifestBuilder.HashOf(content);
+        Unwrap(await Upload(store, shareId, hash, content));
+
+        await using StoredObject stored = Unwrap(await store.OpenObjectReadAsync(shareId, hash, Ct));
+
+        stored.Encoding.ShouldBe(ObjectEncoding.Identity);
+        stored.StoredLength.ShouldBe(content.LongLength);
+    }
+
+    [Fact]
+    public async Task AGzipObject_Should_ReadBackAsStored_NotDecoded()
+    {
+        // Pins what the provider's SDK does with Content-Encoding: gzip. The bytes must come back
+        // exactly as stored, so that mysync decodes them exactly once.
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        byte[] original = TextOf(400_000); // well over the test block size: several blocks
+        ContentHash hash = ManifestBuilder.HashOf(original);
+        byte[] compressed = Gzip(original);
+
+        Unwrap(await UploadGzip(store, shareId, hash, compressed, original.LongLength));
+
+        await using StoredObject stored = Unwrap(await store.OpenObjectReadAsync(shareId, hash, Ct));
+        stored.Encoding.ShouldBe(ObjectEncoding.Gzip);
+        stored.StoredLength.ShouldBe(compressed.LongLength);
+        byte[] read = await ReadToEnd(stored.Content);
+        read.ShouldBe(compressed);
+        Gunzip(read).ShouldBe(original);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TheFirstForm_Should_Win_AndTheOtherBeAlreadyStored(bool rawFirst)
+    {
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        byte[] original = TextOf(20_000);
+        ContentHash hash = ManifestBuilder.HashOf(original);
+        byte[] compressed = Gzip(original);
+
+        Result first = rawFirst ? await Upload(store, shareId, hash, original) : await UploadGzip(store, shareId, hash, compressed, original.LongLength);
+        Result second = rawFirst ? await UploadGzip(store, shareId, hash, compressed, original.LongLength) : await Upload(store, shareId, hash, original);
+
+        Unwrap(first);
+        Unwrap(second);
+        await using StoredObject stored = Unwrap(await store.OpenObjectReadAsync(shareId, hash, Ct));
+        stored.Encoding.ShouldBe(rawFirst ? ObjectEncoding.Identity : ObjectEncoding.Gzip);
+        (await ReadToEnd(stored.Content)).ShouldBe(rawFirst ? original : compressed);
+    }
+
+    [Fact]
+    public async Task AFailedVerdict_Should_StoreNothing_AndBeAskedOnlyAfterTheLastByte()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        byte[] original = TextOf(300_000);
+        ContentHash hash = ManifestBuilder.HashOf(original);
+        using EndTrackingStream content = new(Gzip(original));
+        bool askedAfterTheEnd = false;
+
+        Result result = await store.UploadObjectAsync(
+            shareId,
+            hash,
+            new ObjectUpload(content, ObjectEncoding.Gzip, original.LongLength, () =>
+            {
+                askedAfterTheEnd = content.ReachedEnd;
+                return Result.Failure(Domain.Storage.StorageErrors.HashMismatch("the file changed"));
+            }),
+            Ct);
+
+        result.Error.Code.ShouldBe("Storage.HashMismatch");
+        askedAfterTheEnd.ShouldBeTrue();
+        Unwrap(await store.ObjectExistsAsync(shareId, hash, Ct)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AnUpload_Should_NeedNeitherALengthNorASeekableStream()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        byte[] original = TextOf(250_000);
+        ContentHash hash = ManifestBuilder.HashOf(original);
+        using EndTrackingStream content = new(Gzip(original));
+
+        Unwrap(await store.UploadObjectAsync(shareId, hash, new ObjectUpload(content, ObjectEncoding.Gzip, original.LongLength, () => Result.Success()), Ct));
+
+        Unwrap(await store.ObjectExistsAsync(shareId, hash, Ct)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AnUnknownEncoding_Should_BeUnsupported_WhenReadOrListed()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        byte[] bytes = Encoding.UTF8.GetBytes("brotli, perhaps");
+        ContentHash hash = ManifestBuilder.HashOf(bytes);
+        await PlantObjectAsync(store, shareId, hash, bytes, "br");
+
+        (await store.OpenObjectReadAsync(shareId, hash, Ct)).Error.Code.ShouldBe("Storage.UnsupportedEncoding");
+        List<Result<StoredObjectInfo>> listed = [];
+        await foreach (Result<StoredObjectInfo> item in store.ListObjectsAsync(shareId, Ct))
+        {
+            listed.Add(item);
+        }
+
+        listed.ShouldContain(item => item.IsFailure && item.Error.Code == "Storage.UnsupportedEncoding");
+    }
+
+    [Fact]
+    public async Task ListObjects_Should_ReportEachObjectsEncoding_AndStoredLength()
+    {
+        IShareStore store = await ReadyStoreAsync();
+        var shareId = ShareId.New();
+        byte[] raw = Encoding.UTF8.GetBytes("raw");
+        byte[] original = TextOf(10_000);
+        byte[] compressed = Gzip(original);
+        Unwrap(await Upload(store, shareId, ManifestBuilder.HashOf(raw), raw));
+        Unwrap(await UploadGzip(store, shareId, ManifestBuilder.HashOf(original), compressed, original.LongLength));
+
+        List<StoredObjectInfo> listed = [];
+        await foreach (Result<StoredObjectInfo> item in store.ListObjectsAsync(shareId, Ct))
+        {
+            listed.Add(Unwrap(item));
+        }
+
+        listed.Single(info => info.Hash == ManifestBuilder.HashOf(raw)).ShouldSatisfyAllConditions(
+            info => info.Encoding.ShouldBe(ObjectEncoding.Identity),
+            info => info.Size.ShouldBe(raw.LongLength));
+        listed.Single(info => info.Hash == ManifestBuilder.HashOf(original)).ShouldSatisfyAllConditions(
+            info => info.Encoding.ShouldBe(ObjectEncoding.Gzip),
+            info => info.Size.ShouldBe(compressed.LongLength));
+    }
+
+    [Fact]
     public async Task OpenObjectRead_Should_FailWithNotFound_ForAMissingObject()
     {
         IShareStore store = await ReadyStoreAsync();
@@ -307,7 +454,7 @@ public abstract class ShareStoreContractTests
         var shareId = ShareId.New();
         byte[] content = Encoding.UTF8.GetBytes("gone");
         ContentHash hash = ManifestBuilder.HashOf(content);
-        Unwrap(await store.UploadObjectAsync(shareId, hash, new MemoryStream(content), content.Length, Ct));
+        Unwrap(await Upload(store, shareId, hash, content));
         Unwrap(await store.DeleteObjectAsync(shareId, hash, Ct));
 
         Unwrap(await store.CountRecoverableCopiesAsync(shareId, Ct)).ShouldBe(0);
@@ -513,15 +660,108 @@ public abstract class ShareStoreContractTests
     private static async Task<Result> Upload(IShareStore store, ShareId shareId, ContentHash hash, byte[] content)
     {
         using MemoryStream stream = new(content, writable: false);
-        return await store.UploadObjectAsync(shareId, hash, stream, content.LongLength, Ct);
+        return await store.UploadObjectAsync(shareId, hash, ObjectUpload.Raw(stream, content.LongLength), Ct);
+    }
+
+    private static async Task<Result> UploadGzip(IShareStore store, ShareId shareId, ContentHash hash, byte[] compressed, long size)
+    {
+        using MemoryStream stream = new(compressed, writable: false);
+        return await store.UploadObjectAsync(shareId, hash, new ObjectUpload(stream, ObjectEncoding.Gzip, size, () => Result.Success()), Ct);
     }
 
     private static async Task<byte[]> ReadAll(IShareStore store, ShareId shareId, ContentHash hash)
     {
-        await using Stream stream = Unwrap(await store.OpenObjectReadAsync(shareId, hash, Ct));
+        await using StoredObject stored = Unwrap(await store.OpenObjectReadAsync(shareId, hash, Ct));
+        return await ReadToEnd(stored.Content);
+    }
+
+    private static async Task<byte[]> ReadToEnd(Stream stream)
+    {
         using MemoryStream buffer = new();
         await stream.CopyToAsync(buffer, Ct);
         return buffer.ToArray();
+    }
+
+    /// <summary>Text that compresses well but not trivially: numbered log-like lines.</summary>
+    protected static byte[] TextOf(int length)
+    {
+        StringBuilder text = new(length + 64);
+        int line = 0;
+        while (text.Length < length)
+        {
+            line++;
+            text.Append(System.Globalization.CultureInfo.InvariantCulture, $"2026-11-22T10:{line % 60:D2}:{line * 7 % 60:D2}Z INFO request {line * 2654435761L % 1_000_003} served in {line % 97} ms\n");
+        }
+
+        return Encoding.UTF8.GetBytes(text.ToString(0, length));
+    }
+
+    protected static byte[] Gzip(byte[] content)
+    {
+        using MemoryStream output = new();
+        using (System.IO.Compression.GZipStream gzip = new(output, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true))
+        {
+            gzip.Write(content);
+        }
+
+        return output.ToArray();
+    }
+
+    private static byte[] Gunzip(byte[] compressed)
+    {
+        using System.IO.Compression.GZipStream gzip = new(new MemoryStream(compressed), System.IO.Compression.CompressionMode.Decompress);
+        using MemoryStream output = new();
+        gzip.CopyTo(output);
+        return output.ToArray();
+    }
+
+    /// <summary>A read-only, non-seekable stream that remembers whether its last byte was read.</summary>
+    private sealed class EndTrackingStream(byte[] bytes) : Stream
+    {
+        private readonly MemoryStream _inner = new(bytes, writable: false);
+
+        public bool ReachedEnd { get; private set; }
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count) => Track(_inner.Read(buffer, offset, count));
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            Track(await _inner.ReadAsync(buffer, cancellationToken));
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        private int Track(int read)
+        {
+            ReachedEnd |= read == 0;
+            return read;
+        }
     }
 
     private static async Task<List<Manifest>> ListHistory(IShareStore store, ShareId shareId)

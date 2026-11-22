@@ -221,10 +221,17 @@ internal sealed partial class AzureBlobShareStore : IShareStore
             Result.Success((bool)await container.GetBlobClient(name).ExistsAsync(cancellationToken)), cancellationToken);
     }
 
-    public Task<Result> UploadObjectAsync(ShareId shareId, ContentHash hash, Stream content, long length, CancellationToken cancellationToken)
+    /// <remarks>
+    /// Blocks are staged as they are read (uncommitted blocks are invisible, and Azure drops them
+    /// after about a week), so the stored length needn't be known up front and nothing is buffered
+    /// beyond one block. Only after the last block: the producer's verdict, then, for raw bytes, our
+    /// own SHA-256 and length check; then the block list is committed with <c>If-None-Match: *</c>.
+    /// </remarks>
+    public Task<Result> UploadObjectAsync(ShareId shareId, ContentHash hash, ObjectUpload upload, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(hash);
-        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(upload);
+        Stream content = upload.Content;
         string name = ShareLayout.For(shareId).ObjectBlob(hash);
 
         // Reading `content` may throw IOException (the local file); that is the caller's to handle.
@@ -259,11 +266,28 @@ internal sealed partial class AzureBlobShareStore : IShareStore
                 ArrayPool<byte>.Shared.Return(buffer);
             }
 
+            // The staged blocks are never committed unless both checks pass.
+            Result verdict = upload.Verify();
+            if (verdict.IsFailure)
+            {
+                return verdict;
+            }
+
             var actual = ContentHash.FromBytes(sha256.GetHashAndReset());
-            if (actual != hash || total != length)
+            if (upload.Encoding == ObjectEncoding.Identity && (actual != hash || total != upload.Size))
             {
                 AzureLog.HashMismatch(_logger, name, actual.Value);
-                return Result.Failure(StorageErrors.HashMismatch(name)); // the staged blocks are never committed
+                return Result.Failure(StorageErrors.HashMismatch(name));
+            }
+
+            Dictionary<string, string> metadata = new()
+            {
+                ["sha256"] = hash.Value,
+                ["size"] = upload.Size.ToString(CultureInfo.InvariantCulture),
+            };
+            if (upload.Encoding != ObjectEncoding.Identity)
+            {
+                metadata["storedsize"] = total.ToString(CultureInfo.InvariantCulture);
             }
 
             try
@@ -273,12 +297,8 @@ internal sealed partial class AzureBlobShareStore : IShareStore
                     new CommitBlockListOptions
                     {
                         Conditions = new BlobRequestConditions { IfNoneMatch = ETag.All },
-                        HttpHeaders = new BlobHttpHeaders { ContentType = ObjectContentType },
-                        Metadata = new Dictionary<string, string>
-                        {
-                            ["sha256"] = hash.Value,
-                            ["size"] = total.ToString(CultureInfo.InvariantCulture),
-                        },
+                        HttpHeaders = new BlobHttpHeaders { ContentType = ObjectContentType, ContentEncoding = upload.Encoding.ToContentEncoding() },
+                        Metadata = metadata,
                     },
                     cancellationToken);
             }
@@ -291,16 +311,31 @@ internal sealed partial class AzureBlobShareStore : IShareStore
         }, cancellationToken);
     }
 
-    public Task<Result<Stream>> OpenObjectReadAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken)
+    /// <remarks>
+    /// Returns the <b>stored</b> bytes. The SDK doesn't decode <c>Content-Encoding: gzip</c>: a GET
+    /// answers with that header, and the client still hands back the compressed bytes
+    /// (<c>AGzipObject_Should_CarryContentEncoding…</c>); <c>OpenReadAsync</c> reads byte ranges of
+    /// the blob as stored (<c>AGzipObject_Should_ReadBackAsStored_NotDecoded</c> in the contract suite).
+    /// Decoding happens once, in the application.
+    /// </remarks>
+    public Task<Result<StoredObject>> OpenObjectReadAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken)
     {
         string name = ShareLayout.For(shareId).ObjectBlob(hash);
 
         return CallAsync(name, async container =>
         {
-            Stream stream = await container.GetBlobClient(name).OpenReadAsync(
+            BlobClient blob = container.GetBlobClient(name);
+            BlobProperties properties = (await blob.GetPropertiesAsync(cancellationToken: cancellationToken)).Value;
+            Result<ObjectEncoding> encoding = ObjectEncodings.FromContentEncoding(properties.ContentEncoding);
+            if (encoding.IsFailure)
+            {
+                return Result.Failure<StoredObject>(encoding.Error);
+            }
+
+            Stream stream = await blob.OpenReadAsync(
                 new BlobOpenReadOptions(allowModifications: false) { BufferSize = _settings.BlockSize },
                 cancellationToken);
-            return Result.Success<Stream>(new AzureReadStream(stream, name, _logger));
+            return Result.Success(new StoredObject(new AzureReadStream(stream, name, _logger), encoding.Value, properties.ContentLength));
         }, cancellationToken);
     }
 
@@ -319,10 +354,18 @@ internal sealed partial class AzureBlobShareStore : IShareStore
 
             if (layout.TryParseObject(item.Value.Name, out ContentHash? hash))
             {
+                Result<ObjectEncoding> encoding = ObjectEncodings.FromContentEncoding(item.Value.Properties.ContentEncoding);
+                if (encoding.IsFailure)
+                {
+                    yield return Result.Failure<StoredObjectInfo>(encoding.Error);
+                    yield break;
+                }
+
                 yield return new StoredObjectInfo(
                     hash,
                     item.Value.Properties.ContentLength ?? 0,
-                    item.Value.Properties.LastModified ?? item.Value.Properties.CreatedOn ?? DateTimeOffset.MinValue);
+                    item.Value.Properties.LastModified ?? item.Value.Properties.CreatedOn ?? DateTimeOffset.MinValue,
+                    encoding.Value);
             }
         }
     }

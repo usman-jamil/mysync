@@ -1,6 +1,7 @@
 using MySync.Application.Abstractions.FileSystem;
 using MySync.Application.Abstractions.Hashing;
 using MySync.Application.Abstractions.Storage;
+using MySync.Application.Sync.Pipeline;
 using MySync.Domain.Content;
 using MySync.Domain.Diffing;
 using MySync.Domain.Manifests;
@@ -89,7 +90,7 @@ internal sealed class DiffSources(ILocalFolder folder, IShareStore store, IConte
     /// <summary>A stored version as a stream for <c>--print</c>: unlimited, its hash checked when it ends.</summary>
     public async Task<Result<Stream>> OpenStoredAsync(ShareId shareId, SharePath path, DiffSideKind kind, FileEntry file, CancellationToken cancellationToken)
     {
-        Result<Stream> opened = await store.OpenObjectReadAsync(shareId, file.Sha256, cancellationToken);
+        Result<Stream> opened = (await store.OpenObjectReadAsync(shareId, file.Sha256, cancellationToken)).ToContent();
         if (opened.IsFailure)
         {
             return Result.Failure<Stream>(NotStored(opened.Error, path, kind));
@@ -112,7 +113,7 @@ internal sealed class DiffSources(ILocalFolder folder, IShareStore store, IConte
             return exists.Value ? Result.Success<byte[]?>(null) : Result.Failure<byte[]?>(DiffErrors.VersionNotStored(path.Value, DiffQueryHandler.Name(kind)));
         }
 
-        Result<Stream> opened = await store.OpenObjectReadAsync(shareId, file.Sha256, cancellationToken);
+        Result<Stream> opened = (await store.OpenObjectReadAsync(shareId, file.Sha256, cancellationToken)).ToContent();
         if (opened.IsFailure)
         {
             return Result.Failure<byte[]?>(NotStored(opened.Error, path, kind));

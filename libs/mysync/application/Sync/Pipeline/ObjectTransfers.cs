@@ -73,7 +73,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
     public async Task<Result<IStagedFile>> DownloadToStagingAsync(
         ShareId shareId, SharePath path, FileEntry entry, ISyncProgressReporter progress, CancellationToken cancellationToken)
     {
-        Result<Stream> opened = await store.OpenObjectReadAsync(shareId, entry.Sha256, cancellationToken);
+        Result<Stream> opened = (await store.OpenObjectReadAsync(shareId, entry.Sha256, cancellationToken)).ToContent();
         if (opened.IsFailure)
         {
             return Result.Failure<IStagedFile>(opened.Error);
@@ -153,7 +153,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
         Result uploaded;
         try
         {
-            uploaded = await store.UploadObjectAsync(shareId, entry.Sha256, content, content.Length, cancellationToken);
+            uploaded = await store.UploadObjectAsync(shareId, entry.Sha256, ObjectUpload.Raw(content, content.Length), cancellationToken);
         }
         catch (IOException exception)
         {
