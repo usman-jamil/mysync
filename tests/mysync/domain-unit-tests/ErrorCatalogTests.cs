@@ -32,6 +32,8 @@ public class ErrorCatalogTests
         { ShareErrors.Incomplete(ShareName.Create("next-wave").Value, Share()), "Shares.Incomplete" }, // exit 8
         { StorageErrors.Unauthorized, "Storage.Unauthorized" }, // exit 8
         { MySync.Domain.Diffing.DiffErrors.VersionNotStored("a.txt", "remote"), "Diff.VersionNotStored" }, // exit 8
+        { StorageErrors.UnsupportedEncoding("br"), "Storage.UnsupportedEncoding" }, // exit 8
+        { StorageErrors.CorruptObject("shares/x/objects/ab/ab", "invalid gzip"), "Storage.CorruptObject" },
     };
 
     [Theory]

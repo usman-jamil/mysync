@@ -84,12 +84,80 @@ public class ManifestSerializerTests
     }
 
     [Fact]
+    public void ACompressedShare_Should_BeFormatThree_WithItsSetting_BeforeTheEntries()
+    {
+        Manifest on = Sample().WithCompression(CompressionSetting.Gzip, new DateTimeOffset(2026, 11, 20, 8, 0, 0, TimeSpan.Zero), "ali@SERVER01").Value;
+
+        string json = Encoding.UTF8.GetString(_serializer.Serialize(on));
+
+        json.ShouldStartWith("""
+            {
+              "formatVersion": 3,
+              "shareId": "0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10",
+              "revision": 18,
+              "createdUtc": "2026-11-15T18:40:12Z",
+              "updatedUtc": "2026-11-20T08:00:00Z",
+              "updatedBy": "ali@SERVER01",
+              "compression": "gzip",
+              "entries": {
+                "docs/readme.md": {
+            """.ReplaceLineEndings("\n"));
+        Manifest read = Read(json).Value;
+        read.Compression.ShouldBe(CompressionSetting.Gzip);
+        read.FormatVersion.ShouldBe(3);
+        _serializer.Serialize(read).ShouldBe(_serializer.Serialize(on));
+    }
+
+    [Fact]
+    public void CompressionTurnedOffAgain_Should_StayFormatThree_AndSayNone()
+    {
+        DateTimeOffset now = new(2026, 11, 20, 8, 0, 0, TimeSpan.Zero);
+        Manifest off = Sample().WithCompression(CompressionSetting.Gzip, now, "a").Value.WithCompression(CompressionSetting.None, now, "a").Value;
+
+        string json = Encoding.UTF8.GetString(_serializer.Serialize(off));
+
+        json.ShouldStartWith("{\n  \"formatVersion\": 3,");
+        json.ShouldContain("\n  \"compression\": \"none\",\n");
+        Read(json).Value.ShouldSatisfyAllConditions(
+            read => read.Compression.ShouldBe(CompressionSetting.None),
+            read => read.FormatVersion.ShouldBe(3));
+    }
+
+    [Fact]
+    public void DeletingACompressedShare_Should_WriteTheUsualMarker_WithoutASetting()
+    {
+        DateTimeOffset now = new(2026, 11, 20, 8, 0, 0, TimeSpan.Zero);
+        Manifest marker = Sample().WithCompression(CompressionSetting.Gzip, now, "a").Value.CreateDeletedRevision(now, "a").Value;
+
+        string json = Encoding.UTF8.GetString(_serializer.Serialize(marker));
+
+        json.ShouldStartWith("{\n  \"formatVersion\": 2,");
+        json.ShouldNotContain("compression");
+    }
+
+    [Theory]
+    [InlineData(1, "\"compression\": \"gzip\",")] // a format-1 manifest can't carry a setting
+    [InlineData(1, "\"compression\": \"none\",")]
+    [InlineData(3, "")]                              // format 3 must carry it
+    [InlineData(3, "\"compression\": \"zstd\",")] // and only a known one
+    [InlineData(3, "\"compression\": 1,")]
+    public void TheCompressionField_Should_MatchTheFormat(int format, string field)
+    {
+        string json = WithEntries("\"a.txt\": { \"type\": \"dir\" }")
+            .Replace("\"formatVersion\": 1", $"\"formatVersion\": {format}", StringComparison.Ordinal)
+            .Replace("\"entries\":", field + " \"entries\":", StringComparison.Ordinal);
+
+        Read(json).Error.Code.ShouldBe("Shares.InvalidManifest");
+    }
+
+    [Fact]
     public void AnOrdinaryManifest_Should_StayFormatOne_WithNoDeletedProperty()
     {
         string json = Encoding.UTF8.GetString(_serializer.Serialize(Sample()));
 
         json.ShouldStartWith("{\n  \"formatVersion\": 1,");
         json.ShouldNotContain("deleted");
+        json.ShouldNotContain("compression");
     }
 
     [Fact]
@@ -140,9 +208,9 @@ public class ManifestSerializerTests
     [Fact]
     public void ANewerFormat_Should_BeUnsupported_EvenIfTheRestOfItIsUnreadable()
     {
-        Error error = Read("""{ "formatVersion": 3, "somethingNew": [1, 2, 3] }""").Error;
+        Error error = Read("""{ "formatVersion": 4, "somethingNew": [1, 2, 3] }""").Error;
 
-        error.ShouldBe(ShareErrors.UnsupportedFormat(3));
+        error.ShouldBe(ShareErrors.UnsupportedFormat(4));
     }
 
     [Theory]

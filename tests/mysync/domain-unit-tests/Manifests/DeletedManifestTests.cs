@@ -43,7 +43,7 @@ public class DeletedManifestTests
         // entries" as "every file was deleted remotely" and delete their local copies.
         Manifest.CurrentFormatVersion.ShouldBe(1);
         Manifest.DeletedFormatVersion.ShouldBeGreaterThan(Manifest.CurrentFormatVersion);
-        Manifest.MaxReadableFormatVersion.ShouldBe(Manifest.DeletedFormatVersion);
+        Manifest.MaxReadableFormatVersion.ShouldBeGreaterThanOrEqualTo(Manifest.DeletedFormatVersion);
     }
 
     [Fact]
@@ -63,7 +63,7 @@ public class DeletedManifestTests
         Manifest.Restore(2, Share(), Rev(5), Created, Updated, "a", []).Error.Code.ShouldBe("Shares.InvalidManifest");
         Manifest.Restore(1, Share(), Rev(5), Created, Updated, "a", [], deletion).Error.Code.ShouldBe("Shares.InvalidManifest");
         Manifest.Restore(2, Share(), Rev(5), Created, Updated, "a", [Entry("left-behind.txt", File())], deletion).Error.Code.ShouldBe("Shares.InvalidManifest");
-        Manifest.Restore(3, Share(), Rev(5), Created, Updated, "a", []).Error.ShouldBe(ShareErrors.UnsupportedFormat(3));
+        Manifest.Restore(4, Share(), Rev(5), Created, Updated, "a", []).Error.ShouldBe(ShareErrors.UnsupportedFormat(4));
     }
 
     [Fact]

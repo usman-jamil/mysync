@@ -17,6 +17,9 @@ namespace MySync.Domain.Manifests;
 /// <item>directory entries exist only for empty directories; redundant ones are dropped;</item>
 /// <item>a deleted share's manifest (<see cref="IsDeleted"/>) has no entries, and nothing follows it:
 /// <see cref="CreateNextRevision"/> refuses.</item>
+/// <item>the compression setting, and whether the share has ever had compression on, travel with
+/// every revision (<see cref="CreateNextRevision"/> carries them); only <see cref="WithCompression"/>
+/// changes the setting, and nothing ever clears <see cref="RecordsCompression"/>.</item>
 /// </list>
 /// </remarks>
 public sealed class Manifest
@@ -31,8 +34,16 @@ public sealed class Manifest
     /// </summary>
     public const int DeletedFormatVersion = 2;
 
+    /// <summary>
+    /// The format of a live manifest of a share that has ever had compression on. Higher than 1 so
+    /// that a client which can't decompress refuses the share ("upgrade mysync") instead of failing
+    /// on hash mismatches. Once a share is format 3 it stays 3, even with compression off again:
+    /// objects stored compressed still exist.
+    /// </summary>
+    public const int CompressionFormatVersion = 3;
+
     /// <summary>The highest format this build reads.</summary>
-    public const int MaxReadableFormatVersion = DeletedFormatVersion;
+    public const int MaxReadableFormatVersion = CompressionFormatVersion;
 
     private Manifest(
         ShareId shareId,
@@ -41,9 +52,13 @@ public sealed class Manifest
         DateTimeOffset updatedUtc,
         string updatedBy,
         ImmutableSortedDictionary<SharePath, ManifestEntry> entries,
-        ShareDeletion? deletion = null)
+        ShareDeletion? deletion = null,
+        CompressionSetting compression = CompressionSetting.None,
+        bool recordsCompression = false)
     {
         Deletion = deletion;
+        Compression = compression;
+        RecordsCompression = recordsCompression;
         ShareId = shareId;
         Revision = revision;
         CreatedUtc = createdUtc;
@@ -77,20 +92,40 @@ public sealed class Manifest
 
     public bool IsDeleted => Deletion is not null;
 
-    /// <summary>The format this manifest is written in: <see cref="DeletedFormatVersion"/> for a deleted share, else <see cref="CurrentFormatVersion"/>.</summary>
-    public int FormatVersion => IsDeleted ? DeletedFormatVersion : CurrentFormatVersion;
+    /// <summary>How files uploaded from now on are stored. Never part of an entry: hashes and sizes are always uncompressed.</summary>
+    public CompressionSetting Compression { get; }
+
+    /// <summary>
+    /// The share has had compression on at some revision, so this manifest is format 3 and writes
+    /// its <c>compression</c> field even when it is <c>none</c>. Never false again once true.
+    /// </summary>
+    public bool RecordsCompression { get; }
+
+    /// <summary>
+    /// The format this manifest is written in: <see cref="DeletedFormatVersion"/> for a deleted
+    /// share, <see cref="CompressionFormatVersion"/> once compression has ever been on, else
+    /// <see cref="CurrentFormatVersion"/>.
+    /// </summary>
+    public int FormatVersion => (IsDeleted, RecordsCompression) switch
+    {
+        (true, _) => DeletedFormatVersion,
+        (false, true) => CompressionFormatVersion,
+        _ => CurrentFormatVersion,
+    };
 
     /// <summary>Revision 1 of a new share.</summary>
+    /// <param name="compression">On for a share created with <c>--compress</c>: revision 1 is then already format 3.</param>
     public static Result<Manifest> CreateNew(
         ShareId shareId,
         IEnumerable<KeyValuePair<SharePath, ManifestEntry>> entries,
         DateTimeOffset nowUtc,
-        string updatedBy)
+        string updatedBy,
+        CompressionSetting compression = CompressionSetting.None)
     {
         ArgumentNullException.ThrowIfNull(shareId);
         DateTimeOffset now = nowUtc.ToUniversalTime();
 
-        return Build(shareId, Revision.Initial, now, now, updatedBy, entries);
+        return Build(shareId, Revision.Initial, now, now, updatedBy, entries, compression, compression != CompressionSetting.None);
     }
 
     /// <summary>
@@ -103,7 +138,24 @@ public sealed class Manifest
         string updatedBy) =>
         Deletion is { } deletion
             ? Result.Failure<Manifest>(ShareErrors.Deleted(ShareId, deletion))
-            : Build(ShareId, Revision.Next(), CreatedUtc, nowUtc.ToUniversalTime(), updatedBy, entries);
+            : Build(ShareId, Revision.Next(), CreatedUtc, nowUtc.ToUniversalTime(), updatedBy, entries, Compression, RecordsCompression);
+
+    /// <summary>
+    /// The next revision with the same entries and <paramref name="setting"/>: how compression is
+    /// turned on or off. Turning it on makes the share format 3 for good; turning it off keeps it there.
+    /// </summary>
+    public Result<Manifest> WithCompression(CompressionSetting setting, DateTimeOffset nowUtc, string updatedBy) =>
+        Deletion is { } deletion
+            ? Result.Failure<Manifest>(ShareErrors.Deleted(ShareId, deletion))
+            : new Manifest(
+                ShareId,
+                Revision.Next(),
+                CreatedUtc,
+                nowUtc.ToUniversalTime(),
+                updatedBy ?? throw new ArgumentNullException(nameof(updatedBy)),
+                Entries,
+                compression: setting,
+                recordsCompression: RecordsCompression || setting != CompressionSetting.None);
 
     /// <summary>
     /// The deleted marker that replaces HEAD when the share is deleted: the next revision, no
@@ -133,6 +185,9 @@ public sealed class Manifest
     /// Rebuilds a manifest read from storage. Refuses a format newer than this build supports
     /// (<see cref="ShareErrors.UnsupportedFormat"/>: the user must upgrade, not guess).
     /// </summary>
+    /// <param name="compression">
+    /// The <c>compression</c> field, or <c>null</c> when absent: required in format 3, refused in 1 and 2.
+    /// </param>
     /// <remarks>
     /// Timestamps are not cross-checked: they come from different machines' clocks, so
     /// <c>updatedUtc</c> before <c>createdUtc</c> is possible and harmless.
@@ -145,7 +200,8 @@ public sealed class Manifest
         DateTimeOffset updatedUtc,
         string updatedBy,
         IEnumerable<KeyValuePair<SharePath, ManifestEntry>> entries,
-        ShareDeletion? deletion = null)
+        ShareDeletion? deletion = null,
+        CompressionSetting? compression = null)
     {
         ArgumentNullException.ThrowIfNull(shareId);
         ArgumentNullException.ThrowIfNull(revision);
@@ -167,6 +223,12 @@ public sealed class Manifest
                 $"format version {formatVersion} {(deletion is null ? "must say who deleted the share" : "can't record a deletion")}."));
         }
 
+        if (formatVersion == CompressionFormatVersion != compression is not null)
+        {
+            return Result.Failure<Manifest>(ShareErrors.InvalidManifest(
+                $"format version {formatVersion} {(compression is null ? "must record the compression setting" : "can't record a compression setting")}."));
+        }
+
         if (deletion is not null)
         {
             if (entries.Any())
@@ -184,7 +246,15 @@ public sealed class Manifest
                 deletion with { DeletedUtc = deletion.DeletedUtc.ToUniversalTime() });
         }
 
-        return Build(shareId, revision, createdUtc.ToUniversalTime(), updatedUtc.ToUniversalTime(), updatedBy, entries);
+        return Build(
+            shareId,
+            revision,
+            createdUtc.ToUniversalTime(),
+            updatedUtc.ToUniversalTime(),
+            updatedBy,
+            entries,
+            compression ?? CompressionSetting.None,
+            recordsCompression: compression is not null);
     }
 
     private static Result<Manifest> Build(
@@ -193,7 +263,9 @@ public sealed class Manifest
         DateTimeOffset createdUtc,
         DateTimeOffset updatedUtc,
         string updatedBy,
-        IEnumerable<KeyValuePair<SharePath, ManifestEntry>> entries)
+        IEnumerable<KeyValuePair<SharePath, ManifestEntry>> entries,
+        CompressionSetting compression,
+        bool recordsCompression)
     {
         ArgumentNullException.ThrowIfNull(updatedBy);
         ArgumentNullException.ThrowIfNull(entries);
@@ -202,7 +274,7 @@ public sealed class Manifest
 
         return checkedEntries.IsFailure
             ? Result.Failure<Manifest>(checkedEntries.Error)
-            : new Manifest(shareId, revision, createdUtc, updatedUtc, updatedBy, checkedEntries.Value);
+            : new Manifest(shareId, revision, createdUtc, updatedUtc, updatedBy, checkedEntries.Value, null, compression, recordsCompression);
     }
 
     private static Result<ImmutableSortedDictionary<SharePath, ManifestEntry>> CheckEntries(

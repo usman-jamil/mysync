@@ -14,8 +14,10 @@ internal sealed record ManifestJson(
     DateTimeOffset CreatedUtc,
     DateTimeOffset UpdatedUtc,
     string UpdatedBy,
-    Dictionary<string, EntryJson> Entries,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DeletionJson? Deleted = null);
+    [property: JsonPropertyOrder(1)] Dictionary<string, EntryJson> Entries,
+    [property: JsonPropertyOrder(2), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DeletionJson? Deleted = null,
+    // Format 3 only. Optional, and written before "entries" (order 0), so format 1 output is unchanged.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Compression = null);
 
 /// <summary>Only in a deleted share's manifest (format 2): who deleted it, and when.</summary>
 internal sealed record DeletionJson(DateTimeOffset DeletedUtc, string DeletedBy);

@@ -122,7 +122,7 @@ internal sealed class DiffSources(ILocalFolder folder, IShareStore store, IConte
         (ContentHash hash, byte[]? bytes, long _) = await ReadAsync(content, cancellationToken);
         return hash == file.Sha256
             ? Result.Success(bytes)
-            : Result.Failure<byte[]?>(StorageErrors.CorruptObject(ShareLayout.For(shareId).ObjectBlob(file.Sha256)));
+            : Result.Failure<byte[]?>(StorageErrors.CorruptObject(ShareLayout.For(shareId).ObjectBlob(file.Sha256), "it doesn't match its hash"));
     }
 
     private static Error NotStored(Error error, SharePath path, DiffSideKind kind) =>
@@ -242,7 +242,7 @@ internal sealed class VerifyingReadStream(Stream inner, IIncrementalContentHash 
             _checked = true;
             if (hash.Finish() != expected)
             {
-                throw new IOException(StorageErrors.CorruptObject(blobName).Description);
+                throw new IOException(StorageErrors.CorruptObject(blobName, "it doesn't match its hash").Description);
             }
         }
 

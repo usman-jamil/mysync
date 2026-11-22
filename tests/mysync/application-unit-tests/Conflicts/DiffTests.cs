@@ -197,7 +197,7 @@ public sealed class DiffTests
         (SyncWorld world, _, Machine b, _) = await Conflicted("a's\n", "b's\n");
         world.Store.DownloadStream = (_, _) => new MemoryStream(Encoding.UTF8.GetBytes("tampered\n"));
 
-        (await b.DiffAsync(new DiffQuery([]))).ShouldFail().Code.ShouldBe("Storage.HashMismatch");
+        (await b.DiffAsync(new DiffQuery([]))).ShouldFail().Code.ShouldBe("Storage.CorruptObject");
     }
 
     [Fact]

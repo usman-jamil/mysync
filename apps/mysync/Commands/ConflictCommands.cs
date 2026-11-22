@@ -181,7 +181,7 @@ internal sealed class ConflictCommands(CommandRunner runner)
         }
         catch (IOException exception)
         {
-            return runner.Fail(Error.Problem("Storage.HashMismatch", exception.Message));
+            return runner.Fail(Error.Problem("Storage.CorruptObject", exception.Message));
         }
 
         return ExitCodes.Success;

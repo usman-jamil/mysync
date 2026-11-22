@@ -17,7 +17,9 @@ namespace MySync.Infrastructure.Serialization;
 /// and entry goes through the Domain.
 /// An ordinary manifest is format 1. Only a deleted share's marker is format 2 (with a
 /// <c>deleted</c> object), so a client that predates <c>mysync delete</c> refuses it rather than
-/// reading "no entries" as "everything was deleted".
+/// reading "no entries" as "everything was deleted". A share that has ever had compression on is
+/// format 3, with a top-level <c>"compression": "gzip" | "none"</c> (present only in format 3), so a
+/// client that can't decompress refuses it. Format 1 output is byte-for-byte what it always was.
 /// </remarks>
 internal sealed class ManifestSerializer : IManifestSerializer
 {
@@ -33,7 +35,8 @@ internal sealed class ManifestSerializer : IManifestSerializer
             manifest.UpdatedUtc,
             manifest.UpdatedBy,
             EntryMapping.ToJson(manifest.Entries),
-            manifest.Deletion is { } deletion ? new DeletionJson(deletion.DeletedUtc, deletion.DeletedBy) : null);
+            manifest.Deletion is { } deletion ? new DeletionJson(deletion.DeletedUtc, deletion.DeletedBy) : null,
+            manifest.RecordsCompression ? manifest.Compression.ToCode() : null);
 
         return JsonSerializer.SerializeToUtf8Bytes(json, MySyncJsonContext.Default.ManifestJson);
     }
@@ -78,7 +81,18 @@ internal sealed class ManifestSerializer : IManifestSerializer
             return Result.Failure<Manifest>(entries.Error);
         }
 
+        CompressionSetting? compression = null;
+        if (parsed.Compression is { } code)
+        {
+            if (!CompressionSettings.TryParse(code, out CompressionSetting setting))
+            {
+                return Result.Failure<Manifest>(ShareErrors.InvalidManifest($"compression '{Domain.Paths.PathErrors.Display(code)}' is not known; upgrade mysync"));
+            }
+
+            compression = setting;
+        }
+
         ShareDeletion? deletion = parsed.Deleted is { } deleted ? new ShareDeletion(deleted.DeletedUtc, deleted.DeletedBy) : null;
-        return Manifest.Restore(parsed.FormatVersion, shareId, revision, parsed.CreatedUtc, parsed.UpdatedUtc, parsed.UpdatedBy, entries.Value, deletion);
+        return Manifest.Restore(parsed.FormatVersion, shareId, revision, parsed.CreatedUtc, parsed.UpdatedUtc, parsed.UpdatedBy, entries.Value, deletion, compression);
     }
 }
