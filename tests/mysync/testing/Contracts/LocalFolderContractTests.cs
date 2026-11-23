@@ -46,6 +46,20 @@ public abstract class LocalFolderContractTests
     }
 
     [Fact]
+    public async Task GetEntryKind_Should_TellNothingAFileAndADirectory()
+    {
+        ILocalFolder folder = await CreateFolderAsync();
+        await SeedFileAsync(folder, "dir/file.txt", Encoding.UTF8.GetBytes("x"));
+        await SeedDirectoryAsync(folder, "empty");
+
+        (await folder.GetEntryKindAsync(P("dir/file.txt"), Ct)).Value.ShouldBe(LocalEntryKind.File);
+        (await folder.GetEntryKindAsync(P("dir"), Ct)).Value.ShouldBe(LocalEntryKind.Directory);
+        (await folder.GetEntryKindAsync(P("empty"), Ct)).Value.ShouldBe(LocalEntryKind.Directory);
+        (await folder.GetEntryKindAsync(P("missing"), Ct)).Value.ShouldBe(LocalEntryKind.None);
+        (await folder.GetEntryKindAsync(P("missing/below"), Ct)).Value.ShouldBe(LocalEntryKind.None);
+    }
+
+    [Fact]
     public async Task ListTopLevelNames_Should_ListOnlyTheRootsChildren()
     {
         ILocalFolder folder = await CreateFolderAsync();

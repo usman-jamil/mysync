@@ -227,6 +227,7 @@ Each `mysync sync` uploads what changed here and downloads what changed there. I
 | `mysync gc` | Delete stored files no recent revision uses, and old history. |
 | `mysync delete [<name>] --yes` | Delete a share for every machine: its stored files, history and publications, and free its name. Local files stay. |
 | `mysync push <name> [<path>...]` | Upload files into a new folder `<host>/<time>/` of a share, without syncing: for collecting logs and data from servers. See [Collecting from servers](#collecting-from-servers). |
+| `mysync pull <name> [<share-path>...]` | Download the share, or folders and files of it, into an ordinary folder: read-only, no sync state. `--latest` takes the newest push of each host.
 | `mysync publish` | Publish a snapshot of the share as a read-only website anyone with the link can browse and download from. |
 | `mysync publications` | List the share's publications and their links. |
 | `mysync unpublish <id>` | Take a publication down; its link stops working at once. |
@@ -246,6 +247,8 @@ Options for `sync`:
 Options for `resolve`: `--all`, `-n, --dry-run`.
 
 Options for `push`: `--updated-since <duration|time|last>`, `--include <pattern>`, `--exclude <pattern>` (both repeatable), `--max-size <size>`, `--host <name>`, `--create`, `--compress` (with `--create`), `--no-info`, `-n, --dry-run`, `--force`. See [Collecting from servers](#collecting-from-servers).
+
+Options for `pull`: `--to <folder>`, `--latest`, `--host <name>` (repeatable, with `--latest`), `--overwrite`, `-n, --dry-run`. See [Getting the data back](#getting-the-data-back) and [Just a copy](#just-a-copy).
 
 Options for `gc`:
 
@@ -463,6 +466,32 @@ Good to know:
 - A filtered push folder holds only part of the source (its `_mysync-push.json` says which filters were used), and files deleted on the server aren't recorded anywhere.
 - Pushing into a share that people sync puts the pushed folders on every one of their machines, and the share's `.mysyncignore` and `.gitignore` decide what they download (push warns when it matches pushed files). For collecting from servers, a share of its own is usually better.
 
+### Getting the data back
+
+`mysync pull` downloads from a share without syncing: nothing is uploaded, the share isn't changed, and no `.mysynctool` is written. It's the other half of `push`.
+
+```text
+$ mysync pull app-logs --latest
+Pulled 31 files (212 MB) from app-logs, revision 57 (the newest push of 3 hosts)
+  into:  ./web01/20261123-004512Z/, ./web02/20261123-004630Z/, ./db01/20261123-003015Z/
+
+$ mysync pull app-logs web01/20261123-004512Z --to ~/incident
+Pulled 12 files (84.1 MB) from app-logs, revision 57
+  into:  /home/usman/incident/20261123-004512Z/
+```
+
+- **`--latest`** takes the newest pushed folder of each host, kept under its host's name; `--host web01` (repeatable) narrows it to those hosts.
+- **A folder or file of the share** lands under its own name: `web01/20261123-004512Z` → `./20261123-004512Z/`, `config/app.yml` → `./app.yml`. With no path, the whole share's contents land in the folder.
+- **`--to <folder>`** puts it somewhere else (created if needed); the default is the current folder.
+- **Nothing local is replaced without asking:** a file that's already there with the same content is left alone (so running the same pull again after an interruption only downloads what's missing); a file with different content stops the whole pull, before anything is downloaded, unless you pass `--overwrite`. Files the pull doesn't write are never touched.
+- **Everything comes from one revision**, even if someone syncs or pushes meanwhile. The share's `.mysyncignore` isn't applied: you get exactly what you asked for.
+- **Refused:** pulling into a folder that syncs with the same share (use `mysync sync` there; the pulled files would be uploaded again as new files).
+- `-n, --dry-run` shows what would be downloaded and writes nothing.
+
+## Just a copy
+
+For any share, `mysync pull <share>` is the way to get a **copy**: a one-off download into an ordinary folder that keeps no link to the share. Use `mysync sync <share>` instead when you want to **keep working together**: edit, sync both ways, see conflicts.
+
 ## Publishing a share
 
 `mysync publish` makes a **public, read-only website** from a snapshot of a share: a page where anyone with the link can browse the folders, search, and download files one at a time or all at once. No login, no server. Use it to hand files to someone who doesn't use mysync.
@@ -580,11 +609,11 @@ With `--json`, every command prints exactly one JSON document on stdout, even wh
 | 1 | Unexpected error (details with `--verbose`) |
 | 2 | Usage or configuration error (bad option, missing or invalid environment variable, `resolve` on a path not in conflict, the publishing account's static website is off) |
 | 3 | Finished, but conflicts are open (takes precedence over 9) |
-| 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; the name is taken; `update` can't replace this binary; `push` from a folder that already syncs with that share, or the share has a file where the host's folder would go |
+| 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; the name is taken; `update` can't replace this binary; `push` from a folder that already syncs with that share, or the share has a file where the host's folder would go; `pull` into a folder that syncs with that share, or local files in the way |
 | 5 | Another machine kept committing; try again |
 | 6 | Another mysync is working in this folder |
 | 7 | The mass-delete safety check stopped the sync |
-| 8 | Share not found, deleted, never finished, or no share has that name; the storage account rejected the credentials; no such release or publication; or a stored file uses an encoding this mysync can't read (upgrade mysync) |
+| 8 | Share not found, deleted, never finished, or no share has that name; the storage account rejected the credentials; no such release or publication; or a stored file uses an encoding this mysync can't read (upgrade mysync); `pull --latest` in a share with no pushed folders |
 | 9 | Finished, but some paths were skipped (busy, unreadable, invalid name) |
 | 10 | Published, but the publication couldn't be opened from the internet (check `MYSYNC_PUBLISH_BASE_URL`) |
 | 130 | Cancelled (Ctrl+C) |

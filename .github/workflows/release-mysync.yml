@@ -462,6 +462,7 @@ jobs:
           `mysync shares` lists every named share, `mysync rename <name>` renames this one,
           `mysync compression on` stores the share's files compressed from then on,
           `mysync push <share> /var/log/app` adds a server's files to a share without syncing (one way, its own folder; `--updated-since last` takes only what changed since the previous push),
+          `mysync pull <share> --latest` downloads the newest push of each host (or any folder, or the whole share) into an ordinary folder, read-only,
           `mysync gc` removes stored files no recent revision uses, and `mysync delete --yes` removes a share
           for every machine (local files stay). Every command takes `--json`.
           NOTES

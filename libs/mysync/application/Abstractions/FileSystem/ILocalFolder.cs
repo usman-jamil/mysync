@@ -31,10 +31,16 @@ public interface ILocalFolder
     /// <summary>Size and mtime of a file, or <c>null</c> if nothing (or not a regular file) is there. Used to re-check before overwriting.</summary>
     Task<Result<LocalFile?>> GetFileAsync(SharePath path, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// What is at <paramref name="path"/>: nothing, a file, a directory, or something else (a symlink,
+    /// a device). Fails when the path can't be used here (a symlink on the way).
+    /// </summary>
+    Task<Result<LocalEntryKind>> GetEntryKindAsync(SharePath path, CancellationToken cancellationToken);
+
     /// <summary>A seekable read stream that reports its length (the upload needs both).</summary>
     Task<Result<Stream>> OpenReadAsync(SharePath path, CancellationToken cancellationToken);
 
-    /// <summary>A new file in the staging directory (<c>.mysynctool.tmp/</c>, same volume) to download into.</summary>
+    /// <summary>A new file in the staging directory (<c>.mysynctool.tmp/</c>, or <c>.mysync-pull.tmp/</c> for a pull; same volume) to download into.</summary>
     Task<Result<IStagedFile>> CreateStagedFileAsync(CancellationToken cancellationToken);
 
     /// <summary>
@@ -65,6 +71,32 @@ public interface IStagedFile : IAsyncDisposable
 {
     /// <summary>Write the downloaded bytes here.</summary>
     Stream Content { get; }
+}
+
+/// <summary>What <see cref="ILocalFolder.GetEntryKindAsync"/> found.</summary>
+public enum LocalEntryKind
+{
+    None,
+    File,
+    Directory,
+
+    /// <summary>A symlink, junction or anything that isn't a regular file or directory.</summary>
+    Other,
+}
+
+/// <summary>
+/// Opens folders other than the share root for writing, with the same rules as the share root
+/// (every path through the resolver, nothing outside the root, symlinks on the way refused):
+/// <c>mysync pull</c>'s destination. Never touches sync state.
+/// </summary>
+public interface ILocalFolderFactory
+{
+    /// <summary>
+    /// The folder at <paramref name="path"/> (absolute, or relative to the current folder; <c>null</c>
+    /// for the current folder itself), staging downloads in its own <c>.mysync-pull.tmp/</c>. It
+    /// needn't exist: it is created by the first write.
+    /// </summary>
+    ILocalFolder OpenPullDestination(string? path);
 }
 
 /// <summary>What a file looked like at one moment: compared again before it is overwritten or deleted.</summary>

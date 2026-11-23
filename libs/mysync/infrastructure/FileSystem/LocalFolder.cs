@@ -25,16 +25,30 @@ internal sealed class LocalFolder : ILocalFolder
 
     private readonly PathResolver _paths;
     private readonly string _staging;
+    private readonly string _stagingName;
     private readonly Lazy<bool> _caseSensitive;
     private readonly Lazy<bool> _unsafeRoot;
     private readonly ConcurrentDictionary<StagedFile, byte> _liveStaged = new();
 
     public LocalFolder(ShareRoot root)
+        : this(root, StateFileNames.StagingDirectory, probeByWriting: true)
+    {
+    }
+
+    /// <param name="stagingDirectory">The staging directory's name in the root: sync's, or pull's.</param>
+    /// <param name="probeByWriting">
+    /// Find out whether the disk ignores case by writing a probe file in staging (the share root,
+    /// which sync writes to anyway), or only by looking (a pull destination: it may not exist yet,
+    /// and a dry run must write nothing there).
+    /// </param>
+    public LocalFolder(ShareRoot root, string stagingDirectory, bool probeByWriting)
     {
         ArgumentNullException.ThrowIfNull(root);
+        ArgumentException.ThrowIfNullOrEmpty(stagingDirectory);
         _paths = new PathResolver(root);
-        _staging = root.Combine(StateFileNames.StagingDirectory);
-        _caseSensitive = new Lazy<bool>(ProbeCaseSensitivity);
+        _stagingName = stagingDirectory;
+        _staging = root.Combine(stagingDirectory);
+        _caseSensitive = new Lazy<bool>(probeByWriting ? ProbeCaseSensitivity : LookUpCaseSensitivity);
         _unsafeRoot = new Lazy<bool>(() => UnsafeRoots.IsUnsafe(root.FullPath));
     }
 
@@ -73,6 +87,38 @@ internal sealed class LocalFolder : ILocalFolder
         }));
     }
 
+    public Task<Result<LocalEntryKind>> GetEntryKindAsync(SharePath path, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        Result<string> full = _paths.Resolve(path, LocalFileErrors.Unreadable);
+        if (full.IsFailure)
+        {
+            return Task.FromResult(Result.Failure<LocalEntryKind>(full.Error));
+        }
+
+        return Task.FromResult(Attempt(path.Value, LocalFileErrors.Unreadable, () =>
+        {
+            FileInfo info = new(full.Value);
+            if (info.LinkTarget is not null)
+            {
+                return LocalEntryKind.Other;
+            }
+
+            if (Directory.Exists(full.Value))
+            {
+                return LocalEntryKind.Directory;
+            }
+
+            if (info.Exists)
+            {
+                return info.Attributes.HasFlag(FileAttributes.Device) ? LocalEntryKind.Other : LocalEntryKind.File;
+            }
+
+            return LocalEntryKind.None;
+        }));
+    }
+
     public Task<Result<Stream>> OpenReadAsync(SharePath path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -102,7 +148,7 @@ internal sealed class LocalFolder : ILocalFolder
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        return Task.FromResult(Attempt<IStagedFile>(StateFileNames.StagingDirectory, LocalFileErrors.WriteFailed, () =>
+        return Task.FromResult(Attempt<IStagedFile>(_stagingName, LocalFileErrors.WriteFailed, () =>
         {
             Directory.CreateDirectory(_staging);
             string file = Path.Combine(_staging, $"{Guid.NewGuid():N}.part");
@@ -293,7 +339,7 @@ internal sealed class LocalFolder : ILocalFolder
             staged.Discard();
         }
 
-        return Task.FromResult(Attempt(StateFileNames.StagingDirectory, LocalFileErrors.WriteFailed, () =>
+        return Task.FromResult(Attempt(_stagingName, LocalFileErrors.WriteFailed, () =>
         {
             if (PathResolver.IsLink(_staging))
             {
@@ -371,6 +417,46 @@ internal sealed class LocalFolder : ILocalFolder
             return !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS();
         }
     }
+
+    /// <summary>
+    /// Case sensitivity without writing: the nearest existing folder on the way to the root (or the
+    /// root itself) looked up with its name's case flipped. Found, while its parent lists no entry
+    /// spelled that way → the disk ignores case. No folder with letters in its name → the OS's default.
+    /// </summary>
+    private bool LookUpCaseSensitivity()
+    {
+        try
+        {
+            for (DirectoryInfo directory = new(_paths.Root.FullPath); directory.Parent is { } parent; directory = parent)
+            {
+                string flipped = FlipCase(directory.Name);
+                if (!directory.Exists || flipped == directory.Name)
+                {
+                    continue;
+                }
+
+                bool foundFlipped = Directory.Exists(Path.Combine(parent.FullName, flipped));
+                bool reallyThere = parent.EnumerateFileSystemInfos(flipped).Any(entry => entry.Name == flipped);
+                return !foundFlipped || reallyThere;
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Fall through to the default.
+        }
+
+        return !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS();
+    }
+
+    private static string FlipCase(string name) =>
+        string.Create(name.Length, name, (span, source) =>
+        {
+            for (int i = 0; i < source.Length; i++)
+            {
+                char c = source[i];
+                span[i] = char.IsUpper(c) ? char.ToLowerInvariant(c) : char.ToUpperInvariant(c);
+            }
+        });
 
     private static Result<T> Attempt<T>(string path, Func<string, string, Error> error, Func<T> action)
     {

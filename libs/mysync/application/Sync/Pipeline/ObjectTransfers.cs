@@ -75,16 +75,23 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
     /// Downloads an object into a new staged file, verifying its SHA-256 while it streams. On a
     /// mismatch the staged file is discarded and nothing reaches the folder.
     /// </summary>
+    public Task<Result<IStagedFile>> DownloadToStagingAsync(
+        ShareId shareId, SharePath path, FileEntry entry, ISyncProgressReporter progress, CancellationToken cancellationToken) =>
+        DownloadToStagingAsync(shareId, path, entry, folder, progress, cancellationToken);
+
+    /// <summary>The same download, staged in <paramref name="into"/> (pull's destination) instead of the share root.</summary>
     public async Task<Result<IStagedFile>> DownloadToStagingAsync(
-        ShareId shareId, SharePath path, FileEntry entry, ISyncProgressReporter progress, CancellationToken cancellationToken)
+        ShareId shareId, SharePath path, FileEntry entry, ILocalFolder into, ISyncProgressReporter progress, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(into);
+
         Result<Stream> opened = await codec.OpenDecodedAsync(shareId, entry, cancellationToken);
         if (opened.IsFailure)
         {
             return Result.Failure<IStagedFile>(opened.Error);
         }
 
-        Result<IStagedFile> staging = await folder.CreateStagedFileAsync(cancellationToken);
+        Result<IStagedFile> staging = await into.CreateStagedFileAsync(cancellationToken);
         if (staging.IsFailure)
         {
             await opened.Value.DisposeAsync();

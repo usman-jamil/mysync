@@ -79,6 +79,9 @@ internal sealed class AzureMachine(string connectionString, string container) : 
     public Task<Result<MySync.Application.Sync.Push.PushReport>> PushAsync(MySync.Application.Sync.Push.PushCommand command) =>
         SendAsync<MySync.Application.Sync.Push.PushCommand, MySync.Application.Sync.Push.PushReport>(command);
 
+    public Task<Result<MySync.Application.Sync.Pull.PullReport>> PullAsync(MySync.Application.Sync.Pull.PullCommand command) =>
+        SendAsync<MySync.Application.Sync.Pull.PullCommand, MySync.Application.Sync.Pull.PullReport>(command);
+
     public Task<Result<DeleteShareResponse>> DeleteAsync(string? shareId = null) =>
         SendAsync<DeleteShareCommand, DeleteShareResponse>(new DeleteShareCommand(Reference(shareId)));
 

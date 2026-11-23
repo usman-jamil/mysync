@@ -18,6 +18,9 @@ public static class StateFileNames
 
     public const string RotatedConflictLog = ".mysynctool.log.1";
 
+    /// <summary><c>mysync pull</c>'s download staging directory in the destination root; distinct from sync's <see cref="StagingDirectory"/>.</summary>
+    public const string PullStagingDirectory = ".mysync-pull.tmp";
+
     public const string IgnoreFile = ".mysyncignore";
 
     /// <summary>Git's ignore file: read from the share root too, its rules joined with <see cref="IgnoreFile"/>'s (a union).</summary>
@@ -30,7 +33,7 @@ public static class StateFileNames
     /// Every artifact above except the ignore files, which are synced on purpose.
     /// </summary>
     public static IReadOnlyList<string> AlwaysIgnored { get; } =
-        [State, StateTemp, Lock, StagingDirectory, ConflictLog, RotatedConflictLog];
+        [State, StateTemp, Lock, StagingDirectory, ConflictLog, RotatedConflictLog, PullStagingDirectory];
 
     /// <summary>
     /// Files operating systems drop into folders on their own (Finder, Explorer). Always ignored,

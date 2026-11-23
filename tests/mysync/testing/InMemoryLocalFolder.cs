@@ -180,6 +180,27 @@ public sealed class InMemoryLocalFolder(IDateTimeProvider? clock = null) : ILoca
         }
     }
 
+    public Task<Result<LocalEntryKind>> GetEntryKindAsync(SharePath path, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Intercept(FolderOperation.GetEntryKind, path) is { } error)
+        {
+            return Task.FromResult(Result.Failure<LocalEntryKind>(error));
+        }
+
+        lock (_gate)
+        {
+            LocalEntryKind kind = _nodes.TryGetValue(path, out Node? node) switch
+            {
+                false => HasChildren(path) ? LocalEntryKind.Directory : LocalEntryKind.None,
+                true when node is FileNode => LocalEntryKind.File,
+                _ => LocalEntryKind.Directory,
+            };
+
+            return Task.FromResult(Result.Success(kind));
+        }
+    }
+
     public Task<Result<Stream>> OpenReadAsync(SharePath path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -529,4 +550,5 @@ public enum FolderOperation
     OpenRead = 1,
     PlaceStagedFile = 2,
     DeleteFile = 3,
+    GetEntryKind = 4,
 }

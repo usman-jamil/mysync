@@ -3,22 +3,26 @@ namespace MySync.Cli;
 /// <summary>The command names <c>Program</c> registers, to reject a typo before ConsoleAppFramework turns it into "show help, exit 0".</summary>
 internal static class KnownCommands
 {
-    public static IReadOnlyList<string> Names { get; } = ["sync", "status", "info", "conflicts", "resolve", "gc", "delete", "update", "self-check", "debug", "publish", "publications", "unpublish", "shares", "rename", "diff", "compression", "push"];
+    public static IReadOnlyList<string> Names { get; } = ["sync", "status", "info", "conflicts", "resolve", "gc", "delete", "update", "self-check", "debug", "publish", "publications", "unpublish", "shares", "rename", "diff", "compression", "push", "pull"];
 
     // Options that take a value, so their value isn't mistaken for a command or a path.
-    private static readonly string[] OptionsWithValues = ["--parallel", "--keep", "--keep-revisions", "--grace-hours", "--share", "--revision", "--title", "--name", "--context", "-U", "--print", "--host", "--updated-since", "--include", "--exclude", "--max-size"];
+    private static readonly string[] OptionsWithValues = ["--parallel", "--keep", "--keep-revisions", "--grace-hours", "--share", "--revision", "--title", "--name", "--context", "-U", "--print", "--host", "--updated-since", "--include", "--exclude", "--max-size", "--to"];
 
-    // push's repeatable options: every value is gathered into one JSON array (see ArrangeForParsing).
-    private static readonly string[] RepeatableOptions = ["--include", "--exclude"];
+    // Repeatable options, per command: every value is gathered into one JSON array (see ArrangeForParsing).
+    private static readonly Dictionary<string, string[]> RepeatableOptions = new(StringComparer.Ordinal)
+    {
+        ["push"] = ["--include", "--exclude"],
+        ["pull"] = ["--host"],
+    };
 
     /// <summary>
-    /// <c>resolve</c>, <c>diff</c> and <c>push</c> take any number of paths, and ConsoleAppFramework
+    /// <c>resolve</c>, <c>diff</c>, <c>push</c> and <c>pull</c> take any number of paths, and ConsoleAppFramework
     /// gives a <c>params</c> argument every token after the first one, options included. Moving the
     /// options in front (arguments keep their order) lets people write
     /// <c>mysync resolve a.txt b.txt --keep local</c>, <c>mysync diff a.txt --stat</c> or
     /// <c>mysync push logs a.txt b/ --host web01</c>. Other commands are untouched.
     /// <para>
-    /// <c>push</c>'s <c>--include</c> and <c>--exclude</c> may be repeated, which ConsoleAppFramework
+    /// <c>push</c>'s <c>--include</c> and <c>--exclude</c>, and <c>pull</c>'s <c>--host</c>, may be repeated, which ConsoleAppFramework
     /// doesn't collect, and it reads an array option's value as JSON when it starts with <c>[</c> and
     /// as comma-separated otherwise: either would break a pattern (<c>[ab]*.log</c>, <c>a,b.txt</c>).
     /// So each one's values are gathered, in order, into a single JSON array.
@@ -28,13 +32,13 @@ internal static class KnownCommands
     {
         ArgumentNullException.ThrowIfNull(args);
 
-        int command = Array.FindIndex(args, arg => arg is "resolve" or "diff" or "push");
+        int command = Array.FindIndex(args, arg => arg is "resolve" or "diff" or "push" or "pull");
         if (command < 0)
         {
             return args;
         }
 
-        bool isPush = args[command] == "push";
+        string[] repeatable = RepeatableOptions.GetValueOrDefault(args[command]) ?? [];
         List<string> options = [];
         List<string> paths = [];
         Dictionary<string, List<string>> repeated = new(StringComparer.Ordinal);
@@ -52,7 +56,7 @@ internal static class KnownCommands
                 options.Add(arg);
                 isValue = false;
             }
-            else if (isPush && RepeatableOptions.Contains(arg, StringComparer.Ordinal))
+            else if (repeatable.Contains(arg, StringComparer.Ordinal))
             {
                 repeated.TryAdd(arg, []);
                 repeatedOption = arg;

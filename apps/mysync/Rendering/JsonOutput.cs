@@ -83,6 +83,32 @@ internal static class JsonOutput
         return exitCode;
     }
 
+    public static int Write(Application.Sync.Pull.PullReport report, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        Emit(
+            new PullJson(
+                "pull",
+                report.ShareId.ToString(),
+                report.ShareName?.Value,
+                report.Revision.Value,
+                report.Destination,
+                report.DryRun,
+                report.Latest,
+                [.. report.Selected.Select(selected => new PullSelectedJson(selected.SharePath, selected.LocalPath))],
+                report.Files,
+                report.Bytes,
+                Totals(report.Downloaded),
+                Totals(report.AlreadyThere),
+                report.Overwritten,
+                [.. report.Skipped.Select(skip => new SkippedJson(skip.Path, CauseCode(skip.Cause), skip.Detail))],
+                [.. report.Warnings],
+                exitCode),
+            Context.PullJson);
+        return exitCode;
+    }
+
     public static int Write(Application.Sync.Push.PushReport report, int exitCode)
     {
         ArgumentNullException.ThrowIfNull(report);
@@ -712,6 +738,27 @@ internal sealed record PushFiltersJson(string? UpdatedSince, string? UpdatedSinc
 
 internal sealed record PushFilteredOutJson(int Total, int NotChanged, int NotIncluded, int Excluded, int TooLarge);
 
+/// <param name="Selected">Each share path taken and where it landed, relative to <paramref name="Destination"/> (empty strings: the whole share, the destination root).</param>
+internal sealed record PullJson(
+    string Command,
+    string ShareId,
+    string? ShareName,
+    long Revision,
+    string Destination,
+    bool DryRun,
+    bool Latest,
+    List<PullSelectedJson> Selected,
+    int Files,
+    long Bytes,
+    TotalsJson Downloaded,
+    TotalsJson AlreadyThere,
+    int Overwritten,
+    List<SkippedJson> Skipped,
+    List<string> Warnings,
+    int ExitCode);
+
+internal sealed record PullSelectedJson(string SharePath, string LocalPath);
+
 internal sealed record PreviewJson(string Command, bool DryRun, string RootPath, int FileCount, long TotalBytes, bool IsUnsafeRoot, int ExitCode);
 
 internal sealed record ErrorJson(
@@ -725,6 +772,7 @@ internal sealed record FailureJson(ErrorJson Error, int ExitCode);
 [JsonSerializable(typeof(SyncJson))]
 [JsonSerializable(typeof(CreateJson))]
 [JsonSerializable(typeof(PushJson))]
+[JsonSerializable(typeof(PullJson))]
 [JsonSerializable(typeof(PreviewJson))]
 [JsonSerializable(typeof(FailureJson))]
 [JsonSerializable(typeof(ConflictListJson))]

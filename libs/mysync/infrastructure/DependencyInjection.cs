@@ -35,7 +35,8 @@ public static class DependencyInjection
         services.TryAddSingleton<IDateTimeProvider, DateTimeProvider>();
         services.TryAddSingleton(_ => new ShareRoot(Directory.GetCurrentDirectory()));
 
-        services.TryAddSingleton<ILocalFolder, LocalFolder>();
+        services.TryAddSingleton<ILocalFolder>(provider => new LocalFolder(provider.GetRequiredService<ShareRoot>()));
+        services.TryAddSingleton<ILocalFolderFactory, LocalFolderFactory>();
         services.TryAddSingleton<IFileScanner, FileScanner>();
         services.TryAddSingleton<ILocalSources, LocalSources>();
         services.TryAddSingleton<IContentHasher, Sha256ContentHasher>();

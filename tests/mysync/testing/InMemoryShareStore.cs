@@ -80,6 +80,15 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
     /// <summary>Objects actually stored by <see cref="UploadObjectAsync"/> (not ones that were already there).</summary>
     public int ObjectUploads { get; private set; }
 
+    private int _writes;
+    private int _objectReads;
+
+    /// <summary>Calls of <see cref="OpenObjectReadAsync"/>: what a download costs.</summary>
+    public int ObjectReads => Volatile.Read(ref _objectReads);
+
+    /// <summary>Calls of any method that writes or deletes (manifests, history, objects, publications, container): zero for read-only commands.</summary>
+    public int Writes => Volatile.Read(ref _writes);
+
     /// <summary>Every stored blob name, sorted: what a test can see in the "container".</summary>
     public IReadOnlyList<string> BlobNames
     {
@@ -116,6 +125,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
     public Task<Result> EnsureReadyForNewShareAsync(CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _writes);
         cancellationToken.ThrowIfCancellationRequested();
         IsReady = true;
         return Task.FromResult(Result.Success());
@@ -137,6 +147,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
     public Task<Result<string>> CreateManifestAsync(ShareId shareId, Manifest manifest, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _writes);
         cancellationToken.ThrowIfCancellationRequested();
         string name = ShareLayout.For(shareId).Manifest;
 
@@ -153,6 +164,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
     public async Task<Result<string>> ReplaceManifestAsync(ShareId shareId, Manifest manifest, string ifMatchETag, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _writes);
         cancellationToken.ThrowIfCancellationRequested();
 
         if (BeforeReplaceManifest is { } hook)
@@ -175,6 +187,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
     public Task<Result> PutManifestHistoryAsync(ShareId shareId, Manifest manifest, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _writes);
         cancellationToken.ThrowIfCancellationRequested();
         string name = ShareLayout.For(shareId).ManifestHistory(manifest.Revision);
 
@@ -225,6 +238,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
     public Task<Result> DeleteManifestHistoryAsync(ShareId shareId, Revision revision, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _writes);
         cancellationToken.ThrowIfCancellationRequested();
 
         lock (_gate)
@@ -247,6 +261,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
     public async Task<Result> UploadObjectAsync(ShareId shareId, ContentHash hash, ObjectUpload upload, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _writes);
         ArgumentNullException.ThrowIfNull(upload);
         string name = ShareLayout.For(shareId).ObjectBlob(hash);
 
@@ -289,6 +304,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
     public async Task<Result<StoredObject>> OpenObjectReadAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Increment(ref _objectReads);
         await Task.Yield();
         string name = ShareLayout.For(shareId).ObjectBlob(hash);
 
@@ -386,6 +402,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
     public Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _writes);
         cancellationToken.ThrowIfCancellationRequested();
         if (BeforeDeleteObject?.Invoke(hash) is { } failure)
         {
@@ -422,6 +439,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
     public async Task<Result<string>> PutPublicationsAsync(ShareId shareId, PublicationRegistry registry, string? ifMatchETag, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _writes);
         cancellationToken.ThrowIfCancellationRequested();
         if (BeforePutPublications is { } hook)
         {
@@ -441,6 +459,7 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
 
     public Task<Result> DeletePublicationsAsync(ShareId shareId, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _writes);
         cancellationToken.ThrowIfCancellationRequested();
 
         lock (_gate)

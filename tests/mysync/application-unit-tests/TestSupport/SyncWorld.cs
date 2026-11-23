@@ -108,6 +108,7 @@ internal sealed class Machine
         Name = name;
         Folder = folder;
         Sources = new InMemoryLocalSources(world.Clock);
+        Destinations = new InMemoryLocalFolderFactory(world.Clock);
 
         ServiceCollection services = new();
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
@@ -117,6 +118,7 @@ internal sealed class Machine
         services.AddSingleton<ILocalFolder>(folder);
         services.AddSingleton<IFileScanner>(folder);
         services.AddSingleton<ILocalSources>(Sources);
+        services.AddSingleton<ILocalFolderFactory>(Destinations);
         services.AddSingleton<IPushRecordSerializer>(PushRecords);
         services.AddSingleton<IShareStateStore>(State);
         services.AddSingleton<IFolderLock>(Lock);
@@ -145,6 +147,9 @@ internal sealed class Machine
     public InMemoryLocalSources Sources { get; }
 
     public TestPushRecordSerializer PushRecords { get; } = new();
+
+    /// <summary>Where <c>mysync pull</c> writes: one in-memory folder per destination path (default <see cref="InMemoryLocalFolderFactory.CurrentDirectory"/>).</summary>
+    public InMemoryLocalFolderFactory Destinations { get; }
 
     public InMemoryShareStateStore State { get; } = new();
 
@@ -224,6 +229,13 @@ internal sealed class Machine
     /// <summary><c>mysync push &lt;share&gt; [&lt;path&gt;...]</c> with every option at its default.</summary>
     public Task<Result<MySync.Application.Sync.Push.PushReport>> PushAsync(string share, params string[] paths) =>
         PushAsync(new MySync.Application.Sync.Push.PushCommand(ShareReference.Parse(share).Value, paths));
+
+    public Task<Result<MySync.Application.Sync.Pull.PullReport>> PullAsync(MySync.Application.Sync.Pull.PullCommand command, CancellationToken? cancellationToken = null) =>
+        Send<MySync.Application.Sync.Pull.PullCommand, MySync.Application.Sync.Pull.PullReport>(command, cancellationToken);
+
+    /// <summary><c>mysync pull &lt;share&gt; [&lt;share-path&gt;...]</c> into the current folder, every option at its default.</summary>
+    public Task<Result<MySync.Application.Sync.Pull.PullReport>> PullAsync(string share, params string[] paths) =>
+        PullAsync(new MySync.Application.Sync.Pull.PullCommand(ShareReference.Parse(share).Value, paths));
 
     public Task<Result<GarbageReport>> GcAsync(CollectGarbageCommand? command = null) =>
         Send<CollectGarbageCommand, GarbageReport>(command ?? new CollectGarbageCommand());

@@ -110,10 +110,14 @@ public sealed record PushTarget
     /// else (a folder someone made by hand) is not a push folder.
     /// </summary>
     /// <param name="startedUtc">The start time the name records, to the second.</param>
-    public static bool TryParseFolderName(string name, out DateTimeOffset startedUtc)
+    public static bool TryParseFolderName(string name, out DateTimeOffset startedUtc) => TryParseFolderName(name, out startedUtc, out _);
+
+    /// <param name="number">The candidate number: 1 for <c>…Z</c>, 2 for <c>…Z-2</c>; orders two pushes of one second.</param>
+    public static bool TryParseFolderName(string name, out DateTimeOffset startedUtc, out int number)
     {
         ArgumentNullException.ThrowIfNull(name);
         startedUtc = default;
+        number = 0;
 
         int timestampLength = "yyyyMMdd-HHmmssZ".Length;
         if (name.Length < timestampLength)
@@ -128,6 +132,15 @@ public sealed record PushTarget
         }
 
         if (!DateTime.TryParseExact(name[..timestampLength], TimestampFormat, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTime parsed))
+        {
+            return false;
+        }
+
+        if (suffix.Length == 0)
+        {
+            number = 1;
+        }
+        else if (!int.TryParse(suffix.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out number))
         {
             return false;
         }

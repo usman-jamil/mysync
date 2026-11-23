@@ -36,6 +36,9 @@ public class ErrorCatalogTests
         { StorageErrors.CorruptObject("shares/x/objects/ab/ab", "invalid gzip"), "Storage.CorruptObject" },
         { MySync.Domain.Sync.Push.PushErrors.SourceIsTheShare("/srv/app", "incident-logs"), "Push.SourceIsTheShare" }, // exit 4
         { MySync.Domain.Sync.Push.PushErrors.TargetIsAFile("web01"), "Push.TargetIsAFile" }, // exit 4
+        { MySync.Domain.Sync.Pull.PullErrors.NoPushes("app-logs"), "Pull.NoPushes" }, // exit 8
+        { MySync.Domain.Sync.Pull.PullErrors.DestinationOccupied(2, ["a.log", "b.log"], overwrite: false), "Pull.DestinationOccupied" }, // exit 4
+        { MySync.Domain.Sync.Pull.PullErrors.DestinationIsTheShare("/home/u/logs", "app-logs"), "Pull.DestinationIsTheShare" }, // exit 4
     };
 
     [Theory]
@@ -67,6 +70,11 @@ public class ErrorCatalogTests
         MySync.Domain.Sync.Push.PushErrors.InvalidTarget("x").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Push.PushErrors.CreateNeedsName().Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Push.PushErrors.InvalidSince("2x").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Pull.PullErrors.PathNotFound("x").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Pull.PullErrors.DuplicateTarget("a", "x/a", "y/a").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Pull.PullErrors.HostNotFound("web01").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Pull.PullErrors.LatestWithPaths().Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Pull.PullErrors.HostNeedsLatest().Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Push.PushErrors.InvalidPattern("--exclude", "!a", "negated").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Push.PushErrors.InvalidSize("0").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Push.PushErrors.InvalidSince("2x").Code.ShouldBe("Push.InvalidSince");

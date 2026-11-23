@@ -32,6 +32,7 @@ public sealed class DependencyInjectionTests : IDisposable
     [InlineData(typeof(ILocalFolder))]
     [InlineData(typeof(IFileScanner))]
     [InlineData(typeof(ILocalSources))]
+    [InlineData(typeof(ILocalFolderFactory))]
     [InlineData(typeof(IPushRecordSerializer))]
     [InlineData(typeof(IContentHasher))]
     [InlineData(typeof(IShareStateStore))]
