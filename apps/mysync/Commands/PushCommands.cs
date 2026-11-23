@@ -20,6 +20,7 @@ internal sealed class PushCommands(CommandRunner runner)
     /// <param name="paths">Files and folders to push (default: this folder's contents).</param>
     /// <param name="host">The host folder's name (default: this machine's name).</param>
     /// <param name="create">Create the share (by name) if it doesn't exist.</param>
+    /// <param name="compress">With --create: a share this push creates stores its files compressed (as sync --name --compress).</param>
     /// <param name="noInfo">Don't add _mysync-push.json (where the data came from) to the folder.</param>
     /// <param name="dryRun">-n, Read the files and show what would be pushed, without uploading anything.</param>
     /// <param name="force">Allow the home folder or a drive root as a source.</param>
@@ -33,6 +34,7 @@ internal sealed class PushCommands(CommandRunner runner)
         [Argument] string? share = null,
         string? host = null,
         bool create = false,
+        bool compress = false,
         bool noInfo = false,
         bool dryRun = false,
         bool force = false,
@@ -67,6 +69,7 @@ internal sealed class PushCommands(CommandRunner runner)
                 Include = include ?? [],
                 Exclude = exclude ?? [],
                 MaxSize = maxSize,
+                Compress = compress,
             };
             Result<PushReport> pushed = await SyncProgressDisplay.RunAsync(runner.Options, progress =>
                 runner.SendAsync<PushCommand, PushReport>(command with { Progress = progress }, cancellationToken));

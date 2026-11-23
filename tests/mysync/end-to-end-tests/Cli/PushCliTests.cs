@@ -333,6 +333,57 @@ public sealed class PushCliTests : IDisposable
         result.StdOut.ShouldContain("Pushed 1 file");
     }
 
+    [Fact]
+    public async Task CreateWithCompress_Should_MakeACompressedShare_ThatAClonesByteForByte()
+    {
+        string log = string.Concat(Enumerable.Repeat("GET /index.html 200 0.003s\n", 200));
+        _server.WriteFile("access.log", log);
+
+        CliResult pushed = await RunAsync(_server, "push", _name, "--create", "--compress", "--host", "web01", "--json");
+        CliResult setting = await RunAsync(_server, "compression", "--share", _name, "--json");
+
+        pushed.ExitCode.ShouldBe(0, pushed.ToString());
+        using (var json = JsonDocument.Parse(pushed.StdOut))
+        {
+            json.RootElement.GetProperty("created").GetBoolean().ShouldBeTrue();
+            json.RootElement.GetProperty("compression").GetString().ShouldBe("gzip");
+            json.RootElement.GetProperty("warnings").GetArrayLength().ShouldBe(0);
+            JsonElement uploaded = json.RootElement.GetProperty("uploaded");
+            uploaded.GetProperty("storedBytes").GetInt64().ShouldBeLessThan(uploaded.GetProperty("bytes").GetInt64());
+        }
+
+        setting.ExitCode.ShouldBe(0, setting.ToString());
+        using (var json = JsonDocument.Parse(setting.StdOut))
+        {
+            json.RootElement.GetProperty("compression").GetString().ShouldBe("gzip");
+            json.RootElement.GetProperty("formatVersion").GetInt32().ShouldBe(3);
+        }
+
+        CliResult cloned = await RunAsync(_laptop, "sync", _name);
+        cloned.ExitCode.ShouldBe(0, cloned.ToString());
+        string folder = Directory.GetDirectories(Path.Combine(_laptop.Path, "web01")).ShouldHaveSingleItem();
+        (await File.ReadAllTextAsync(Path.Combine(folder, "access.log"), TestContext.Current.CancellationToken)).ShouldBe(log);
+    }
+
+    [Theory]
+    [InlineData("--create", "--compress")]
+    [InlineData("--compress")]
+    public async Task CompressForAnExistingShare_Should_Warn_AndPushWithItsSetting(params string[] options)
+    {
+        await CreateShareAsync();
+        _server.WriteFile("a.log", "a");
+
+        CliResult plain = await RunAsync(_server, ["push", _name, .. options]);
+        CliResult json = await RunAsync(_server, ["push", _name, .. options, "--json"]);
+
+        plain.ExitCode.ShouldBe(0, plain.ToString());
+        plain.StdErr.ShouldContain($"Compression is a setting of the share. Turn it on with: mysync compression on --share {_name}");
+        plain.StdOut.ShouldContain("Pushed 1 file");
+        using var document = JsonDocument.Parse(json.StdOut);
+        document.RootElement.GetProperty("compression").GetString().ShouldBe("none");
+        document.RootElement.GetProperty("warnings").EnumerateArray().ShouldHaveSingleItem().GetString()!.ShouldStartWith("Compression is a setting of the share.");
+    }
+
     public void Dispose()
     {
         _laptop.Dispose();

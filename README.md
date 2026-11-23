@@ -245,7 +245,7 @@ Options for `sync`:
 
 Options for `resolve`: `--all`, `-n, --dry-run`.
 
-Options for `push`: `--updated-since <duration|time|last>`, `--include <pattern>`, `--exclude <pattern>` (both repeatable), `--max-size <size>`, `--host <name>`, `--create`, `--no-info`, `-n, --dry-run`, `--force`. See [Collecting from servers](#collecting-from-servers).
+Options for `push`: `--updated-since <duration|time|last>`, `--include <pattern>`, `--exclude <pattern>` (both repeatable), `--max-size <size>`, `--host <name>`, `--create`, `--compress` (with `--create`), `--no-info`, `-n, --dry-run`, `--force`. See [Collecting from servers](#collecting-from-servers).
 
 Options for `gc`:
 
@@ -278,13 +278,14 @@ A share can store its files compressed, so large text files (logs, CSV, SQL scri
 ```bash
 mysync sync --name app-logs --compress   # a new share, compressed from the start
 #   Created share app-logs (…): 214 files, 1.3 GB (sent 142 MB, compressed)
+mysync push app-logs /var/log/app --create --compress   # the same, from a server (see Collecting from servers)
 
 mysync compression on                    # an existing share, in its folder
 mysync compression                       # show the setting (also in mysync info)
 mysync compression off
 ```
 
-- **It's a setting of the share,** recorded in the share itself, so every machine applies it and no one has to remember a flag. `--compress` in a folder that's already a share is ignored, with a warning pointing to `mysync compression on`.
+- **It's a setting of the share,** recorded in the share itself, so every machine applies it and no one has to remember a flag. `--compress` in a folder that's already a share, or on `push` into a share that exists, is ignored, with a warning pointing to `mysync compression on`.
 - **It applies to files uploaded from then on.** Files already stored stay as they are; turning it on or off never re-uploads or rewrites anything.
 - **Some files are stored as they are anyway:** files under 512 bytes; types that are already compressed (`zip`, `gz`, `7z` and other archives, images such as `jpg` and `png`, audio and video, `docx`/`xlsx`/`pptx`, `pdf`, fonts); and anything that a quick test shows doesn't shrink by at least 10%.
 - **Every machine needs a mysync that supports it** (0.7.5 or later). An older one refuses a compressed share with "upgrade mysync" rather than misreading it. This stays true after `compression off`, because some files may still be stored compressed.
@@ -412,7 +413,7 @@ incident-logs/
 - **The host:** the machine's name, or `--host <name>`. Two pushes in the same second get `…-2`, `…-3`.
 - **Many servers at once:** each writes its own folder, so twenty servers can push to one share at the same moment.
 - **Getting the files:** on a laptop, `mysync sync incident-logs` in an empty folder, or `mysync sync` in a folder already cloned from it. The pushed folders are ordinary synced files from then on: edit or delete them and sync as usual.
-- **A new share:** `--create` creates the share (by name) if it doesn't exist yet.
+- **A new share:** `--create` creates the share (by name) if it doesn't exist yet; add `--compress` to create it with [compression](#compression) on (good for logs). For a share that already exists, `--compress` changes nothing: it warns and points to `mysync compression on --share <name>`.
 - **Trying it first:** `-n, --dry-run` reads the files and shows the target folder and what would be uploaded, without changing anything.
 - **Refused:** pushing a folder that already syncs with that share (use `mysync sync` there), and the home folder or a drive root without `--force`.
 - Files that can't be read (locked, removed meanwhile, symlinks) are skipped and listed; the rest is pushed and the exit code is 9.

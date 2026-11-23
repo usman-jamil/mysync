@@ -37,6 +37,7 @@ namespace MySync.Application.Sync.Push;
 /// <param name="Include"><c>--include</c> patterns: if any, only files matching one are pushed.</param>
 /// <param name="Exclude"><c>--exclude</c> patterns: files matching one are not pushed (exclude wins).</param>
 /// <param name="MaxSize"><c>--max-size</c>: files larger than this are not pushed (<see cref="ByteSize"/>).</param>
+/// <param name="Compress">With <see cref="Create"/>: a share this push creates has compression on. Otherwise (or for a share that exists) the share's own setting applies, with a warning.</param>
 public sealed record PushCommand(
     ShareReference Share,
     IReadOnlyList<string> Paths,
@@ -50,7 +51,8 @@ public sealed record PushCommand(
     string? UpdatedSince = null,
     IReadOnlyList<string>? Include = null,
     IReadOnlyList<string>? Exclude = null,
-    string? MaxSize = null) : ICommand<PushReport>
+    string? MaxSize = null,
+    bool Compress = false) : ICommand<PushReport>
 {
     /// <summary>Any filter option was given.</summary>
     public bool HasFilters => UpdatedSince is not null || Include is { Count: > 0 } || Exclude is { Count: > 0 } || MaxSize is not null;
@@ -68,6 +70,7 @@ public sealed record PushCommand(
 /// <param name="Filters">The filters given, with the resolved cutoff; <c>null</c> when none was.</param>
 /// <param name="FilteredOut">Files the filters left out (not skipped: they don't make a push exit 9).</param>
 /// <param name="Planned">For a dry run: the files that would be pushed, relative to the target folder.</param>
+/// <param name="Compression">The share's compression setting, which this push's uploads followed (for a dry run of <c>--create</c>, the new share's).</param>
 public sealed record PushReport(
     ShareId? ShareId,
     ShareName? ShareName,
@@ -86,7 +89,8 @@ public sealed record PushReport(
     int IgnoredByShare,
     PushFilterSettings? Filters,
     PushFilteredOut FilteredOut,
-    ImmutableArray<string> Planned)
+    ImmutableArray<string> Planned,
+    CompressionSetting Compression)
 {
     /// <summary>No file to push (after skips): nothing was committed.</summary>
     public bool NothingToPush => Files == 0;
@@ -239,6 +243,7 @@ internal sealed class PushCommandHandler(
         Selected selected = selection.Apply(listing, picked.Value.NamedFiles);
         FilterSummary filters = new(selection.Settings, selected.FilteredOut);
         List<string> warnings = [.. selected.Warnings];
+        WarnIfCompressIgnored(command, share, warnings);
 
         if (selected.Files.IsEmpty)
         {
@@ -248,7 +253,8 @@ internal sealed class PushCommandHandler(
         bool created = false;
         if (share is null && !command.DryRun)
         {
-            Result<PushShare> made = await CreateOrJoinAsync(command.Share.Name!, picked.Value, cancellationToken);
+            CompressionSetting setting = command.Compress ? CompressionSetting.Gzip : CompressionSetting.None;
+            Result<PushShare> made = await CreateOrJoinAsync(command.Share.Name!, setting, picked.Value, cancellationToken);
             if (made.IsFailure)
             {
                 return Result.Failure<PushReport>(made.Error);
@@ -256,6 +262,11 @@ internal sealed class PushCommandHandler(
 
             share = made.Value;
             created = share.CreatedHere;
+            if (!created)
+            {
+                // Another machine created it first: this is an ordinary push into its share.
+                WarnIfCompressIgnored(command, share, warnings);
+            }
         }
 
         // Fail before anything is uploaded if this host's folder can't go into the share.
@@ -267,7 +278,7 @@ internal sealed class PushCommandHandler(
             return Result.Failure<PushReport>(folder.Error);
         }
 
-        CompressionSetting compression = share?.Head.Manifest.Compression ?? CompressionSetting.None;
+        CompressionSetting compression = CompressionOf(share, command);
         PushFilesOutcome read = await files.RunAsync(share?.ShareId, selected.Files, compression, upload: !command.DryRun, progress, parallelism, cancellationToken);
         skipped.AddRange(read.Skipped);
 
@@ -411,7 +422,7 @@ internal sealed class PushCommandHandler(
     /// rather than an unfinished one. The files then go in as an ordinary push (revision 2). If
     /// another machine claimed the name first, this push joins that share.
     /// </summary>
-    private async Task<Result<PushShare>> CreateOrJoinAsync(ShareName name, PickedSources picked, CancellationToken cancellationToken)
+    private async Task<Result<PushShare>> CreateOrJoinAsync(ShareName name, CompressionSetting compression, PickedSources picked, CancellationToken cancellationToken)
     {
         Result ready = await store.EnsureReadyForNewShareAsync(cancellationToken);
         if (ready.IsFailure)
@@ -440,7 +451,7 @@ internal sealed class PushCommandHandler(
             return notTheShare.IsFailure ? Result.Failure<PushShare>(notTheShare.Error) : joined.Value!;
         }
 
-        Result<Manifest> empty = Manifest.CreateNew(shareId, [], now, machine.Name);
+        Result<Manifest> empty = Manifest.CreateNew(shareId, [], now, machine.Name, compression);
         if (empty.IsFailure)
         {
             return Result.Failure<PushShare>(empty.Error);
@@ -741,7 +752,8 @@ internal sealed class PushCommandHandler(
             0,
             filters.Settings,
             filters.FilteredOut,
-            []);
+            [],
+            CompressionOf(share, command));
 
     private static PushReport Report(
         PushShare? share,
@@ -778,7 +790,28 @@ internal sealed class PushCommandHandler(
             ignored,
             filters.Settings,
             filters.FilteredOut,
-            command.DryRun ? [.. read.Files.Select(file => file.Path.Value)] : []);
+            command.DryRun ? [.. read.Files.Select(file => file.Path.Value)] : [],
+            CompressionOf(share, command));
+    }
+
+    /// <summary>
+    /// The setting this push uploads with: the share's own, or for a share it is about to create
+    /// (a dry run of <c>--create</c>) what <c>--compress</c> asks for.
+    /// </summary>
+    private static CompressionSetting CompressionOf(PushShare? share, PushCommand command) =>
+        share?.Head.Manifest.Compression
+        ?? (command.Create && command.Compress ? CompressionSetting.Gzip : CompressionSetting.None);
+
+    /// <summary>
+    /// <c>--compress</c> only decides how a share this push creates starts. For a share that exists it
+    /// changes nothing (as with <c>sync --compress</c>); say so when the share's setting is off.
+    /// </summary>
+    private static void WarnIfCompressIgnored(PushCommand command, PushShare? share, List<string> warnings)
+    {
+        if (command.Compress && share is { CreatedHere: false } && share.Head.Manifest.Compression == CompressionSetting.None)
+        {
+            warnings.Add($"Compression is a setting of the share. Turn it on with: mysync compression on --share {share.Name?.Value ?? share.ShareId.ToString()}");
+        }
     }
 
     private static SkippedPath ToSkip(SkippedLocalPath local) => new(local.Path, local.Reason switch

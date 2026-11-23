@@ -13,6 +13,9 @@ public sealed class TestPushRecordSerializer : IPushRecordSerializer
 {
     private readonly List<PushRecord> _records = [];
 
+    /// <summary>Pads each record to at least this many bytes (comment lines), so compression policy doesn't keep it raw for being small.</summary>
+    public int PadTo { get; set; }
+
     public IReadOnlyList<PushRecord> Records
     {
         get
@@ -39,6 +42,11 @@ public sealed class TestPushRecordSerializer : IPushRecordSerializer
         foreach (PushRecordSkip skip in record.Skipped)
         {
             text.Append(CultureInfo.InvariantCulture, $"skipped={skip.Path}:{skip.Cause}\n");
+        }
+
+        while (text.Length < PadTo)
+        {
+            text.Append("# padding to make the record compressible\n");
         }
 
         return Encoding.UTF8.GetBytes(text.ToString());

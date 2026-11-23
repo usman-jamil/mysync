@@ -105,6 +105,7 @@ internal static class JsonOutput
                 [.. report.Skipped.Select(skip => new SkippedJson(skip.Path, CauseCode(skip.Cause), skip.Detail))],
                 [.. report.Warnings],
                 report.IgnoredByShare,
+                report.Compression.ToCode(),
                 report.Filters is { } filters
                     ? new PushFiltersJson(
                         filters.UpdatedSinceUtc?.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
@@ -700,6 +701,7 @@ internal sealed record PushJson(
     List<SkippedJson> Skipped,
     List<string> Warnings,
     int IgnoredByShare,
+    string Compression,
     PushFiltersJson? Filters,
     PushFilteredOutJson FilteredOut,
     int ExitCode);
