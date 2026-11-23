@@ -166,7 +166,8 @@ internal sealed class PushCommandHandler(
     private const int ShownIgnoredPaths = 5;
 
     private static readonly SharePath RecordPath = SharePath.Create(PushRecord.FileName).Value;
-    private static readonly SharePath IgnoreFilePath = SharePath.Create(StateFileNames.IgnoreFile).Value;
+    private static readonly IReadOnlyList<(string Name, SharePath Path)> IgnoreFilePaths =
+        [.. StateFileNames.IgnoreFiles.Select(name => (name, SharePath.Create(name).Value))];
 
     public async Task<Result<PushReport>> Handle(PushCommand command, CancellationToken cancellationToken)
     {
@@ -637,23 +638,40 @@ internal sealed class PushCommandHandler(
     }
 
     /// <summary>
-    /// Clones apply the share's root <c>.mysyncignore</c> to downloads, so pushed files it matches
-    /// would sit in the share unseen: they are pushed anyway, with a warning that says so.
+    /// Clones apply the share's root <c>.mysyncignore</c> and <c>.gitignore</c> (a union) to
+    /// downloads, so pushed files they match would sit in the share unseen: they are pushed anyway,
+    /// with a warning that says so.
     /// </summary>
     private async Task<IgnoredByShare> CheckShareIgnoreAsync(PushShare share, Manifest head, SharePath folder, IReadOnlyList<PushedEntry> pushed, CancellationToken cancellationToken)
     {
-        if (head.Entries.GetValueOrDefault(IgnoreFilePath) is not FileEntry file)
+        List<IIgnoreMatcher> matchers = [];
+        List<string> names = [];
+        List<string> warnings = [];
+
+        foreach ((string name, SharePath path) in IgnoreFilePaths)
         {
-            return IgnoredByShare.None;
+            if (head.Entries.GetValueOrDefault(path) is not FileEntry file)
+            {
+                continue;
+            }
+
+            Result<string> rules = await ReadIgnoreFileAsync(share.ShareId, name, file, cancellationToken);
+            if (rules.IsFailure)
+            {
+                warnings.Add($"The share's {name} couldn't be read ({rules.Error.Description}), so the pushed files weren't checked against it.");
+                continue;
+            }
+
+            matchers.Add(ignoreRules.Compile(rules.Value));
+            names.Add(name);
         }
 
-        Result<string> rules = await ReadIgnoreFileAsync(share.ShareId, file, cancellationToken);
-        if (rules.IsFailure)
+        if (matchers.Count == 0)
         {
-            return new IgnoredByShare(0, [$"The share's {StateFileNames.IgnoreFile} couldn't be read ({rules.Error.Description}), so the pushed files weren't checked against it."]);
+            return warnings.Count == 0 ? IgnoredByShare.None : new IgnoredByShare(0, warnings);
         }
 
-        IIgnoreMatcher matcher = ignoreRules.Compile(rules.Value);
+        IIgnoreMatcher matcher = matchers.Count == 1 ? matchers[0] : new UnionIgnoreMatcher(matchers);
         List<string> matched = [.. pushed
             .Where(entry => entry.Entry is FileEntry)
             .Select(entry => PushPlanner.Under(folder, entry.Path))
@@ -662,21 +680,22 @@ internal sealed class PushCommandHandler(
 
         if (matched.Count == 0)
         {
-            return IgnoredByShare.None;
+            return warnings.Count == 0 ? IgnoredByShare.None : new IgnoredByShare(0, warnings);
         }
 
         string shown = string.Join(", ", matched.Take(ShownIgnoredPaths).Select(PathErrors.Display));
-        return new IgnoredByShare(matched.Count, [string.Create(
+        warnings.Add(string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{matched.Count} pushed files match the share's {StateFileNames.IgnoreFile}, so machines that sync this share won't download them: {shown}{(matched.Count > ShownIgnoredPaths ? ", …" : string.Empty)}")]);
+            $"{matched.Count} pushed files match the share's {string.Join(" and ", names)}, so machines that sync this share won't download them: {shown}{(matched.Count > ShownIgnoredPaths ? ", …" : string.Empty)}"));
+        return new IgnoredByShare(matched.Count, warnings);
     }
 
-    private async Task<Result<string>> ReadIgnoreFileAsync(ShareId shareId, FileEntry file, CancellationToken cancellationToken)
+    private async Task<Result<string>> ReadIgnoreFileAsync(ShareId shareId, string name, FileEntry file, CancellationToken cancellationToken)
     {
         const int MaxBytes = 1024 * 1024;
         if (file.Size > MaxBytes)
         {
-            return Result.Failure<string>(LocalFileErrors.Unreadable(StateFileNames.IgnoreFile, $"it is larger than {MaxBytes / 1024} KB"));
+            return Result.Failure<string>(LocalFileErrors.Unreadable(name, $"it is larger than {MaxBytes / 1024} KB"));
         }
 
         Result<Stream> opened = await codec.OpenDecodedAsync(shareId, file, cancellationToken);
@@ -693,14 +712,14 @@ internal sealed class PushCommandHandler(
             buffer.Position = 0;
             if (await hasher.HashAsync(buffer, cancellationToken) != file.Sha256)
             {
-                return Result.Failure<string>(StorageErrors.CorruptObject(StateFileNames.IgnoreFile, "it doesn't match its hash"));
+                return Result.Failure<string>(StorageErrors.CorruptObject(name, "it doesn't match its hash"));
             }
 
-            return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetString(buffer.ToArray()).TrimStart('﻿');
+            return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetString(buffer.ToArray()).TrimStart('\uFEFF');
         }
         catch (IOException exception)
         {
-            return Result.Failure<string>(LocalFileErrors.Unreadable(StateFileNames.IgnoreFile, exception.Message));
+            return Result.Failure<string>(LocalFileErrors.Unreadable(name, exception.Message));
         }
     }
 

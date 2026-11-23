@@ -409,6 +409,37 @@ public class PushTests
     }
 
     [Fact]
+    public async Task TheSharesGitignore_Should_CountLikeItsMysyncignore()
+    {
+        (_, Machine laptop, Machine server, _) = await LaptopAndServer();
+        laptop.Folder.WriteFile(".gitignore", "sub/\n");
+        (await laptop.SyncAsync()).ShouldSucceed();
+
+        PushReport report = (await server.PushAsync("logs")).ShouldSucceed();
+
+        report.IgnoredByShare.ShouldBe(1);
+        report.Warnings.ShouldHaveSingleItem().ShouldBe(
+            $"1 pushed files match the share's .gitignore, so machines that sync this share won't download them: {Target}/sub/b.log");
+        server.IgnoreRules.Compiled.ShouldBe(["sub/\n"]);
+    }
+
+    [Fact]
+    public async Task BothOfTheSharesIgnoreFiles_Should_BeJoinedAsAUnion()
+    {
+        (_, Machine laptop, Machine server, _) = await LaptopAndServer();
+        laptop.Folder.WriteFile(".mysyncignore", "a.log\n").WriteFile(".gitignore", "sub/\n");
+        (await laptop.SyncAsync()).ShouldSucceed();
+        server.Sources.WriteFile("/srv/app/notes.txt", "n");
+
+        PushReport report = (await server.PushAsync("logs")).ShouldSucceed();
+
+        report.IgnoredByShare.ShouldBe(2);
+        report.Warnings.ShouldHaveSingleItem().ShouldBe(
+            $"2 pushed files match the share's .mysyncignore and .gitignore, so machines that sync this share won't download them: {Target}/a.log, {Target}/sub/b.log");
+        server.IgnoreRules.Compiled.ShouldBe(["a.log\n", "sub/\n"]);
+    }
+
+    [Fact]
     public async Task AShareWithoutIgnoreRules_Should_GiveNoIgnoreWarning()
     {
         (_, _, Machine server, _) = await LaptopAndServer();

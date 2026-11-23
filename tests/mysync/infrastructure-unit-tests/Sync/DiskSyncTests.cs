@@ -66,6 +66,34 @@ public sealed class DiskSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task AGitignore_Should_BeAppliedWithTheMysyncignore_AndBothAreSynced()
+    {
+        _a.WriteFile("src/app.cs", "class App;", OldMtime)
+            .WriteFile(".mysyncignore", "*.log\n", OldMtime)
+            .WriteFile(".gitignore", "bin/\n!keep.log\n", OldMtime)
+            .WriteFile("bin/app.dll", "binary", OldMtime)
+            .WriteFile("debug.log", "noise", OldMtime)
+            .WriteFile("keep.log", "still ignored by .mysyncignore", OldMtime);
+
+        CreateShareResponse created = (await Send<CreateShareCommand, CreateShareResponse>(_a, new CreateShareCommand(MySync.Domain.Shares.ShareName.Create("disk-" + Guid.NewGuid().ToString("N")[..12]).Value))).Value;
+        Ok(await Send<CloneShareCommand, SyncReport>(_b, new CloneShareCommand(MySync.Domain.Shares.ShareReference.For(created.ShareId))));
+
+        _b.Files().ShouldBe(new Dictionary<string, string>
+        {
+            [".gitignore"] = "bin/\n!keep.log\n",
+            [".mysyncignore"] = "*.log\n",
+            ["src/app.cs"] = "class App;",
+        });
+
+        // On the clone, the .gitignore it downloaded applies too: its own build output stays local.
+        _b.WriteFile("bin/b.dll", "b's build");
+        SyncReport synced = Ok(await SyncAsync(_b));
+        synced.Uploaded.Files.ShouldBe(0);
+        Ok(await SyncAsync(_a));
+        _a.Exists("bin/b.dll").ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task TwoWaySync_Should_LeaveBothFoldersIdentical()
     {
         ShareId shareId = await CreateAndCloneAsync(("keep.txt", "k"), ("edit-on-a.txt", "1"), ("edit-on-b.txt", "1"), ("delete-on-b.txt", "x"), ("folder/inside.txt", "i"));

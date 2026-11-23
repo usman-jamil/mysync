@@ -20,8 +20,14 @@ public static class StateFileNames
 
     public const string IgnoreFile = ".mysyncignore";
 
+    /// <summary>Git's ignore file: read from the share root too, its rules joined with <see cref="IgnoreFile"/>'s (a union).</summary>
+    public const string GitIgnoreFile = ".gitignore";
+
+    /// <summary>The ignore files read from the share root, in the order they are named in messages. Both are synced.</summary>
+    public static IReadOnlyList<string> IgnoreFiles { get; } = [IgnoreFile, GitIgnoreFile];
+
     /// <summary>
-    /// Every artifact above except <see cref="IgnoreFile"/>, which is synced on purpose.
+    /// Every artifact above except the ignore files, which are synced on purpose.
     /// </summary>
     public static IReadOnlyList<string> AlwaysIgnored { get; } =
         [State, StateTemp, Lock, StagingDirectory, ConflictLog, RotatedConflictLog];

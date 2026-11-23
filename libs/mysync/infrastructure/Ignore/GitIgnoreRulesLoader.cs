@@ -8,9 +8,10 @@ using SharedKernel;
 namespace MySync.Infrastructure.Ignore;
 
 /// <summary>
-/// Reads <c>.mysyncignore</c> from the share root (v1: the root only). It is synced, so it may
-/// have been written on another machine: it is read as UTF-8 (a BOM is fine), lines may end in
-/// LF or CRLF, and a file over <see cref="MaxBytes"/> is refused rather than compiled.
+/// Reads <c>.mysyncignore</c> and <c>.gitignore</c> from the share root (v1: the root only) and
+/// joins them as a union: a path either file ignores is ignored. Both are synced, so they may have
+/// been written on another machine: read as UTF-8 (a BOM is fine), lines ending in LF or CRLF, and a
+/// file over <see cref="MaxBytes"/> is refused rather than compiled.
 /// </summary>
 internal sealed class GitIgnoreRulesLoader(ShareRoot root) : IIgnoreRulesLoader
 {
@@ -18,33 +19,58 @@ internal sealed class GitIgnoreRulesLoader(ShareRoot root) : IIgnoreRulesLoader
 
     public async Task<Result<IIgnoreMatcher>> LoadAsync(CancellationToken cancellationToken)
     {
-        string path = root.Combine(StateFileNames.IgnoreFile);
-
-        try
+        List<IIgnoreMatcher> matchers = [];
+        foreach (string name in StateFileNames.IgnoreFiles)
         {
-            FileInfo file = new(path);
-            if (!file.Exists)
+            Result<string?> rules = await ReadAsync(name, cancellationToken);
+            if (rules.IsFailure)
             {
-                return Result.Success<IIgnoreMatcher>(GitIgnoreMatcher.BuiltInsOnly);
+                return Result.Failure<IIgnoreMatcher>(rules.Error);
             }
 
-            if (file.Length > MaxBytes)
+            if (rules.Value is { } text)
             {
-                return Result.Failure<IIgnoreMatcher>(LocalFileErrors.Unreadable(StateFileNames.IgnoreFile, $"it is larger than {MaxBytes / 1024} KB"));
+                matchers.Add(Compile(text));
             }
+        }
 
-            string text = await File.ReadAllTextAsync(path, Encoding.UTF8, cancellationToken);
-            return Result.Success(Compile(text));
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        return matchers.Count switch
         {
-            return Result.Failure<IIgnoreMatcher>(LocalFileErrors.Unreadable(StateFileNames.IgnoreFile, exception.Message));
-        }
+            0 => Result.Success<IIgnoreMatcher>(GitIgnoreMatcher.BuiltInsOnly),
+            1 => Result.Success(matchers[0]),
+            _ => Result.Success<IIgnoreMatcher>(new UnionIgnoreMatcher(matchers)),
+        };
     }
 
     public IIgnoreMatcher Compile(string rules)
     {
         ArgumentNullException.ThrowIfNull(rules);
         return new GitIgnoreMatcher(rules.TrimStart('\uFEFF').Split('\n').Select(line => line.TrimEnd('\r')));
+    }
+
+    /// <returns>The file's text, or <c>null</c> when it isn't there.</returns>
+    private async Task<Result<string?>> ReadAsync(string name, CancellationToken cancellationToken)
+    {
+        string path = root.Combine(name);
+
+        try
+        {
+            FileInfo file = new(path);
+            if (!file.Exists)
+            {
+                return Result.Success<string?>(null);
+            }
+
+            if (file.Length > MaxBytes)
+            {
+                return Result.Failure<string?>(LocalFileErrors.Unreadable(name, $"it is larger than {MaxBytes / 1024} KB"));
+            }
+
+            return await File.ReadAllTextAsync(path, Encoding.UTF8, cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return Result.Failure<string?>(LocalFileErrors.Unreadable(name, exception.Message));
+        }
     }
 }

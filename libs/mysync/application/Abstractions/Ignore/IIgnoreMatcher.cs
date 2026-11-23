@@ -11,7 +11,10 @@ public interface IIgnoreMatcher
 
 public interface IIgnoreRulesLoader
 {
-    /// <summary>Reads <c>.mysyncignore</c> from the share root; a missing file means built-ins only.</summary>
+    /// <summary>
+    /// Reads <c>.mysyncignore</c> and <c>.gitignore</c> from the share root, each compiled on its own
+    /// and joined as a <see cref="UnionIgnoreMatcher"/>; neither file means built-ins only.
+    /// </summary>
     Task<Result<IIgnoreMatcher>> LoadAsync(CancellationToken cancellationToken);
 
     /// <summary>
@@ -19,6 +22,24 @@ public interface IIgnoreRulesLoader
     /// <c>mysync push</c> checks what it adds against the share's own <c>.mysyncignore</c>, read from HEAD.
     /// </summary>
     IIgnoreMatcher Compile(string rules);
+}
+
+/// <summary>
+/// Ignores a path when <b>any</b> of its matchers does: how <c>.mysyncignore</c> and <c>.gitignore</c>
+/// combine. Each file's rules are evaluated on their own, so a <c>!</c> rule in one can't re-include
+/// what the other ignores.
+/// </summary>
+public sealed class UnionIgnoreMatcher : IIgnoreMatcher
+{
+    private readonly IIgnoreMatcher[] _matchers;
+
+    public UnionIgnoreMatcher(IEnumerable<IIgnoreMatcher> matchers)
+    {
+        ArgumentNullException.ThrowIfNull(matchers);
+        _matchers = [.. matchers];
+    }
+
+    public bool IsIgnored(SharePath path, bool isDirectory) => Array.Exists(_matchers, matcher => matcher.IsIgnored(path, isDirectory));
 }
 
 public static class IgnoreMatcherExtensions

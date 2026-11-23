@@ -359,7 +359,7 @@ mysync delete <shareId> --yes          # or from anywhere
 
 ## Ignoring files
 
-A `.mysyncignore` file in the share root uses [gitignore syntax](https://git-scm.com/docs/gitignore):
+A `.mysyncignore` file in the share root uses [gitignore syntax](https://git-scm.com/docs/gitignore). A `.gitignore` in the share root is read the same way, so a code folder's build output stays out of the share without copying its rules:
 
 ```gitignore
 *.log
@@ -368,7 +368,10 @@ build/
 !keep.log
 ```
 
-- **It is synced**, so the whole team uses the same rules.
+- **With both files, a path is ignored if either one ignores it.** Each file's rules are applied on their own, so a `!` line in one can't bring back something the other ignores.
+- **Only the share root's** `.gitignore` is read; one in a subfolder is synced like any other file but its rules don't apply.
+- **Both are synced**, so the whole team uses the same rules.
+- **Upgrading from 0.9.1 or earlier:** if a share already holds files its `.gitignore` matches, upgraded machines stop syncing them (they're left as they are, never deleted, and `mysync status` lists remote ones as ignored here).
 - **Matching is checked against git itself** in the test suite. Patterns are case-sensitive on every OS.
 - **Ignored paths are neither uploaded nor downloaded**, and are never deleted here.
 - **Always ignored:** mysync's own `.mysynctool*` files, `.DS_Store`, `Thumbs.db`, `desktop.ini` and `._*`. These can't be re-included.
@@ -409,7 +412,7 @@ incident-logs/
     └── 20261121-051210Z/
 ```
 
-- **What gets pushed:** with no paths, the contents of the current folder; a file keeps its name, and a folder keeps its own name (`/var/log/app` → `app/…`). Everything is pushed except mysync's own files and OS clutter (`.DS_Store`, `Thumbs.db`, …). A `.mysyncignore` in a pushed folder is not applied: it's pushed like any other file.
+- **What gets pushed:** with no paths, the contents of the current folder; a file keeps its name, and a folder keeps its own name (`/var/log/app` → `app/…`). Everything is pushed except mysync's own files and OS clutter (`.DS_Store`, `Thumbs.db`, …). A `.mysyncignore` or `.gitignore` in a pushed folder is not applied: it's pushed like any other file.
 - **The host:** the machine's name, or `--host <name>`. Two pushes in the same second get `…-2`, `…-3`.
 - **Many servers at once:** each writes its own folder, so twenty servers can push to one share at the same moment.
 - **Getting the files:** on a laptop, `mysync sync incident-logs` in an empty folder, or `mysync sync` in a folder already cloned from it. The pushed folders are ordinary synced files from then on: edit or delete them and sync as usual.
@@ -458,7 +461,7 @@ Good to know:
 - `--updated-since` goes by each file's modified time, so a file copied in with its old date kept is left out.
 - A changed file is pushed whole: a log that grew is uploaded in full again, into the new folder.
 - A filtered push folder holds only part of the source (its `_mysync-push.json` says which filters were used), and files deleted on the server aren't recorded anywhere.
-- Pushing into a share that people sync puts the pushed folders on every one of their machines, and the share's `.mysyncignore` decides what they download (push warns when it matches pushed files). For collecting from servers, a share of its own is usually better.
+- Pushing into a share that people sync puts the pushed folders on every one of their machines, and the share's `.mysyncignore` and `.gitignore` decide what they download (push warns when it matches pushed files). For collecting from servers, a share of its own is usually better.
 
 ## Publishing a share
 
