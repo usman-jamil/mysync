@@ -54,6 +54,9 @@ public static class DependencyInjection
         services.AddScoped<Publishing.PublicationRemover>();
         services.TryAddSingleton(Maintenance.Update.UpdateOptions.Production);
 
+        // mysync tui's folder session: one per process, one job at a time (CLAUDE.md §10d).
+        services.TryAddSingleton<Session.IFolderSession, Session.FolderSession>();
+
         return services;
     }
 }

@@ -245,7 +245,14 @@ internal sealed class SyncPipeline(
         }
 
         ImmutableArray<Conflict> conflicts = ConflictTracker.Track(plan, session.PreviousConflicts, head.Manifest, Now()).Open;
-        return Report(session with { DryRun = true }, head.Manifest.Revision, committed: false, plan, TransferTotals.None, TransferTotals.None, 0, scanned.Value.Skipped, warnings, conflicts, []);
+        return Report(session with { DryRun = true }, head.Manifest.Revision, committed: false, plan, TransferTotals.None, TransferTotals.None, 0, scanned.Value.Skipped, warnings, conflicts, []) with
+        {
+            ScanHashCache = scanned.Value.Folder.HashCache,
+            HeadUpdatedBy = head.Manifest.UpdatedBy,
+            HeadUpdatedUtc = head.Manifest.UpdatedUtc,
+            HeadCompression = head.Manifest.Compression,
+            HeadEntryCount = head.Manifest.Entries.Count,
+        };
     }
 
     private const string ShareDeletedCode = "Shares.Deleted";

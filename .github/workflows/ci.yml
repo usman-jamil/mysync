@@ -101,6 +101,7 @@ jobs:
             tests/mysync/application-unit-tests/MySync.Application.UnitTests.csproj \
             tests/mysync/infrastructure-unit-tests/MySync.Infrastructure.UnitTests.csproj \
             tests/mysync/site-assets-unit-tests/MySync.SiteAssets.UnitTests.csproj \
+            tests/mysync/tui-unit-tests/MySync.Tui.UnitTests.csproj \
             tests/mysync/architecture-tests/MySync.ArchitectureTests.csproj
           do
             dotnet test --project "$project" --configuration Release --no-build

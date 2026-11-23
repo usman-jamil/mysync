@@ -42,6 +42,7 @@ public static class DependencyInjection
         services.TryAddSingleton<IContentHasher, Sha256ContentHasher>();
         services.TryAddSingleton<IShareStateStore, JsonShareStateStore>();
         services.TryAddSingleton<IFolderLock, FolderLock>();
+        services.TryAddSingleton<IInterfaceLock, InterfaceLock>();
         services.TryAddSingleton<IIgnoreRulesLoader, GitIgnoreRulesLoader>();
         services.TryAddSingleton<IConflictLog>(provider => new FileConflictLog(provider.GetRequiredService<ShareRoot>()));
         services.TryAddSingleton<IManifestSerializer, ManifestSerializer>();

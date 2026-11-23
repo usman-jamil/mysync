@@ -196,35 +196,6 @@ internal sealed class CreateShareCommandHandler(
         return new CreateShareResponse(shareId, name, manifest.Value.FileCount, manifest.Value.TotalSize, upload.Uploaded, skipped, [.. warnings], compression);
     }
 
-    // Taken: say by which share. If it was freed between the claim and the read, try once more.
-    private async Task<Result> ClaimAsync(ShareName name, ShareId shareId, CancellationToken cancellationToken)
-    {
-        for (int attempt = 0; attempt < 2; attempt++)
-        {
-            Result<string> created = await aliases.CreateAsync(
-                new AliasRecord(name, shareId, new DateTimeOffset(clock.UtcNow, TimeSpan.Zero), machine.Name), cancellationToken);
-            if (created.IsSuccess)
-            {
-                return Result.Success();
-            }
-
-            if (created.Error.Code != "Storage.AlreadyExists")
-            {
-                return Result.Failure(created.Error);
-            }
-
-            Result<AliasSnapshot?> holder = await aliases.GetAsync(name, cancellationToken);
-            if (holder.IsFailure)
-            {
-                return Result.Failure(holder.Error);
-            }
-
-            if (holder.Value is { } taken)
-            {
-                return Result.Failure(ShareErrors.NameTaken(name, taken.Alias.ShareId));
-            }
-        }
-
-        return Result.Failure(StorageErrors.PreconditionFailed(Domain.Storage.ShareLayout.Alias(name)));
-    }
+    private Task<Result> ClaimAsync(ShareName name, ShareId shareId, CancellationToken cancellationToken) =>
+        ShareNameClaim.ClaimAsync(aliases, name, shareId, new DateTimeOffset(clock.UtcNow, TimeSpan.Zero), machine.Name, cancellationToken);
 }

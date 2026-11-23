@@ -228,6 +228,7 @@ Each `mysync sync` uploads what changed here and downloads what changed there. I
 | `mysync delete [<name>] --yes` | Delete a share for every machine: its stored files, history and publications, and free its name. Local files stay. |
 | `mysync push <name> [<path>...]` | Upload files into a new folder `<host>/<time>/` of a share, without syncing: for collecting logs and data from servers. See [Collecting from servers](#collecting-from-servers). |
 | `mysync pull <name> [<share-path>...]` | Download the share, or folders and files of it, into an ordinary folder: read-only, no sync state. `--latest` takes the newest push of each host.
+| `mysync tui` | A full-screen terminal interface for this folder: every file's status, sync with live progress, conflicts, push one item to another share. See [Using the terminal interface](#using-the-terminal-interface-mysync-tui).
 | `mysync publish` | Publish a snapshot of the share as a read-only website anyone with the link can browse and download from. |
 | `mysync publications` | List the share's publications and their links. |
 | `mysync unpublish <id>` | Take a publication down; its link stops working at once. |
@@ -387,6 +388,41 @@ build/
 - **Busy files are left alone.** A file that is locked, unreadable, a symlink, or changing while it's read is skipped, reported, and retried on the next run. It is never treated as deleted.
 - **Interrupting is safe.** Ctrl+C (exit 130), a crash or a lost connection never leaves a half-applied change in the share, and the next `sync` carries on from where things stand.
 - **Concurrent syncs merge.** Two machines syncing at once both succeed. If another machine committed first, mysync re-plans and retries.
+
+## Using the terminal interface (`mysync tui`)
+
+`mysync tui` opens a full-screen interface for the folder you start it in: what every file's status is, and what the next sync would do with it. Sync with live progress bars, decide conflicts, and push one file or folder to another share, all from the keyboard. It works wherever mysync works, including over SSH and on Windows servers through Remote Desktop.
+
+```bash
+cd ~/work/app-config
+mysync tui
+```
+
+```text
+ mysync · app-config                                                         /home/usman/work/app-config
+ share revision 42 · last changed by ali@SERVER01                             scanned 2 minutes ago
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ↑ 2 to upload 9.8 KB    ↓ 2 to download 1.3 MB    − 2 to delete    ! 1 conflict    1 skipped
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Show:   All 13   Here 3   Share 3   Conflicts 1   Other 2   Synced 4                      / search
+
+   Name                                    Status                    Size  Details
+   ▾ config/                               2 changes
+       app.staging.yml                     ↓ changed in share      4.1 KB  ali@SERVER01 · rev 42
+       app.yml                             ↑ changed here          4.2 KB  today 11:02
+ ▸ ▾ deploy/                               2 changes
+       deploy.ps1                          ! conflict              8.8 KB  both sides changed it
+       notes.md                            ↑ new here              5.6 KB  today 10:47
+```
+
+- **In a folder that's already a share,** it opens straight away and rescans once. Nothing else happens until you press a key: no background syncing, no watching.
+- **In a new folder,** give it a name: `mysync tui --name app-config` creates an **empty** share (add `--compress` for a compressed one) and opens. Your files show as "new here"; the first `s` uploads them. To work on a share that already exists elsewhere, clone it first with `mysync sync <name>` in an empty folder.
+- **Keys:** `↑` `↓` (or `k` `j`) move, `→` / `Enter` open a folder, `←` closes it; `r` rescans; `s` syncs; `p` pushes the highlighted file or folder to another share; `c` shows the conflicts (`m` keeps yours, `t` keeps theirs, `M` / `T` for all of them, `d` shows the diff); `f` / `1`–`6` filter the list; `/` searches; `?` lists every key; `Esc` goes back or cancels a running job; `q` quits. Ctrl+C cancels a running job (a second one quits).
+- **Conflicts** the rescan finds are decided after a sync has recorded them (the sync leaves them as they are), exactly as with `mysync resolve`.
+- **Push** (`p`) sends a copy of one item to another share, as `mysync push` does; nothing here or in this folder's share changes.
+- **Window size:** at least 80 × 24. Below 100 columns the Details column is left out.
+- **`--ascii`** draws with plain ASCII symbols (it's automatic when the terminal's output isn't UTF-8); **`--no-color`** (or the `NO_COLOR` variable) drops colours: every status also has a word.
+- **Not in it, on purpose:** pull, publish, delete, rename, gc and compression settings (use the commands); choosing another folder or share; push filters; the mouse; watching the folder for changes. A CLI `mysync sync` in the same folder still works while it's open; only one `mysync tui` can run per folder (exit 6 otherwise). It needs a real terminal: in scripts, use `mysync sync` (exit 2 otherwise).
 
 ## Collecting from servers
 
@@ -611,7 +647,7 @@ With `--json`, every command prints exactly one JSON document on stdout, even wh
 | 3 | Finished, but conflicts are open (takes precedence over 9) |
 | 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; the name is taken; `update` can't replace this binary; `push` from a folder that already syncs with that share, or the share has a file where the host's folder would go; `pull` into a folder that syncs with that share, or local files in the way |
 | 5 | Another machine kept committing; try again |
-| 6 | Another mysync is working in this folder |
+| 6 | Another mysync is working in this folder (or another `mysync tui` is open there) |
 | 7 | The mass-delete safety check stopped the sync |
 | 8 | Share not found, deleted, never finished, or no share has that name; the storage account rejected the credentials; no such release or publication; or a stored file uses an encoding this mysync can't read (upgrade mysync); `pull --latest` in a share with no pushed folders |
 | 9 | Finished, but some paths were skipped (busy, unreadable, invalid name) |

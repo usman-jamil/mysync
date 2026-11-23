@@ -24,13 +24,19 @@ builder.Configuration.AddEnvironmentVariables();
 // Set from --verbose / --quiet once the global options are parsed.
 var logLevel = new LoggingLevelSwitch(LogEventLevel.Warning);
 
-// stderr only: stdout carries --json output.
+// stderr only: stdout carries --json output. While mysync tui has the screen, the log is held in
+// memory instead (SwitchableLogSink), so nothing is written over the interface.
+var logSink = new SwitchableLogSink(new LoggerConfiguration()
+    .MinimumLevel.Verbose()
+    .WriteTo.Console(
+        formatProvider: CultureInfo.InvariantCulture,
+        standardErrorFromLevel: LogEventLevel.Verbose)
+    .CreateLogger());
+builder.Services.AddSingleton(logSink);
 builder.Services.AddSerilog(logger => logger
     .MinimumLevel.ControlledBy(logLevel)
     .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
-    .WriteTo.Console(
-        formatProvider: CultureInfo.InvariantCulture,
-        standardErrorFromLevel: LogEventLevel.Verbose));
+    .WriteTo.Sink(logSink));
 
 // ConsoleAppFramework owns Ctrl+C and the process lifetime; the host's banner is noise.
 builder.Services.Configure<ConsoleLifetimeOptions>(options => options.SuppressStatusMessages = true);
@@ -113,6 +119,7 @@ app.Add<DiagnosticsCommands>();
 app.Add<PublishCommands>();
 app.Add<PushCommands>();
 app.Add<PullCommands>();
+app.Add<TuiCommands>();
 
 await app.RunAsync(KnownCommands.ArrangeForParsing(args));
 

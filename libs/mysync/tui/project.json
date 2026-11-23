@@ -1,0 +1,18 @@
+{
+  "name": "mysync-tui",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/mysync/tui",
+  "tags": [
+    "stack:mysync",
+    "type:lib"
+  ],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet build libs/mysync/tui/MySync.Tui.csproj -c Release"
+      }
+    }
+  }
+}

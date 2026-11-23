@@ -35,6 +35,7 @@
   <ItemGroup>
     <Compile Include="..\..\..\apps\mysync\Rendering\ShellQuote.cs" Link="Cli\Linked\ShellQuote.cs" />
     <Compile Include="..\..\..\apps\mysync\Rendering\TerminalText.cs" Link="Cli\Linked\TerminalText.cs" />
+    <Compile Include="..\..\..\apps\mysync\Hosting\SwitchableLogSink.cs" Link="Cli\Linked\SwitchableLogSink.cs" />
   </ItemGroup>
 
 </Project>

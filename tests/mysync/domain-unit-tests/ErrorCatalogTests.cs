@@ -37,6 +37,8 @@ public class ErrorCatalogTests
         { MySync.Domain.Sync.Push.PushErrors.SourceIsTheShare("/srv/app", "incident-logs"), "Push.SourceIsTheShare" }, // exit 4
         { MySync.Domain.Sync.Push.PushErrors.TargetIsAFile("web01"), "Push.TargetIsAFile" }, // exit 4
         { MySync.Domain.Sync.Pull.PullErrors.NoPushes("app-logs"), "Pull.NoPushes" }, // exit 8
+        { MySync.Domain.Session.TuiErrors.AlreadyRunning(4242), "Tui.AlreadyRunning" }, // exit 6
+        { MySync.Domain.Session.SessionErrors.Busy("sync"), "Session.Busy" },
         { MySync.Domain.Sync.Pull.PullErrors.DestinationOccupied(2, ["a.log", "b.log"], overwrite: false), "Pull.DestinationOccupied" }, // exit 4
         { MySync.Domain.Sync.Pull.PullErrors.DestinationIsTheShare("/home/u/logs", "app-logs"), "Pull.DestinationIsTheShare" }, // exit 4
     };
@@ -71,6 +73,10 @@ public class ErrorCatalogTests
         MySync.Domain.Sync.Push.PushErrors.CreateNeedsName().Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Push.PushErrors.InvalidSince("2x").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Pull.PullErrors.PathNotFound("x").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Session.TuiErrors.NotATerminal().Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Session.TuiErrors.TooSmall(60, 20).Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Session.SessionErrors.PushToOwnShare("app-config").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Session.SessionErrors.NothingOnDisk("x").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Pull.PullErrors.DuplicateTarget("a", "x/a", "y/a").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Pull.PullErrors.HostNotFound("web01").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Pull.PullErrors.LatestWithPaths().Type.ShouldBe(ErrorType.Validation);

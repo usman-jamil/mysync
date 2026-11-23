@@ -32,6 +32,20 @@ public sealed record SyncReport(
 
     /// <summary>Clone by name: the name it was cloned by.</summary>
     public ShareName? Name { get; init; }
+
+    /// <summary><c>status</c> and <c>mysync tui</c> only: the hashes the scan used and computed, for a caller that keeps them in memory (nothing is written).</summary>
+    public ImmutableSortedDictionary<SharePath, Domain.State.HashCacheEntry>? ScanHashCache { get; init; }
+
+    /// <summary>Preview only: who committed HEAD, and when.</summary>
+    public string? HeadUpdatedBy { get; init; }
+
+    public DateTimeOffset? HeadUpdatedUtc { get; init; }
+
+    /// <summary>Preview only: HEAD's compression setting.</summary>
+    public CompressionSetting HeadCompression { get; init; }
+
+    /// <summary>Preview only: how many entries HEAD has (0: a new, empty share).</summary>
+    public int HeadEntryCount { get; init; }
 }
 
 /// <param name="Bytes">The files' own (uncompressed) size.</param>

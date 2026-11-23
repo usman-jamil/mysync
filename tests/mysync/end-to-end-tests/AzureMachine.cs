@@ -108,6 +108,9 @@ internal sealed class AzureMachine(string connectionString, string container) : 
         return await look(provider.GetRequiredService<IShareStore>());
     }
 
+    /// <summary>This machine's full composition, kept for as long as the caller needs it (one <c>mysync tui</c> session).</summary>
+    public ServiceProvider BuildProvider() => Services().BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
     public void Dispose() => Folder.Dispose();
 
     public static T Ok<T>(Result<T> result)

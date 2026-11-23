@@ -18,6 +18,9 @@ public static class StateFileNames
 
     public const string RotatedConflictLog = ".mysynctool.log.1";
 
+    /// <summary><c>mysync tui</c>'s lock: held open (with the process ID inside) while the terminal interface runs in this folder.</summary>
+    public const string InterfaceLock = ".mysynctool.ui";
+
     /// <summary><c>mysync pull</c>'s download staging directory in the destination root; distinct from sync's <see cref="StagingDirectory"/>.</summary>
     public const string PullStagingDirectory = ".mysync-pull.tmp";
 
@@ -33,7 +36,7 @@ public static class StateFileNames
     /// Every artifact above except the ignore files, which are synced on purpose.
     /// </summary>
     public static IReadOnlyList<string> AlwaysIgnored { get; } =
-        [State, StateTemp, Lock, StagingDirectory, ConflictLog, RotatedConflictLog, PullStagingDirectory];
+        [State, StateTemp, Lock, StagingDirectory, ConflictLog, RotatedConflictLog, PullStagingDirectory, InterfaceLock];
 
     /// <summary>
     /// Files operating systems drop into folders on their own (Finder, Explorer). Always ignored,

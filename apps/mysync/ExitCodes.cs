@@ -45,7 +45,7 @@ internal static class ExitCodes
             "Pull.DestinationOccupied" or "Pull.DestinationIsTheShare" => FolderPrecondition,
             "Pull.NoPushes" => NotFoundOrUnauthorized,
             "Sync.CommitRetriesExhausted" or "Sync.ShareChangedDuringGc" => CommitRetriesExhausted,
-            "State.FolderLocked" => FolderLocked,
+            "State.FolderLocked" or "Tui.AlreadyRunning" => FolderLocked,
             "Sync.MassDeleteBlocked" => MassDeleteBlocked,
             "Shares.NotFound" or "Shares.Deleted" or "Diff.VersionNotStored" or "Storage.UnsupportedEncoding" or "Shares.NameNotFound" or "Shares.Incomplete" or "Storage.Unauthorized" => NotFoundOrUnauthorized,
             "Update.ReleaseNotFound" or "Update.NoBuildForPlatform" => NotFoundOrUnauthorized,

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MySync.Tui</RootNamespace>
+    <!-- The Windows console-mode P/Invokes are source-generated (LibraryImport). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\application\MySync.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MySync.Tui.UnitTests" />
+  </ItemGroup>
+
+</Project>

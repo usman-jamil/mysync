@@ -100,6 +100,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
 
         IStagedFile staged = staging.Value;
         bool keep = false;
+        progress.FileStarted(TransferDirection.Download, path);
 
         try
         {
@@ -176,6 +177,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
 
         if (exists.Value)
         {
+            progress.FileStarted(TransferDirection.Upload, path);
             progress.BytesTransferred(TransferDirection.Upload, entry.Size);
             progress.FileTransferred(TransferDirection.Upload, path);
             return Result.Success<long?>(null);
@@ -188,6 +190,7 @@ internal sealed class ObjectTransfers(IShareStore store, ILocalFolder folder, IC
         }
 
         // Progress counts the file's own bytes as they're read, so the bar matches its size.
+        progress.FileStarted(TransferDirection.Upload, path);
         await using ProgressReportingStream content = new(opened.Value, progress, TransferDirection.Upload);
         Result uploaded;
         long storedBytes;

@@ -30,6 +30,11 @@ public interface ISyncProgressReporter
     void BytesTransferred(TransferDirection direction, long bytes);
 
     void FileTransferred(TransferDirection direction, SharePath path);
+
+    /// <summary>A file's transfer begins (its bytes follow). Optional: the CLI's display doesn't need it; <c>mysync tui</c> shows the current file.</summary>
+    void FileStarted(TransferDirection direction, SharePath path)
+    {
+    }
 }
 
 /// <summary>Reports nothing: the default when a command supplies no display.</summary>

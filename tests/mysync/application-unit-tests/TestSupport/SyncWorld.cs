@@ -237,6 +237,16 @@ internal sealed class Machine
     public Task<Result<MySync.Application.Sync.Pull.PullReport>> PullAsync(string share, params string[] paths) =>
         PullAsync(new MySync.Application.Sync.Pull.PullCommand(ShareReference.Parse(share).Value, paths));
 
+    /// <summary>This machine's <c>mysync tui</c> folder session (one per machine, as one per process).</summary>
+    public MySync.Application.Session.IFolderSession Session => _services.GetRequiredService<MySync.Application.Session.IFolderSession>();
+
+    public Task<Result<MySync.Application.Session.FolderStatus>> FolderStatusAsync(MySync.Application.Session.GetFolderStatusQuery? query = null) =>
+        Query<MySync.Application.Session.GetFolderStatusQuery, MySync.Application.Session.FolderStatus>(query ?? new MySync.Application.Session.GetFolderStatusQuery());
+
+    public Task<Result<MySync.Application.Session.InitializeEmptyShareResponse>> InitializeAsync(string name, bool compress = false) =>
+        Send<MySync.Application.Session.InitializeEmptyShareCommand, MySync.Application.Session.InitializeEmptyShareResponse>(
+            new MySync.Application.Session.InitializeEmptyShareCommand(ShareName.Create(name).Value, compress));
+
     public Task<Result<GarbageReport>> GcAsync(CollectGarbageCommand? command = null) =>
         Send<CollectGarbageCommand, GarbageReport>(command ?? new CollectGarbageCommand());
 
