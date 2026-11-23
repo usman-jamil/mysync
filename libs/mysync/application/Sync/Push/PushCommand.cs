@@ -33,6 +33,10 @@ namespace MySync.Application.Sync.Push;
 /// <param name="Create">Create the share (by name) if it doesn't exist.</param>
 /// <param name="WriteInfo">Add <c>_mysync-push.json</c> to the target folder (off with <c>--no-info</c>).</param>
 /// <param name="Force">Allow the home folder or a drive root as a source. Never overrides <c>Push.SourceIsTheShare</c>.</param>
+/// <param name="UpdatedSince"><c>--updated-since</c>: a duration, a time or <c>last</c> (<see cref="PushSince"/>).</param>
+/// <param name="Include"><c>--include</c> patterns: if any, only files matching one are pushed.</param>
+/// <param name="Exclude"><c>--exclude</c> patterns: files matching one are not pushed (exclude wins).</param>
+/// <param name="MaxSize"><c>--max-size</c>: files larger than this are not pushed (<see cref="ByteSize"/>).</param>
 public sealed record PushCommand(
     ShareReference Share,
     IReadOnlyList<string> Paths,
@@ -42,7 +46,15 @@ public sealed record PushCommand(
     bool DryRun = false,
     bool Force = false,
     int? Parallelism = null,
-    ISyncProgressReporter? Progress = null) : ICommand<PushReport>;
+    ISyncProgressReporter? Progress = null,
+    string? UpdatedSince = null,
+    IReadOnlyList<string>? Include = null,
+    IReadOnlyList<string>? Exclude = null,
+    string? MaxSize = null) : ICommand<PushReport>
+{
+    /// <summary>Any filter option was given.</summary>
+    public bool HasFilters => UpdatedSince is not null || Include is { Count: > 0 } || Exclude is { Count: > 0 } || MaxSize is not null;
+}
 
 /// <summary>What a push did (or, with <c>--dry-run</c>, would do). Skipped paths make it exit 9; it never has conflicts.</summary>
 /// <param name="ShareId"><c>null</c> only for a dry run of <c>--create</c> for a share that doesn't exist yet.</param>
@@ -53,6 +65,9 @@ public sealed record PushCommand(
 /// <param name="Uploaded">Files this run sent; <see cref="TransferTotals.StoredBytes"/> is what went over the wire.</param>
 /// <param name="AlreadyStored">Files the share already stored (content-addressed): not sent again.</param>
 /// <param name="IgnoredByShare">Pushed files the share's root <c>.mysyncignore</c> matches: machines that sync it won't download them.</param>
+/// <param name="Filters">The filters given, with the resolved cutoff; <c>null</c> when none was.</param>
+/// <param name="FilteredOut">Files the filters left out (not skipped: they don't make a push exit 9).</param>
+/// <param name="Planned">For a dry run: the files that would be pushed, relative to the target folder.</param>
 public sealed record PushReport(
     ShareId? ShareId,
     ShareName? ShareName,
@@ -68,7 +83,10 @@ public sealed record PushReport(
     int CommitAttempts,
     ImmutableArray<SkippedPath> Skipped,
     ImmutableArray<string> Warnings,
-    int IgnoredByShare)
+    int IgnoredByShare,
+    PushFilterSettings? Filters,
+    PushFilteredOut FilteredOut,
+    ImmutableArray<string> Planned)
 {
     /// <summary>No file to push (after skips): nothing was committed.</summary>
     public bool NothingToPush => Files == 0;
@@ -86,7 +104,37 @@ internal sealed class PushCommandValidator : AbstractValidator<PushCommand>
             .WithErrorCode("Push.HostEmpty")
             .WithMessage("--host needs a name.");
         RuleFor(command => command.Parallelism).ValidParallelism();
+
+        RuleFor(command => command.UpdatedSince).Custom((value, context) =>
+        {
+            if (value is not null && PushSince.Parse(value) is { IsFailure: true } parsed)
+            {
+                context.AddFailure(Failure(nameof(PushCommand.UpdatedSince), parsed.Error));
+            }
+        });
+
+        RuleFor(command => command.MaxSize).Custom((value, context) =>
+        {
+            if (value is not null && ByteSize.Parse(value) is { IsFailure: true } parsed)
+            {
+                context.AddFailure(Failure(nameof(PushCommand.MaxSize), parsed.Error));
+            }
+        });
+
+        RuleForEach(command => command.Include).Custom((pattern, context) => CheckPattern(PushPatterns.IncludeOption, pattern, context));
+        RuleForEach(command => command.Exclude).Custom((pattern, context) => CheckPattern(PushPatterns.ExcludeOption, pattern, context));
     }
+
+    private static void CheckPattern(string option, string pattern, ValidationContext<PushCommand> context)
+    {
+        if (PushPatterns.Check(option, pattern ?? string.Empty) is { IsFailure: true } checkedPattern)
+        {
+            context.AddFailure(Failure(option, checkedPattern.Error));
+        }
+    }
+
+    private static FluentValidation.Results.ValidationFailure Failure(string property, Error error) =>
+        new(property, error.Description) { ErrorCode = error.Code };
 }
 
 internal sealed class PushCommandHandler(
@@ -139,6 +187,20 @@ internal sealed class PushCommandHandler(
             return Result.Failure<PushReport>(picked.Error);
         }
 
+        // A duration or a time is resolved before storage is touched (a time in the future is refused); last needs HEAD.
+        PushSince? since = command.UpdatedSince is { } spec ? PushSince.Parse(spec).Value : null;
+        DateTimeOffset? cutoff = null;
+        if (since is { Kind: not PushSinceKind.Last })
+        {
+            Result<DateTimeOffset?> resolved = since.Resolve(started, timeProvider.LocalTimeZone, sharePaths: null, target.Value.Host);
+            if (resolved.IsFailure)
+            {
+                return Result.Failure<PushReport>(resolved.Error);
+            }
+
+            cutoff = resolved.Value;
+        }
+
         Result<PushShare?> found = await FindShareAsync(command.Share, allowMissing: command.Create, waitForCreator: command.Create, cancellationToken);
         if (found.IsFailure)
         {
@@ -155,6 +217,14 @@ internal sealed class PushCommandHandler(
             }
         }
 
+        // From the HEAD just read, once: the cutoff doesn't move on a commit retry. No share yet (--create): no cutoff.
+        if (since is { Kind: PushSinceKind.Last })
+        {
+            cutoff = since.Resolve(started, timeProvider.LocalTimeZone, share?.Head.Manifest.Entries.Keys, target.Value.Host).Value;
+        }
+
+        var selection = PushSelection.Create(command, cutoff, ignoreRules);
+
         progress.PhaseStarted(SyncPhase.Scanning);
         Result<SourceListing> listed = await sources.ListAsync(picked.Value.ToList, cancellationToken);
         if (listed.IsFailure)
@@ -164,11 +234,15 @@ internal sealed class PushCommandHandler(
 
         SourceListing listing = listed.Value;
         List<SkippedPath> skipped = [.. picked.Value.Skipped, .. listing.Skipped.Select(ToSkip)];
-        List<string> warnings = [];
 
-        if (listing.Files.IsEmpty)
+        // The filters, on the listing: nothing they leave out is opened, hashed or counted as skipped.
+        Selected selected = selection.Apply(listing, picked.Value.NamedFiles);
+        FilterSummary filters = new(selection.Settings, selected.FilteredOut);
+        List<string> warnings = [.. selected.Warnings];
+
+        if (selected.Files.IsEmpty)
         {
-            return NothingToPush(share, command, target.Value, skipped, warnings, created: share is null && command.DryRun);
+            return NothingToPush(share, command, target.Value, skipped, warnings, created: share is null && command.DryRun, filters);
         }
 
         bool created = false;
@@ -194,17 +268,17 @@ internal sealed class PushCommandHandler(
         }
 
         CompressionSetting compression = share?.Head.Manifest.Compression ?? CompressionSetting.None;
-        PushFilesOutcome read = await files.RunAsync(share?.ShareId, listing.Files, compression, upload: !command.DryRun, progress, parallelism, cancellationToken);
+        PushFilesOutcome read = await files.RunAsync(share?.ShareId, selected.Files, compression, upload: !command.DryRun, progress, parallelism, cancellationToken);
         skipped.AddRange(read.Skipped);
 
         if (read.Files.Count == 0)
         {
-            return NothingToPush(share, command, target.Value, skipped, warnings, created: created || share is null && command.DryRun);
+            return NothingToPush(share, command, target.Value, skipped, warnings, created: created || share is null && command.DryRun, filters);
         }
 
         List<PushedEntry> pushed = [
             .. read.Files.Select(file => new PushedEntry(file.Path, file.Entry)),
-            .. listing.EmptyFolders.Select(path => new PushedEntry(path, DirectoryEntry.Instance))];
+            .. selected.EmptyFolders.Select(path => new PushedEntry(path, DirectoryEntry.Instance))];
         warnings.AddRange(NameWarnings(pushed));
 
         bool withRecord = command.WriteInfo;
@@ -220,14 +294,14 @@ internal sealed class PushCommandHandler(
             {
                 IgnoredByShare ignored = await CheckShareIgnoreAsync(share, share.Head.Manifest, folder.Value, pushed, cancellationToken);
                 warnings.AddRange(ignored.Warnings);
-                return Report(share, command, folder.Value, share.Head.Manifest.Revision, committed: false, created: false, read, 0, skipped, warnings, ignored.Count);
+                return Report(share, command, folder.Value, share.Head.Manifest.Revision, committed: false, created: false, read, 0, skipped, warnings, ignored.Count, filters);
             }
 
-            return Report(null, command, folder.Value, null, committed: false, created: true, read, 0, skipped, warnings, 0);
+            return Report(null, command, folder.Value, null, committed: false, created: true, read, 0, skipped, warnings, 0, filters);
         }
 
         IReadOnlyList<string> sourcePaths = [.. picked.Value.Chosen.Select(source => source.Info.FullPath)];
-        return await CommitAsync(command, share!, target.Value, started, sourcePaths, pushed, withRecord, read, skipped, warnings, created, progress, cancellationToken);
+        return await CommitAsync(command, share!, target.Value, started, sourcePaths, pushed, withRecord, read, skipped, warnings, created, filters, progress, cancellationToken);
     }
 
     // The sources as given, each checked and mapped to where it lands, before anything is read.
@@ -283,7 +357,8 @@ internal sealed class PushCommandHandler(
             }
         }
 
-        return new PickedSources(chosen, toList, skipped);
+        HashSet<SharePath> named = [.. chosen.Where(source => source.Info.Kind == LocalSourceKind.File).Select(source => source.Root.Root).OfType<SharePath>()];
+        return new PickedSources(chosen, toList, skipped, named);
     }
 
     /// <returns>The share and its HEAD, or <c>null</c> when it doesn't exist and <paramref name="allowMissing"/>.</returns>
@@ -419,6 +494,7 @@ internal sealed class PushCommandHandler(
         List<SkippedPath> skipped,
         List<string> warnings,
         bool created,
+        FilterSummary filters,
         ISyncProgressReporter progress,
         CancellationToken cancellationToken)
     {
@@ -441,7 +517,7 @@ internal sealed class PushCommandHandler(
                 List<PushedEntry> entries = [.. pushed];
                 if (withRecord)
                 {
-                    PushedEntry? record = await UploadRecordAsync(share, head.Manifest, target, started, sourcePaths, folder.Value, read, skipped, sent, ct);
+                    PushedEntry? record = await UploadRecordAsync(share, head.Manifest, target, started, sourcePaths, folder.Value, read, skipped, filters, sent, ct);
                     recordLeftOut = record is null;
                     if (record is not null)
                     {
@@ -485,7 +561,7 @@ internal sealed class PushCommandHandler(
         IgnoredByShare ignored = await CheckShareIgnoreAsync(share, done.Remote.Manifest, committedFolder!, pushed, cancellationToken);
         warnings.AddRange(ignored.Warnings);
 
-        return Report(share, command, committedFolder!, done.Committed!.Revision, committed: true, created, read, done.Attempts, skipped, warnings, ignored.Count);
+        return Report(share, command, committedFolder!, done.Committed!.Revision, committed: true, created, read, done.Attempts, skipped, warnings, ignored.Count, filters);
     }
 
     /// <returns>The record's entry, or <c>null</c> if it couldn't be uploaded (the push goes on without it).</returns>
@@ -498,6 +574,7 @@ internal sealed class PushCommandHandler(
         SharePath folder,
         PushFilesOutcome read,
         IReadOnlyList<SkippedPath> skipped,
+        FilterSummary filters,
         HashSet<Domain.Content.ContentHash> sent,
         CancellationToken cancellationToken)
     {
@@ -513,7 +590,9 @@ internal sealed class PushCommandHandler(
             folder.Value,
             read.Files.Count,
             read.Files.Sum(file => file.Entry.Size),
-            [.. skipped.Select(skip => new PushRecordSkip(skip.Path, SkipCauseCodes.Of(skip.Cause), skip.Detail))]);
+            [.. skipped.Select(skip => new PushRecordSkip(skip.Path, SkipCauseCodes.Of(skip.Cause), skip.Detail))],
+            filters.Settings,
+            filters.Settings is null ? null : filters.FilteredOut);
 
         byte[] bytes = recordSerializer.Serialize(record);
         using MemoryStream content = new(bytes, writable: false);
@@ -643,7 +722,7 @@ internal sealed class PushCommandHandler(
         }
     }
 
-    private static PushReport NothingToPush(PushShare? share, PushCommand command, PushTarget target, List<SkippedPath> skipped, List<string> warnings, bool created) =>
+    private static PushReport NothingToPush(PushShare? share, PushCommand command, PushTarget target, List<SkippedPath> skipped, List<string> warnings, bool created, FilterSummary filters) =>
         new(
             share?.ShareId,
             share?.Name ?? command.Share.Name,
@@ -659,7 +738,10 @@ internal sealed class PushCommandHandler(
             0,
             [.. skipped.OrderBy(skip => skip.Path, StringComparer.Ordinal)],
             [.. warnings],
-            0);
+            0,
+            filters.Settings,
+            filters.FilteredOut,
+            []);
 
     private static PushReport Report(
         PushShare? share,
@@ -672,7 +754,8 @@ internal sealed class PushCommandHandler(
         int attempts,
         List<SkippedPath> skipped,
         List<string> warnings,
-        int ignored)
+        int ignored,
+        FilterSummary filters)
     {
         List<CapturedFile> sentFiles = [.. read.Files.Where(file => file.Uploaded)];
         List<CapturedFile> storedFiles = [.. read.Files.Where(file => !file.Uploaded)];
@@ -692,7 +775,10 @@ internal sealed class PushCommandHandler(
             attempts,
             [.. skipped.OrderBy(skip => skip.Path, StringComparer.Ordinal)],
             [.. warnings],
-            ignored);
+            ignored,
+            filters.Settings,
+            filters.FilteredOut,
+            command.DryRun ? [.. read.Files.Select(file => file.Path.Value)] : []);
     }
 
     private static SkippedPath ToSkip(SkippedLocalPath local) => new(local.Path, local.Reason switch
@@ -705,10 +791,15 @@ internal sealed class PushCommandHandler(
 
     private DateTimeOffset Now() => new(clock.UtcNow, TimeSpan.Zero);
 
+    /// <param name="NamedFiles">Where each file named as an argument lands (a filter leaving one out gets a warning).</param>
     private sealed record PickedSources(
         IReadOnlyList<(LocalSourceInfo Info, PushSourceRoot Root)> Chosen,
         IReadOnlyList<SourceToList> ToList,
-        IReadOnlyList<SkippedPath> Skipped);
+        IReadOnlyList<SkippedPath> Skipped,
+        IReadOnlySet<SharePath> NamedFiles);
+
+    /// <summary>The filters given (<c>null</c>: none) and what they left out, for the report and the record.</summary>
+    private sealed record FilterSummary(PushFilterSettings? Settings, PushFilteredOut FilteredOut);
 
     /// <param name="CreatedHere">This push created it (<c>--create</c>).</param>
     private sealed record PushShare(ShareId ShareId, ShareName? Name, ManifestSnapshot Head, bool CreatedHere);

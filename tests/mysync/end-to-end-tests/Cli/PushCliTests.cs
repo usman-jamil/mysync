@@ -202,6 +202,137 @@ public sealed class PushCliTests : IDisposable
         result.StdOut.ShouldContain("Pushed 1 file");
     }
 
+    [Theory]
+    [InlineData("push", "{name}", "app", "--exclude", "*.gz", "--exclude", "*.tmp", "--exclude", "d,e.txt", "--host", "web01")]
+    [InlineData("push", "--exclude", "*.gz", "{name}", "--host", "web01", "--exclude", "*.tmp", "app", "--exclude", "d,e.txt")]
+    [InlineData("push", "--exclude", "*.gz", "--exclude", "*.tmp", "--exclude", "d,e.txt", "--host", "web01", "{name}", "app")]
+    public async Task RepeatedExcludes_Should_AllApply_WhereverTheyGo(params string[] arguments)
+    {
+        await CreateShareAsync();
+        _server.WriteFile("app/a.log", "a").WriteFile("app/b.gz", "b").WriteFile("app/c.tmp", "c").WriteFile("app/d,e.txt", "d").WriteFile("app/k.log", "k");
+
+        CliResult pushed = await RunAsync(_server, [.. arguments.Select(argument => argument.Replace("{name}", _name, StringComparison.Ordinal))]);
+
+        pushed.ExitCode.ShouldBe(0, pushed.ToString());
+        pushed.StdOut.ShouldContain($"Pushed 2 files (2 B; 2 uploaded, 0 already stored) to {_name}");
+        pushed.StdOut.ShouldContain("3 files left out by filters (3 excluded)");
+        pushed.StdOut.ShouldNotContain("\u001b");
+    }
+
+    [Fact]
+    public async Task Patterns_Should_ReachMysyncUnchanged_BracketsAndCommasIncluded()
+    {
+        await CreateShareAsync();
+        _server.WriteFile("a.log", "a").WriteFile("b.log", "b").WriteFile("c.log", "c").WriteFile("x,y.log", "x");
+
+        CliResult pushed = await RunAsync(_server, "push", _name, "--include", "[ab].log", "--include", "x,y.log", "--json");
+
+        pushed.ExitCode.ShouldBe(0, pushed.ToString());
+        using var json = JsonDocument.Parse(pushed.StdOut);
+        JsonElement root = json.RootElement;
+        root.GetProperty("files").GetInt32().ShouldBe(3);
+        root.GetProperty("filters").GetProperty("include").EnumerateArray().Select(item => item.GetString()).ShouldBe(["[ab].log", "x,y.log"]);
+        root.GetProperty("filteredOut").GetProperty("notIncluded").GetInt32().ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData("--updated-since", "2x", "--updated-since '2x' isn't something mysync understands")]
+    [InlineData("--updated-since", "0h", "Use a duration (30m, 2h, 1d, 1w)")]
+    [InlineData("--updated-since", "2999-01-01", "is in the future")]
+    [InlineData("--include", "!*.log", "negated patterns aren't supported")]
+    [InlineData("--exclude", "", "--exclude '' can't be used: it is empty.")]
+    [InlineData("--max-size", "0", "--max-size '0' isn't a size")]
+    [InlineData("--max-size", "1XB", "--max-size '1XB' isn't a size")]
+    public async Task InvalidFilterValues_Should_ExitTwo_SayingWhatToUse(string option, string value, string message)
+    {
+        await CreateShareAsync();
+        _server.WriteFile("a.log", "a");
+
+        CliResult result = await RunAsync(_server, "push", _name, option, value);
+
+        result.ExitCode.ShouldBe(2, result.ToString());
+        result.StdErr.ShouldContain(message);
+        result.StdOut.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task UpdatedSinceLast_Should_SayWhenThereIsNoEarlierPush_ThenUseIt()
+    {
+        await CreateShareAsync();
+        _server.WriteFile("a.log", "a");
+        File.SetLastWriteTimeUtc(_server.Combine("a.log"), DateTime.UtcNow.AddDays(-1));
+
+        CliResult first = await RunAsync(_server, "push", _name, "--updated-since", "last", "--host", "web01");
+        CliResult second = await RunAsync(_server, "push", _name, "--updated-since", "LAST", "--host", "web01");
+
+        first.ExitCode.ShouldBe(0, first.ToString());
+        first.StdOut.ShouldContain("no earlier push from web01; pushing everything · no files left out by filters");
+        second.ExitCode.ShouldBe(0, second.ToString());
+        second.StdOut.ShouldContain("Nothing to push (1 file left out by filters).");
+        second.StdOut.ShouldContain("changed since ");
+        second.StdOut.ShouldContain("1 file left out by filters (1 not changed)");
+    }
+
+    [Fact]
+    public async Task Json_Should_CarryTheFiltersAndCounts_AndNullFiltersWithoutThem()
+    {
+        await CreateShareAsync();
+        _server.WriteFile("a.log", "a").WriteFile("big.log", new string('x', 3000)).WriteFile("b.gz", "b");
+
+        CliResult filtered = await RunAsync(_server, "push", _name, "--updated-since", "1d", "--exclude", "*.gz", "--max-size", "2K", "--json");
+        CliResult plain = await RunAsync(_server, "push", _name, "--json");
+
+        filtered.ExitCode.ShouldBe(0, filtered.ToString());
+        using (var json = JsonDocument.Parse(filtered.StdOut))
+        {
+            JsonElement filters = json.RootElement.GetProperty("filters");
+            filters.GetProperty("updatedSince").GetString()!.ShouldEndWith("Z");
+            filters.GetProperty("updatedSinceSpec").GetString().ShouldBe("1d");
+            filters.GetProperty("include").GetArrayLength().ShouldBe(0);
+            filters.GetProperty("exclude").EnumerateArray().Select(item => item.GetString()).ShouldBe(["*.gz"]);
+            filters.GetProperty("maxSizeBytes").GetInt64().ShouldBe(2048);
+            JsonElement counts = json.RootElement.GetProperty("filteredOut");
+            (counts.GetProperty("total").GetInt32(), counts.GetProperty("excluded").GetInt32(), counts.GetProperty("tooLarge").GetInt32()).ShouldBe((2, 1, 1));
+            json.RootElement.GetProperty("files").GetInt32().ShouldBe(1);
+        }
+
+        using (var json = JsonDocument.Parse(plain.StdOut))
+        {
+            json.RootElement.GetProperty("filters").ValueKind.ShouldBe(JsonValueKind.Null);
+            json.RootElement.GetProperty("filteredOut").GetProperty("total").GetInt32().ShouldBe(0);
+            json.RootElement.GetProperty("files").GetInt32().ShouldBe(3);
+        }
+    }
+
+    [Fact]
+    public async Task DryRun_WithFilters_Should_ListWhatWouldGo()
+    {
+        await CreateShareAsync();
+        _server.WriteFile("logs/a.log", "a").WriteFile("logs/[odd].log", "o").WriteFile("notes.txt", "n");
+
+        CliResult dryRun = await RunAsync(_server, "push", _name, "-n", "--include", "*.log", "--host", "web01");
+
+        dryRun.ExitCode.ShouldBe(0, dryRun.ToString());
+        dryRun.StdOut.ShouldContain("Would push 2 files (2 B)");
+        dryRun.StdOut.ShouldContain("1 file left out by filters (1 not included)");
+        dryRun.StdOut.ShouldContain("    logs/[odd].log");
+        dryRun.StdOut.ShouldContain("    logs/a.log");
+        dryRun.StdOut.ShouldNotContain("notes.txt");
+    }
+
+    [Fact]
+    public async Task ANamedFileLeftOutByAFilter_Should_WarnOnStderr()
+    {
+        await CreateShareAsync();
+        _server.WriteFile("a.log", "a").WriteFile("b.gz", "b");
+
+        CliResult result = await RunAsync(_server, "push", _name, "a.log", "b.gz", "--exclude", "*.gz");
+
+        result.ExitCode.ShouldBe(0, result.ToString());
+        result.StdErr.ShouldContain("'b.gz' was named, but --exclude '*.gz' left it out, so it wasn't pushed.");
+        result.StdOut.ShouldContain("Pushed 1 file");
+    }
+
     public void Dispose()
     {
         _laptop.Dispose();

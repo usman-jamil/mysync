@@ -3,6 +3,7 @@ using MySync.Application.Sync.Run;
 using MySync.Domain.Manifests;
 using MySync.Domain.Shares;
 using MySync.Domain.State;
+using MySync.Domain.Sync.Push;
 using MySync.Testing;
 using Shouldly;
 using Xunit;
@@ -32,6 +33,66 @@ public sealed class PushTests : IDisposable
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static PushCommand Push(string share, string host, params string[] paths) => new(ShareReference.Parse(share).Value, paths, Host: host);
+
+    [Fact]
+    public async Task UpdatedSinceLast_Should_AddAFolderWithOnlyTheChangedFiles_AndTheLaptopGetsBoth()
+    {
+        _laptop.Folder.WriteFile("notes.md", "# logs\n");
+        Ok(await _laptop.CreateNamedAsync("app-logs"));
+        _web01.Folder.WriteFile("app/server.log", "line 1\n").WriteFile("app/access.log", "GET /\n").WriteFile("app/old/rotated.log", "old\n");
+        DateTime anHourAgo = DateTime.UtcNow.AddHours(-1);
+        foreach (string path in new[] { "app/server.log", "app/access.log", "app/old/rotated.log" })
+        {
+            File.SetLastWriteTimeUtc(_web01.Folder.Combine(path), anHourAgo);
+        }
+
+        PushReport first = Ok(await _web01.PushAsync(Push("app-logs", "web01") with { UpdatedSince = "last" }));
+        await File.AppendAllTextAsync(_web01.Folder.Combine("app/server.log"), "line 2\n", Ct);
+        _web01.Folder.WriteFile("app/new.log", "new\n");
+        PushReport second = Ok(await _web01.PushAsync(Push("app-logs", "web01") with { UpdatedSince = "last" }));
+
+        first.Files.ShouldBe(3);
+        first.Filters!.UpdatedSinceUtc.ShouldBeNull();
+        second.Target.ShouldNotBe(first.Target);
+        second.Files.ShouldBe(2);
+        second.FilteredOut.NotChanged.ShouldBe(2);
+        second.Filters!.UpdatedSinceUtc!.Value.UtcDateTime.ToString("yyyyMMdd-HHmmss'Z'", System.Globalization.CultureInfo.InvariantCulture)
+            .ShouldBe(first.Target["web01/".Length..]);
+
+        SyncReport synced = Ok(await _laptop.SyncAsync());
+
+        synced.Skipped.ShouldBeEmpty();
+        _laptop.Folder.ReadText($"{first.Target}/app/server.log").ShouldBe("line 1\n");
+        _laptop.Folder.ReadText($"{first.Target}/app/old/rotated.log").ShouldBe("old\n");
+        _laptop.Folder.ReadText($"{second.Target}/app/server.log").ShouldBe("line 1\nline 2\n");
+        _laptop.Folder.ReadText($"{second.Target}/app/new.log").ShouldBe("new\n");
+        File.Exists(_laptop.Folder.Combine($"{second.Target}/app/access.log")).ShouldBeFalse();
+        Directory.Exists(_laptop.Folder.Combine($"{second.Target}/app/old")).ShouldBeFalse();
+        _laptop.Folder.ReadText($"{second.Target}/{PushRecord.FileName}").ShouldContain("\"updatedSinceSpec\": \"last\"");
+    }
+
+    [Fact]
+    public async Task IncludeAndMaxSize_Should_PushTheExpectedSubset()
+    {
+        _laptop.Folder.WriteFile("notes.md", "# logs\n");
+        Ok(await _laptop.CreateNamedAsync("app-logs-subset"));
+        _web01.Folder
+            .WriteFile("app/a.log", "a\n")
+            .WriteFile("app/huge.log", RandomBytes(1024 * 1024 + 1))
+            .WriteFile("app/limit.log", RandomBytes(1024 * 1024))
+            .WriteFile("app/data.bin", "bin")
+            .CreateDirectory("app/empty");
+
+        PushReport report = Ok(await _web01.PushAsync(Push("app-logs-subset", "web01") with { Include = ["*.log"], MaxSize = "1MB" }));
+
+        report.Files.ShouldBe(2);
+        report.FilteredOut.ShouldBe(new PushFilteredOut(NotChanged: 0, NotIncluded: 1, Excluded: 0, TooLarge: 1));
+        Ok(await _laptop.SyncAsync());
+        string[] pushed = [.. Directory.EnumerateFileSystemEntries(_laptop.Folder.Combine(report.Target), "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(_laptop.Folder.Combine(report.Target), path).Replace('\\', '/'))
+            .Order(StringComparer.Ordinal)];
+        pushed.ShouldBe([PushRecord.FileName, "app", "app/a.log", "app/limit.log"]);
+    }
 
     [Fact]
     public async Task TwoServersPushingAtOnce_Should_BothReachTheLaptop_WhichThenSyncsThemNormally()

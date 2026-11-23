@@ -8,6 +8,8 @@ namespace MySync.Domain.Sync.Push;
 /// <param name="Sources">The full path of each source (the current folder's, when no paths were given).</param>
 /// <param name="Target">The target folder, e.g. <c>web01/20261121-051207Z</c>.</param>
 /// <param name="Files">Pushed files, the record itself not counted.</param>
+/// <param name="Filters">The filters given, so whoever opens the folder knows it holds part of the source; <c>null</c> (and left out of the file) when none was.</param>
+/// <param name="FilteredOut">How many files the filters left out; written only with <paramref name="Filters"/>.</param>
 public sealed record PushRecord(
     string Host,
     string User,
@@ -19,7 +21,9 @@ public sealed record PushRecord(
     string Target,
     int Files,
     long Bytes,
-    IReadOnlyList<PushRecordSkip> Skipped)
+    IReadOnlyList<PushRecordSkip> Skipped,
+    PushFilterSettings? Filters = null,
+    PushFilteredOut? FilteredOut = null)
 {
     public const int FormatVersion = 1;
 

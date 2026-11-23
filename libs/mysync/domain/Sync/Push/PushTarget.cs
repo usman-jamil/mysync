@@ -104,5 +104,45 @@ public sealed record PushTarget
         return SharePath.Create($"{Host}{SharePath.Separator}{name}").Value;
     }
 
+    /// <summary>
+    /// Reads a target folder's own name (the segment under the host folder): <c>20261121-051207Z</c>
+    /// or a suffixed <c>20261121-051207Z-2</c>, as <see cref="Candidate"/> writes them. Anything
+    /// else (a folder someone made by hand) is not a push folder.
+    /// </summary>
+    /// <param name="startedUtc">The start time the name records, to the second.</param>
+    public static bool TryParseFolderName(string name, out DateTimeOffset startedUtc)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        startedUtc = default;
+
+        int timestampLength = "yyyyMMdd-HHmmssZ".Length;
+        if (name.Length < timestampLength)
+        {
+            return false;
+        }
+
+        string suffix = name[timestampLength..];
+        if (suffix.Length > 0 && !IsSuffix(suffix))
+        {
+            return false;
+        }
+
+        if (!DateTime.TryParseExact(name[..timestampLength], TimestampFormat, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTime parsed))
+        {
+            return false;
+        }
+
+        startedUtc = new DateTimeOffset(parsed, TimeSpan.Zero);
+        return true;
+    }
+
     public override string ToString() => Candidate(1).Value;
+
+    // "-2", "-3", …: what Candidate appends; never "-1" or a leading zero.
+    private static bool IsSuffix(string suffix) =>
+        suffix.Length >= 2
+        && suffix[0] == '-'
+        && suffix[1] is >= '1' and <= '9'
+        && !suffix.AsSpan(1).ContainsAnyExceptInRange('0', '9')
+        && suffix != "-1";
 }

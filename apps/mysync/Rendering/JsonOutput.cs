@@ -105,6 +105,16 @@ internal static class JsonOutput
                 [.. report.Skipped.Select(skip => new SkippedJson(skip.Path, CauseCode(skip.Cause), skip.Detail))],
                 [.. report.Warnings],
                 report.IgnoredByShare,
+                report.Filters is { } filters
+                    ? new PushFiltersJson(
+                        filters.UpdatedSinceUtc?.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
+                        filters.UpdatedSinceSpec,
+                        [.. filters.Include],
+                        [.. filters.Exclude],
+                        filters.MaxSizeBytes)
+                    : null,
+                new PushFilteredOutJson(
+                    report.FilteredOut.Total, report.FilteredOut.NotChanged, report.FilteredOut.NotIncluded, report.FilteredOut.Excluded, report.FilteredOut.TooLarge),
                 exitCode),
             Context.PushJson);
         return exitCode;
@@ -690,7 +700,15 @@ internal sealed record PushJson(
     List<SkippedJson> Skipped,
     List<string> Warnings,
     int IgnoredByShare,
+    PushFiltersJson? Filters,
+    PushFilteredOutJson FilteredOut,
     int ExitCode);
+
+/// <param name="UpdatedSince">The resolved cutoff (UTC, to the second), or <c>null</c>.</param>
+/// <param name="UpdatedSinceSpec"><c>--updated-since</c> as typed, or <c>null</c>.</param>
+internal sealed record PushFiltersJson(string? UpdatedSince, string? UpdatedSinceSpec, List<string> Include, List<string> Exclude, long? MaxSizeBytes);
+
+internal sealed record PushFilteredOutJson(int Total, int NotChanged, int NotIncluded, int Excluded, int TooLarge);
 
 internal sealed record PreviewJson(string Command, bool DryRun, string RootPath, int FileCount, long TotalBytes, bool IsUnsafeRoot, int ExitCode);
 

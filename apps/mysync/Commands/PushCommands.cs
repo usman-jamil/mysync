@@ -23,6 +23,10 @@ internal sealed class PushCommands(CommandRunner runner)
     /// <param name="noInfo">Don't add _mysync-push.json (where the data came from) to the folder.</param>
     /// <param name="dryRun">-n, Read the files and show what would be pushed, without uploading anything.</param>
     /// <param name="force">Allow the home folder or a drive root as a source.</param>
+    /// <param name="updatedSince">Only files modified since: a duration (30m, 2h, 1d, 1w), a time (2026-11-23T04:00:00Z), or last (since this host's previous push).</param>
+    /// <param name="include">Only files matching this pattern (.mysyncignore syntax, against the path under the target folder); repeatable.</param>
+    /// <param name="exclude">Leave out files matching this pattern; repeatable; wins over --include.</param>
+    /// <param name="maxSize">Leave out files larger than this (500MB, 1.5GB; 1 KB = 1024 B).</param>
     /// <param name="cancellationToken">Ctrl+C.</param>
     [Command("push")]
     public Task<int> Push(
@@ -32,6 +36,10 @@ internal sealed class PushCommands(CommandRunner runner)
         bool noInfo = false,
         bool dryRun = false,
         bool force = false,
+        string? updatedSince = null,
+        string[]? include = null,
+        string[]? exclude = null,
+        string? maxSize = null,
         CancellationToken cancellationToken = default,
         [Argument] params string[] paths) =>
         runner.RunAsync(async () =>
@@ -53,7 +61,13 @@ internal sealed class PushCommands(CommandRunner runner)
                 return runner.Fail(settings.Error);
             }
 
-            PushCommand command = new(reference.Value, paths, host, create, !noInfo, dryRun, force, runner.Options.Parallel);
+            PushCommand command = new(reference.Value, paths, host, create, !noInfo, dryRun, force, runner.Options.Parallel)
+            {
+                UpdatedSince = updatedSince,
+                Include = include ?? [],
+                Exclude = exclude ?? [],
+                MaxSize = maxSize,
+            };
             Result<PushReport> pushed = await SyncProgressDisplay.RunAsync(runner.Options, progress =>
                 runner.SendAsync<PushCommand, PushReport>(command with { Progress = progress }, cancellationToken));
             if (pushed.IsFailure)

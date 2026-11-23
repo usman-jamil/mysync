@@ -66,6 +66,12 @@ public class ErrorCatalogTests
         MySync.Domain.Sync.Push.PushErrors.SourceNotFound("missing.log").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Push.PushErrors.InvalidTarget("x").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Push.PushErrors.CreateNeedsName().Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Push.PushErrors.InvalidSince("2x").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Push.PushErrors.InvalidPattern("--exclude", "!a", "negated").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Push.PushErrors.InvalidSize("0").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Sync.Push.PushErrors.InvalidSince("2x").Code.ShouldBe("Push.InvalidSince");
+        MySync.Domain.Sync.Push.PushErrors.InvalidPattern("--exclude", "!a", "negated").Code.ShouldBe("Push.InvalidPattern");
+        MySync.Domain.Sync.Push.PushErrors.InvalidSize("0").Code.ShouldBe("Push.InvalidSize");
     }
 
     [Fact]

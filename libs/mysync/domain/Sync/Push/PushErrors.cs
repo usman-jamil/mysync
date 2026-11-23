@@ -31,6 +31,21 @@ public static class PushErrors
         "Push.TargetIsAFile",
         $"The share has a file named '{PathErrors.Display(host)}' at its root, so this host's folder can't go there. Pass --host <another name>.");
 
+    /// <summary>An <c>--updated-since</c> value that isn't a duration, a time or <c>last</c>, or a time in the future. Exit 2.</summary>
+    public static Error InvalidSince(string value, string? reason = null) => Error.Validation(
+        "Push.InvalidSince",
+        $"--updated-since '{PathErrors.Display(value)}' {reason ?? "isn't something mysync understands"}. Use a duration (30m, 2h, 1d, 1w), a time (2026-11-23T04:00:00Z; without an offset it is local time, a date alone is local midnight), or last (since this host's previous push to the share).");
+
+    /// <summary>An <c>--include</c> or <c>--exclude</c> pattern push can't use (empty, negated, a comment, several lines). Exit 2.</summary>
+    public static Error InvalidPattern(string option, string pattern, string reason) => Error.Validation(
+        "Push.InvalidPattern",
+        $"{option} '{PathErrors.Display(pattern)}' can't be used: {reason}");
+
+    /// <summary>A <c>--max-size</c> value that isn't a positive size. Exit 2.</summary>
+    public static Error InvalidSize(string value) => Error.Validation(
+        "Push.InvalidSize",
+        $"--max-size '{PathErrors.Display(value)}' isn't a size. Use a positive number with an optional unit: 500MB, 1.5GB, 64K, 1048576 (bytes; 1 KB = 1024 B).");
+
     /// <summary><c>--create</c> with a share ID: a new share needs a name. Exit 2.</summary>
     public static Error CreateNeedsName() => Error.Validation(
         "Push.CreateNeedsName",

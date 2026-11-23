@@ -245,7 +245,7 @@ Options for `sync`:
 
 Options for `resolve`: `--all`, `-n, --dry-run`.
 
-Options for `push`: `--host <name>`, `--create`, `--no-info`, `-n, --dry-run`, `--force`. See [Collecting from servers](#collecting-from-servers).
+Options for `push`: `--updated-since <duration|time|last>`, `--include <pattern>`, `--exclude <pattern>` (both repeatable), `--max-size <size>`, `--host <name>`, `--create`, `--no-info`, `-n, --dry-run`, `--force`. See [Collecting from servers](#collecting-from-servers).
 
 Options for `gc`:
 
@@ -417,19 +417,46 @@ incident-logs/
 - **Refused:** pushing a folder that already syncs with that share (use `mysync sync` there), and the home folder or a drive root without `--force`.
 - Files that can't be read (locked, removed meanwhile, symlinks) are skipped and listed; the rest is pushed and the exit code is 9.
 
-Scheduling it, e.g. hourly with cron:
+### Choosing which files
 
-```bash
-0 * * * *  cd /var/log && AZURE_STORAGE_CONNECTION_STRING=… /usr/local/bin/mysync push incident-logs app --json >> /var/log/mysync-push.json 2>&1
+Four options narrow a push down. A file is pushed only if it passes every one given; with none, everything is pushed.
+
+| Option | Pushes | Example |
+| --- | --- | --- |
+| `--updated-since <duration\|time\|last>` | files modified at or after a moment: a duration back from now (`30m`, `2h`, `1d`, `1w`), a time (`2026-11-23T04:00:00Z`; without an offset it's local time, a date alone is local midnight), or `last`: since this host's previous push to the share | `mysync push app-logs /var/log/app --updated-since 1d` |
+| `--include <pattern>` | only files matching one of these patterns | `mysync push app-logs /var/log/app --include '*.log'` |
+| `--exclude <pattern>` | everything except files matching one of these; wins over `--include` | `mysync push app-logs /var/log/app --exclude '*.gz' --exclude 'archive/'` |
+| `--max-size <size>` | files no larger than this (`500MB`, `1.5GB`, `64K`; 1 KB = 1024 B) | `mysync push app-logs /var/log/app --max-size 500MB` |
+
+```text
+$ mysync push app-logs /var/log/app --updated-since last --exclude '*.gz' --max-size 500MB
+Pushed 12 files (84.1 MB; 3 uploaded, 9 already stored, sent 9.3 MB) to app-logs
+  folder:  web01/20261123-004512Z/
+  changed since 2026-11-22 23:45 UTC · 203 files left out by filters (188 not changed, 14 excluded, 1 too large)
 ```
 
-or with Windows Task Scheduler: `mysync.exe push incident-logs C:\ProgramData\App\logs --json`.
+- Patterns are written as in `.mysyncignore` (gitignore syntax: `*.log` at any depth, `logs/` for a folder and everything in it, `/top.txt` at the top) and matched against the path the file gets **in the push folder**: for `mysync push app-logs /var/log/app` that's `app/server.log`. They're case-sensitive on every OS. Quote them, so the shell doesn't expand them. A pattern can't start with `!`: use `--include` or `--exclude` instead.
+- `last` reads the start time from the name of this host's newest push folder in the share (`web01/20261123-004512Z/`), so nothing is stored on the server and other machines' clocks don't matter. With `--host`, it's that host folder's history. The first time, there's no earlier push and everything is pushed.
+- Files the filters leave out aren't read at all and aren't "skipped": they don't change the exit code. A file you named on the command line that a filter leaves out gets a warning.
+- With a filter, empty folders aren't pushed. If everything is filtered out, nothing is committed: `Nothing to push (203 files left out by filters).`
+- `-n, --dry-run` shows the cutoff, the counts and the files that would go.
+
+Scheduling it, e.g. hourly with cron, pushing only what changed since the last run:
+
+```bash
+0 * * * *  cd /var/log && AZURE_STORAGE_CONNECTION_STRING=… /usr/local/bin/mysync push incident-logs app --updated-since last --json >> /var/log/mysync-push.json 2>&1
+```
+
+or with Windows Task Scheduler: `mysync.exe push incident-logs C:\ProgramData\App\logs --updated-since last --json`.
 
 Good to know:
 
 - A push needs the same storage credentials as any other command, so a server that can push can also read the share.
 - Every push adds entries to the share's manifest, so a share that collects for months grows. Remove old runs by deleting their folders in a clone and syncing, then `mysync gc`.
 - A file that's being written is captured as it was when it was read: a growing log is pushed up to the length it had when mysync opened it.
+- `--updated-since` goes by each file's modified time, so a file copied in with its old date kept is left out.
+- A changed file is pushed whole: a log that grew is uploaded in full again, into the new folder.
+- A filtered push folder holds only part of the source (its `_mysync-push.json` says which filters were used), and files deleted on the server aren't recorded anywhere.
 - Pushing into a share that people sync puts the pushed folders on every one of their machines, and the share's `.mysyncignore` decides what they download (push warns when it matches pushed files). For collecting from servers, a share of its own is usually better.
 
 ## Publishing a share
