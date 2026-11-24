@@ -17,6 +17,7 @@
     <Project Path="libs/mysync/application/MySync.Application.csproj" />
     <Project Path="libs/mysync/infrastructure/MySync.Infrastructure.csproj" />
     <Project Path="libs/mysync/storage-azure/MySync.Storage.Azure.csproj" />
+    <Project Path="libs/mysync/storage-s3/MySync.Storage.S3.csproj" />
     <Project Path="libs/mysync/updates-github/MySync.Updates.GitHub.csproj" />
     <Project Path="libs/mysync/tui/MySync.Tui.csproj" />
   </Folder>
@@ -34,6 +35,8 @@
     <Project Path="tests/mysync/application-unit-tests/MySync.Application.UnitTests.csproj" />
     <Project Path="tests/mysync/infrastructure-unit-tests/MySync.Infrastructure.UnitTests.csproj" />
     <Project Path="tests/mysync/storage-azure-integration-tests/MySync.Storage.Azure.IntegrationTests.csproj" />
+    <Project Path="tests/mysync/storage-s3-unit-tests/MySync.Storage.S3.UnitTests.csproj" />
+    <Project Path="tests/mysync/storage-s3-integration-tests/MySync.Storage.S3.IntegrationTests.csproj" />
     <Project Path="tests/mysync/end-to-end-tests/MySync.EndToEndTests.csproj" />
     <Project Path="tests/mysync/architecture-tests/MySync.ArchitectureTests.csproj" />
     <Project Path="tests/mysync/tui-unit-tests/MySync.Tui.UnitTests.csproj" />

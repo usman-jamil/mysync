@@ -10,7 +10,7 @@ namespace MySync.Storage.Azure;
 /// at most 4000 MiB per block, 50,000 blocks per blob.</item>
 /// <item>Copy Blob From URL (synchronous) stops at 256 MiB, so mysync doesn't use it.</item>
 /// </list>
-/// Azurite 3.37 has no Put Blob From URL (501): the block path covers it there, and for larger files.
+/// A service without Put Blob From URL (501) gets the block path, as do larger files.
 /// </summary>
 internal static class AzureCopyLimits
 {

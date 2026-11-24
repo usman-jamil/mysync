@@ -1,0 +1,24 @@
+{
+  "name": "mysync-storage-s3-unit-tests",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/mysync/storage-s3-unit-tests",
+  "tags": [
+    "stack:mysync",
+    "type:unit-test"
+  ],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet build tests/mysync/storage-s3-unit-tests/MySync.Storage.S3.UnitTests.csproj -c Release"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet test --project tests/mysync/storage-s3-unit-tests/MySync.Storage.S3.UnitTests.csproj -c Release"
+      }
+    }
+  }
+}

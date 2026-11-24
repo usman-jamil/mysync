@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MySync.Storage.S3</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The only project allowed to reference Amazon.* (CLAUDE.md §3). -->
+    <PackageReference Include="AWSSDK.S3" />
+    <!--
+      Not called directly: the SDK loads these by name when a profile needs them. Without them an
+      SSO profile (AWSSDK.SSO, AWSSDK.SSOOIDC) or an assumed-role / web-identity profile
+      (AWSSDK.SecurityToken) that works in the aws CLI fails at runtime.
+    -->
+    <PackageReference Include="AWSSDK.SSO" />
+    <PackageReference Include="AWSSDK.SSOOIDC" />
+    <PackageReference Include="AWSSDK.SecurityToken" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\application\MySync.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MySync.Storage.S3.UnitTests" />
+    <InternalsVisibleTo Include="MySync.Storage.S3.IntegrationTests" />
+    <InternalsVisibleTo Include="MySync.EndToEndTests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+</Project>

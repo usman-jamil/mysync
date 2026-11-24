@@ -1,6 +1,4 @@
 using System.Security.Cryptography;
-using Azure.Storage.Blobs;
-using Azure.Storage.Blobs.Models;
 using MySync.Application.Shares.Delete;
 using MySync.Application.Sync.Run;
 using MySync.Domain.Manifests;
@@ -11,28 +9,35 @@ using MySync.Testing;
 using SharedKernel;
 using Shouldly;
 using Xunit;
-using static MySync.EndToEndTests.AzureMachine;
+using static MySync.EndToEndTests.Machine;
 
 namespace MySync.EndToEndTests;
 
+/// <summary>Two-machine sync on real Azure storage.</summary>
+public sealed class AzureSyncTests(StorageFixture storage) : SyncTests(storage.Azure);
+
+/// <summary>Two-machine sync on a real S3 bucket.</summary>
+public sealed class S3SyncTests(StorageFixture storage) : SyncTests(storage.S3);
+
 /// <summary>
-/// Everything real but the network: two temp folders as two machines, the full DI graph, and
-/// Azurite as the storage account (CLAUDE.md §14 "Azurite suites").
+/// Everything real: two temp folders as two machines, the full DI graph, and the real test storage
+/// of one provider (CLAUDE.md §14). Written once, run once per provider.
 /// </summary>
-public sealed class AzureSyncTests : IDisposable
+public abstract class SyncTests : IDisposable
 {
     private static readonly DateTime OldMtime = new(2026, 11, 1, 12, 0, 0, DateTimeKind.Utc);
 
-    private readonly AzuriteFixture _azurite;
-    private readonly AzureMachine _a;
-    private readonly AzureMachine _b;
+    private readonly Backend _backend;
+    private readonly Machine _a;
+    private readonly Machine _b;
 
-    public AzureSyncTests(AzuriteFixture azurite)
+    protected SyncTests(Backend backend)
     {
-        _azurite = azurite;
-        string container = AzuriteEnvironment.NewContainerName();
-        _a = new AzureMachine(azurite.ConnectionString, container);
-        _b = new AzureMachine(azurite.ConnectionString, container);
+        ArgumentNullException.ThrowIfNull(backend);
+        _backend = backend;
+        string place = backend.NewPlace();
+        _a = new Machine(backend, place);
+        _b = new Machine(backend, place);
     }
 
     [Fact]
@@ -57,17 +62,21 @@ public sealed class AzureSyncTests : IDisposable
     }
 
     [Fact]
-    public async Task TheStateFile_Should_RecordTheAccountAndContainer_AndNoSecret()
+    public async Task TheStateFile_Should_RecordTheProviderAccountAndContainer_AndNoSecret()
     {
         _a.Folder.WriteFile("a.txt", "a");
         await _a.CreateAsync();
 
+        StorageLocation expected = _backend.Location(_a.Place);
         string state = _a.Folder.ReadText(StateFileNames.State);
-        state.ShouldContain("\"provider\": \"azure-blob\"");
-        state.ShouldContain($"\"accountName\": \"{_azurite.AccountName}\"");
-        state.ShouldContain($"\"container\": \"{_a.Container}\"");
+        state.ShouldContain($"\"provider\": \"{expected.Provider}\"");
+        state.ShouldContain($"\"accountName\": \"{expected.AccountName}\"");
+        state.ShouldContain($"\"container\": \"{expected.Container}\"");
         state.ShouldNotContain("AccountKey", Case.Insensitive);
-        state.ShouldNotContain(AccountKeyOf(_azurite.ConnectionString));
+        foreach (string secret in _backend.Secrets)
+        {
+            state.ShouldNotContain(secret);
+        }
     }
 
     [Fact]
@@ -107,9 +116,9 @@ public sealed class AzureSyncTests : IDisposable
     }
 
     [Fact]
-    public async Task AFiveMegabyteFile_Should_RoundTripByteForByte()
+    public async Task AFileOfSeveralPartsOrBlocks_Should_RoundTripByteForByte()
     {
-        byte[] content = RandomNumberGenerator.GetBytes(5 * 1024 * 1024 + 7); // two 4 MiB blocks
+        byte[] content = RandomNumberGenerator.GetBytes(17 * 1024 * 1024 + 7); // five 4 MiB Azure blocks, two 16 MiB S3 parts
         _a.Folder.WriteFile("big.bin", content);
         ShareId shareId = await _a.CreateAsync();
 
@@ -137,11 +146,14 @@ public sealed class AzureSyncTests : IDisposable
     }
 
     [Fact]
-    public async Task AFolderPointedAtAnotherContainer_Should_StopWithStorageMismatch()
+    public async Task AFolderPointedAtAnotherContainerOrBucket_Should_StopWithStorageMismatch()
     {
         _a.Folder.WriteFile("a.txt", "a");
         await _a.CreateAsync();
-        _a.Container = AzuriteEnvironment.NewContainerName();
+        foreach ((string name, string? value) in _backend.Elsewhere(_a.Place))
+        {
+            _a.Overrides[name] = value;
+        }
 
         (await _a.SyncAsync()).Error.Code.ShouldBe("State.StorageMismatch");
     }
@@ -159,12 +171,7 @@ public sealed class AzureSyncTests : IDisposable
 
         deleted.ObjectsDeleted.ShouldBe(3);
         deleted.RecoverableCopies.ShouldBe(0);
-        BlobContainerClient container = new(_azurite.ConnectionString, _a.Container);
-        List<string> left = [];
-        await foreach (BlobItem blob in container.GetBlobsAsync(BlobTraits.None, BlobStates.None, $"shares/{shareId}/", TestContext.Current.CancellationToken))
-        {
-            left.Add(blob.Name);
-        }
+        List<string> left = await _backend.ListAsync(_a.Place, $"shares/{shareId}/");
 
         left.ShouldBe([$"shares/{shareId}/manifest.json"]);
         _a.Folder.Exists(StateFileNames.State).ShouldBeFalse();
@@ -188,11 +195,9 @@ public sealed class AzureSyncTests : IDisposable
     {
         _a.Dispose();
         _b.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     private Task<Manifest> HeadAsync(ShareId shareId) =>
         _a.WithStoreAsync(async store => (await store.GetManifestAsync(shareId, TestContext.Current.CancellationToken)).Value!.Manifest);
-
-    private static string AccountKeyOf(string connectionString) =>
-        connectionString.Split(';').Single(part => part.StartsWith("AccountKey=", StringComparison.OrdinalIgnoreCase))["AccountKey=".Length..];
 }

@@ -7,19 +7,19 @@ using Xunit;
 namespace MySync.EndToEndTests.Cli;
 
 /// <summary>
-/// <c>mysync clone</c> as a process against Azurite (CLAUDE.md §9): the folder created for the
+/// <c>mysync clone</c> as a process against real Azure storage (CLAUDE.md §9): the folder created for the
 /// share, a later sync in it both ways, by ID into a folder, the refusals, <c>--json</c>, and the
 /// exit codes. This is the real composition root building the folder's services again.
 /// </summary>
 public sealed class CloneCliTests : IDisposable
 {
-    private readonly AzuriteFixture _azurite;
+    private readonly AzureTestStorage _azure;
     private readonly TempShareFolder _laptop = new();
     private readonly TempShareFolder _server = new();
-    private readonly string _container = AzuriteEnvironment.NewContainerName();
+    private readonly string _container = AzureTestStorage.NewContainerName();
     private readonly string _name = "clone-" + Guid.NewGuid().ToString("N")[..12];
 
-    public CloneCliTests(AzuriteFixture azurite) => _azurite = azurite;
+    public CloneCliTests(StorageFixture storage) => _azure = storage.AzureStorage;
 
     private async Task<string> CreateShareAsync()
     {
@@ -223,7 +223,7 @@ public sealed class CloneCliTests : IDisposable
     private Task<CliResult> RunAsync(string folder, params string[] arguments) =>
         CliProcess.RunAsync(folder, new Dictionary<string, string?>
         {
-            ["AZURE_STORAGE_CONNECTION_STRING"] = _azurite.ConnectionString,
+            ["AZURE_STORAGE_CONNECTION_STRING"] = _azure.ConnectionString,
             ["MYSYNC_CONTAINER"] = _container,
         }, arguments);
 }

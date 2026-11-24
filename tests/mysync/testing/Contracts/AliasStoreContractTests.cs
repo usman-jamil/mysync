@@ -8,8 +8,8 @@ namespace MySync.Testing.Contracts;
 
 /// <summary>
 /// The behaviour every <see cref="IAliasStore"/> must have. Derive once per implementation:
-/// <see cref="InMemoryAliasStore"/> in the application unit tests, Azure against Azurite in the
-/// storage integration tests. If the fake and Azurite disagree, the fake is wrong.
+/// <see cref="InMemoryAliasStore"/> in the application unit tests, Azure and S3 against real test
+/// storage in their integration tests. If the fake and a real provider disagree, the fake is wrong.
 /// </summary>
 public abstract class AliasStoreContractTests
 {
@@ -134,6 +134,29 @@ public abstract class AliasStoreContractTests
         (await store.DeleteAsync(first.Name, stale, Ct)).Error.Code.ShouldBe("Storage.PreconditionFailed");
 
         Unwrap(await store.GetAsync(first.Name, Ct))!.Alias.ShareId.ShouldBe(second.ShareId);
+    }
+
+    /// <remarks>
+    /// S3's ETag follows an object's bytes, not the write. The alias body holds the share ID, so a
+    /// name re-pointed at another share has another ETag, and a conditional delete that read the old
+    /// one can never remove the new alias.
+    /// </remarks>
+    [Fact]
+    public async Task AnAliasRecreated_ForAnotherShare_Should_HaveAnotherETag_AndTheOldOneNotDeleteIt()
+    {
+        IAliasStore store = await CreateStoreAsync();
+        AliasRecord first = Alias("re-pointed");
+        string old = Unwrap(await store.CreateAsync(first, Ct));
+        Unwrap(await store.DeleteAsync(first.Name, old, Ct));
+        AliasRecord second = first with { ShareId = ShareId.New() }; // same name, time and author: only the share differs
+
+        string recreated = Unwrap(await store.CreateAsync(second, Ct));
+
+        recreated.ShouldNotBe(old);
+        (await store.DeleteAsync(first.Name, old, Ct)).Error.Code.ShouldBe("Storage.PreconditionFailed");
+        AliasSnapshot left = Unwrap(await store.GetAsync(first.Name, Ct))!;
+        left.Alias.ShareId.ShouldBe(second.ShareId);
+        left.ETag.ShouldBe(recreated);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using MySync.Application.Abstractions.Publishing;
 using MySync.Domain.Content;
 using MySync.Domain.Manifests;
 using MySync.Domain.Publishing;
@@ -85,12 +86,12 @@ public interface IShareStore
     Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken cancellationToken);
 
     /// <summary>
-    /// A URL anyone holding it can read the object from, valid for <paramref name="lifetime"/>
-    /// (Azure: a read-only SAS for that one blob), for server-side copies into a publication. A
-    /// <c>null</c> value when this store can't make one (e.g. the credential can't sign): the
-    /// caller then streams the object instead.
+    /// Where a server-side copy into a publication can read the object from, valid for about
+    /// <paramref name="lifetime"/> (Azure: a read-only SAS URL for that one blob; S3: the object
+    /// itself for an S3 target, and a presigned GET URL for any other). A <c>null</c> value when this
+    /// store can offer neither (e.g. the credential can't sign): the caller then streams the object.
     /// </summary>
-    Task<Result<Uri?>> GetObjectReadUrlAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken cancellationToken);
+    Task<Result<CopySource?>> GetCopySourceAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken cancellationToken);
 
     /// <summary>The share's publication records with their ETag, or a <c>null</c> value if it has none yet.</summary>
     Task<Result<PublicationsSnapshot?>> GetPublicationsAsync(ShareId shareId, CancellationToken cancellationToken);

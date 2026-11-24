@@ -56,13 +56,26 @@ public sealed class PublicationLayout
         return Prefix + "files/" + path.Value;
     }
 
-    /// <summary>The page's public URL: <c>&lt;base&gt;/p/&lt;publishId&gt;/</c>.</summary>
-    public Uri Url(Uri baseUrl)
+    /// <summary>
+    /// The publication folder's public URL, <c>&lt;base&gt;/p/&lt;publishId&gt;/</c>: what every file of
+    /// the publication is relative to (the download scripts, <c>site-data.js</c>).
+    /// </summary>
+    public Uri FolderUrl(Uri baseUrl)
     {
         ArgumentNullException.ThrowIfNull(baseUrl);
         // A base without a trailing slash would make Prefix replace its last segment.
         Uri root = baseUrl.AbsoluteUri.EndsWith(PathSeparator) ? baseUrl : new Uri(baseUrl.AbsoluteUri + PathSeparator);
         return new Uri(root, Prefix);
+    }
+
+    /// <summary>
+    /// The link people open: the folder where the host serves index documents (Azure's static
+    /// website), else the folder's <c>index.html</c> (S3's REST endpoint serves no index documents).
+    /// </summary>
+    public Uri Url(Uri baseUrl, bool servesIndexDocuments = true)
+    {
+        Uri folder = FolderUrl(baseUrl);
+        return servesIndexDocuments ? folder : new Uri(folder, IndexDocument);
     }
 
     /// <summary>

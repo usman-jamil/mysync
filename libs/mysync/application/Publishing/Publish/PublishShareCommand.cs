@@ -39,10 +39,13 @@ public sealed record PublishShareCommand(ShareReference? Share = null, long? Rev
 /// </summary>
 /// <param name="Copies">How many files went by each method.</param>
 /// <param name="Skipped">Share paths that can't be blob names, left out of the publication.</param>
+/// <param name="Url">The link people open (the folder, or its <c>index.html</c> where the host serves no index documents).</param>
+/// <param name="FolderUrl">The publication folder, <c>&lt;base&gt;/p/&lt;id&gt;/</c>: the download scripts are in it.</param>
 public sealed record PublishReport(
     ShareId ShareId,
     PublishId PublishId,
     Uri Url,
+    Uri FolderUrl,
     Revision Revision,
     string Title,
     int Files,
@@ -53,9 +56,9 @@ public sealed record PublishReport(
     ImmutableArray<UnpublishablePath> Skipped,
     ImmutableArray<string> Warnings)
 {
-    public string ShellCommand => $"curl -fsSL {Url.AbsoluteUri}{PublicationLayout.ShellScript} | sh";
+    public string ShellCommand => $"curl -fsSL {FolderUrl.AbsoluteUri}{PublicationLayout.ShellScript} | sh";
 
-    public string PowerShellCommand => $"irm {Url.AbsoluteUri}{PublicationLayout.PowerShellScript} | iex";
+    public string PowerShellCommand => $"irm {FolderUrl.AbsoluteUri}{PublicationLayout.PowerShellScript} | iex";
 }
 
 internal sealed class PublishShareCommandValidator : AbstractValidator<PublishShareCommand>
@@ -96,7 +99,7 @@ internal sealed class PublishShareCommandHandler(
 {
     private const int MaxTitleLength = 200;
 
-    /// <summary>How long the read-only URL of each source object stays valid; one copy needs seconds.</summary>
+    /// <summary>How long the copy source of each object (a read-only URL) stays valid; one copy needs seconds.</summary>
     private static readonly TimeSpan SourceUrlLifetime = TimeSpan.FromHours(1);
 
     private static readonly PublishedBlob PageHeaders = new("text/html; charset=utf-8", CacheControl: "no-cache");
@@ -128,15 +131,15 @@ internal sealed class PublishShareCommandHandler(
             return Result.Failure<PublishReport>(privateLocation.Error);
         }
 
-        if (string.Equals(privateLocation.Value.AccountName, location.Value.AccountName, StringComparison.OrdinalIgnoreCase))
+        if (target.SharesAccountWith(privateLocation.Value))
         {
             warnings.Add($"Publishing to '{location.Value.AccountName}', the account that holds your private shares: the public URL names it. They stay private, but a separate publishing account names nothing.");
         }
 
-        Result website = await target.CheckStaticWebsiteAsync(cancellationToken);
-        if (website.IsFailure)
+        Result ready = await target.PreflightAsync(cancellationToken);
+        if (ready.IsFailure)
         {
-            return Result.Failure<PublishReport>(website.Error);
+            return Result.Failure<PublishReport>(ready.Error);
         }
 
         if (assets.IsPlaceholder)
@@ -158,7 +161,8 @@ internal sealed class PublishShareCommandHandler(
         // What will be published.
         var id = PublishId.New();
         var layout = PublicationLayout.For(id);
-        Uri url = layout.Url(location.Value.BaseUrl);
+        Uri url = layout.Url(location.Value.BaseUrl, location.Value.ServesIndexDocuments);
+        Uri folderUrl = layout.FolderUrl(location.Value.BaseUrl);
         string title = command.Title?.Trim() ?? DefaultTitle(resolved.Value.Here is not null);
         DateTimeOffset now = new(clock.UtcNow, TimeSpan.Zero);
         (SiteData data, ImmutableArray<UnpublishablePath> skipped) = SiteDataBuilder.Build(
@@ -179,7 +183,7 @@ internal sealed class PublishShareCommandHandler(
         Result<ImmutableDictionary<CopyMethod, int>> uploaded;
         try
         {
-            uploaded = await UploadAsync(shareId, layout, data, url, command.Parallelism ?? options.MaxParallelism, cancellationToken);
+            uploaded = await UploadAsync(shareId, layout, data, folderUrl, command.Parallelism ?? options.MaxParallelism, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -202,10 +206,11 @@ internal sealed class PublishShareCommandHandler(
         }
 
         // 9. As anyone with the link sees it.
-        VerificationOutcome verified = await verifier.VerifyAsync(new Uri(url, PublicationLayout.SiteData), id.Value, cancellationToken);
+        VerificationOutcome verified = await verifier.VerifyAsync(
+            new Uri(folderUrl, PublicationLayout.SiteData), id.Value, location.Value.NotServedStatusCodes, cancellationToken);
 
         return new PublishReport(
-            shareId, id, url, snapshot.Value.Revision, title, (int)data.TotalFiles, data.TotalBytes,
+            shareId, id, url, folderUrl, snapshot.Value.Revision, title, (int)data.TotalFiles, data.TotalBytes,
             uploaded.Value, verified.Verified, verified.Detail, skipped, [.. warnings]);
     }
 
@@ -265,7 +270,7 @@ internal sealed class PublishShareCommandHandler(
     }
 
     private async Task<Result<ImmutableDictionary<CopyMethod, int>>> UploadAsync(
-        ShareId shareId, PublicationLayout layout, SiteData data, Uri url, int parallelism, CancellationToken cancellationToken)
+        ShareId shareId, PublicationLayout layout, SiteData data, Uri folderUrl, int parallelism, CancellationToken cancellationToken)
     {
         // 2. The website root, once per account; an existing file is left alone.
         foreach (SiteAsset asset in assets.RootAssets)
@@ -299,8 +304,8 @@ internal sealed class PublishShareCommandHandler(
         [
             (PublicationLayout.SiteData, serializer.Serialize(data), new PublishedBlob("text/javascript; charset=utf-8", CacheControl: "no-cache")),
             (PublicationLayout.Sha256Sums, Encoding.UTF8.GetBytes(DownloadScripts.Sha256Sums(data)), new PublishedBlob("text/plain; charset=utf-8", CacheControl: "no-cache")),
-            (PublicationLayout.ShellScript, Encoding.UTF8.GetBytes(DownloadScripts.Shell(data, url)), new PublishedBlob("text/plain; charset=utf-8", CacheControl: "no-cache")),
-            (PublicationLayout.PowerShellScript, Encoding.UTF8.GetBytes(DownloadScripts.PowerShell(data, url)), new PublishedBlob("text/plain; charset=utf-8", CacheControl: "no-cache")),
+            (PublicationLayout.ShellScript, Encoding.UTF8.GetBytes(DownloadScripts.Shell(data, folderUrl)), new PublishedBlob("text/plain; charset=utf-8", CacheControl: "no-cache")),
+            (PublicationLayout.PowerShellScript, Encoding.UTF8.GetBytes(DownloadScripts.PowerShell(data, folderUrl)), new PublishedBlob("text/plain; charset=utf-8", CacheControl: "no-cache")),
         ];
         foreach ((string name, byte[] bytes, PublishedBlob headers) in generated)
         {
@@ -391,20 +396,20 @@ internal sealed class PublishShareCommandHandler(
         PublishedBlob headers = new(ContentTypeMap.For(file.Path.Value), DispositionPolicy.ContentDisposition(file.Path.Value), PublishedBlob.Immutable);
         string blobName = layout.File(file.Path);
 
-        Result<Uri?> source = await store.GetObjectReadUrlAsync(shareId, file.Sha256, SourceUrlLifetime, cancellationToken);
+        Result<CopySource?> source = await store.GetCopySourceAsync(shareId, file.Sha256, SourceUrlLifetime, cancellationToken);
         if (source.IsFailure)
         {
             return Result.Failure<CopyMethod>(source.Error);
         }
 
-        if (source.Value is { } readable)
+        if (source.Value is { } readable && target.CanCopy(readable))
         {
             // Server-side, the bytes as stored: a gzip object stays gzip, and says so, so every
             // client that downloads it decodes it (sizes and hashes in site-data.js are uncompressed).
             return await target.CopyAsync(readable, stored.Size, blobName, headers with { ContentEncoding = stored.Encoding.ToContentEncoding() }, cancellationToken);
         }
 
-        // No readable URL: through this machine, decoded once and checked against the object's
+        // Nothing the target can copy from (no signing credential, or another provider): through this machine, decoded once and checked against the object's
         // name on the way, and published raw.
         Result<Stream> opened = await codec.OpenDecodedAsync(shareId, FileEntry.Create(file.Sha256, file.Size, DateTimeOffset.UnixEpoch, executable: false).Value, cancellationToken);
         if (opened.IsFailure)

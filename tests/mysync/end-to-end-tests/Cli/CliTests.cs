@@ -7,19 +7,19 @@ using Xunit;
 namespace MySync.EndToEndTests.Cli;
 
 /// <summary>
-/// The real <c>mysync</c> binary, run as a process in temp folders against Azurite: exit codes
+/// The real <c>mysync</c> binary, run as a process in temp folders against real Azure storage: exit codes
 /// (CLAUDE.md §10), stdout for output and stderr for everything else, <c>--json</c>, the one
 /// prompt, and no secret anywhere. Nothing in <c>apps/mysync/Rendering</c> has unit tests; this is
 /// where the CLI's behaviour is held.
 /// </summary>
 public sealed class CliTests : IDisposable
 {
-    private readonly AzuriteFixture _azurite;
+    private readonly AzureTestStorage _azure;
     private readonly TempShareFolder _a = new();
     private readonly TempShareFolder _b = new();
-    private readonly string _container = AzuriteEnvironment.NewContainerName();
+    private readonly string _container = AzureTestStorage.NewContainerName();
 
-    public CliTests(AzuriteFixture azurite) => _azurite = azurite;
+    public CliTests(StorageFixture storage) => _azure = storage.AzureStorage;
 
     [Theory]
     [InlineData("--help")]
@@ -219,7 +219,7 @@ public sealed class CliTests : IDisposable
     {
         _a.WriteFile("a.txt", "a");
         string wrongKey = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(64));
-        string connectionString = string.Join(';', _azurite.ConnectionString.Split(';')
+        string connectionString = string.Join(';', _azure.ConnectionString.Split(';')
             .Select(part => part.StartsWith("AccountKey=", StringComparison.OrdinalIgnoreCase) ? $"AccountKey={wrongKey}" : part));
 
         CliResult result = await RunAsync(_a, new Dictionary<string, string?> { ["AZURE_STORAGE_CONNECTION_STRING"] = connectionString }, "sync", "--verbose");
@@ -329,7 +329,7 @@ public sealed class CliTests : IDisposable
         info.ExitCode.ShouldBe(0, info.ToString());
         using var described = JsonDocument.Parse(info.StdOut);
         described.RootElement.GetProperty("openConflicts").GetInt32().ShouldBe(1);
-        described.RootElement.GetProperty("accountName").GetString().ShouldBe(_azurite.AccountName);
+        described.RootElement.GetProperty("accountName").GetString().ShouldBe(_azure.AccountName);
         described.RootElement.GetProperty("remoteRevision").GetInt64().ShouldBe(2);
         _b.ReadText(StateFileNames.State).ShouldBe(stateBefore);
     }
@@ -676,12 +676,12 @@ public sealed class CliTests : IDisposable
     [Fact]
     public async Task PublishPublicationsAndUnpublish_Should_Work_AndAnUnverifiedPublicationExitTen()
     {
-        Assert.SkipWhen(_azurite.PublishConnectionString is null, "No publishing account on supplied storage.");
+        _ = _azure.PublishConnectionString; // skips (or fails in CI) without a publishing account
         _a.WriteFile("docs/readme.md", "# hi");
         (await RunAsync(_a, "sync")).ExitCode.ShouldBe(0);
         Dictionary<string, string?> publishing = new()
         {
-            ["MYSYNC_PUBLISH_CONNECTION_STRING"] = _azurite.PublishConnectionString,
+            ["MYSYNC_PUBLISH_CONNECTION_STRING"] = _azure.PublishConnectionString,
             ["MYSYNC_PUBLISH_BASE_URL"] = "https://mysyncpublish.invalid", // nothing answers there: verification fails
         };
 
@@ -719,24 +719,24 @@ public sealed class CliTests : IDisposable
 
         foreach (CliResult result in (CliResult[])[published, listed, human, removed, gone])
         {
-            (result.StdOut + result.StdErr).ShouldNotContain(AzuriteEnvironment.AzuriteKey);
+            (result.StdOut + result.StdErr).ShouldNotContain(_azure.AccountKey);
         }
     }
 
     [Fact]
     public async Task PublishingWithoutItsSettings_Should_ExitTwo_NamingTheVariable_AndDeleteShouldRefuse()
     {
-        Assert.SkipWhen(_azurite.PublishConnectionString is null, "No publishing account on supplied storage.");
+        _ = _azure.PublishConnectionString; // skips (or fails in CI) without a publishing account
         _a.WriteFile("a.txt", "a");
         (await RunAsync(_a, "sync")).ExitCode.ShouldBe(0);
 
-        CliResult noBaseUrl = await RunAsync(_a, new Dictionary<string, string?> { ["MYSYNC_PUBLISH_CONNECTION_STRING"] = _azurite.PublishConnectionString }, "publish");
+        CliResult noBaseUrl = await RunAsync(_a, new Dictionary<string, string?> { ["MYSYNC_PUBLISH_CONNECTION_STRING"] = _azure.PublishConnectionString }, "publish");
         noBaseUrl.ExitCode.ShouldBe(2, noBaseUrl.ToString());
         noBaseUrl.StdErr.ShouldContain("MYSYNC_PUBLISH_BASE_URL");
 
         CliResult published = await RunAsync(_a, new Dictionary<string, string?>
         {
-            ["MYSYNC_PUBLISH_CONNECTION_STRING"] = _azurite.PublishConnectionString,
+            ["MYSYNC_PUBLISH_CONNECTION_STRING"] = _azure.PublishConnectionString,
             ["MYSYNC_PUBLISH_BASE_URL"] = "https://mysyncpublish.invalid",
         }, "publish");
         published.ExitCode.ShouldBe(10, published.ToString());
@@ -844,7 +844,7 @@ public sealed class CliTests : IDisposable
     {
         // What an interrupted create leaves: the name was claimed, the share never committed.
         var shareId = Guid.NewGuid();
-        Azure.Storage.Blobs.BlobContainerClient container = new(_azurite.ConnectionString, _container);
+        Azure.Storage.Blobs.BlobContainerClient container = new(_azure.ConnectionString, _container);
         await container.CreateIfNotExistsAsync(cancellationToken: TestContext.Current.CancellationToken);
         await container.GetBlobClient("aliases/half-made").UploadAsync(
             BinaryData.FromString("{}"),
@@ -914,7 +914,7 @@ public sealed class CliTests : IDisposable
     {
         _a.WriteFile("data.log", string.Concat(Enumerable.Repeat("line\n", 500)));
         (await RunAsync(_a, "sync", "--name", "cli-enc-" + Guid.NewGuid().ToString("N")[..8], "--compress")).ExitCode.ShouldBe(0);
-        Azure.Storage.Blobs.BlobContainerClient container = new(_azurite.ConnectionString, _container);
+        Azure.Storage.Blobs.BlobContainerClient container = new(_azure.ConnectionString, _container);
         string blob = MySync.Domain.Storage.ShareLayout.For(MySync.Domain.Shares.ShareReference.Parse(ShareIdOf(_a)).Value.Id!)
             .ObjectBlob(ManifestBuilder.HashOf(string.Concat(Enumerable.Repeat("line\n", 500))));
         await container.GetBlobClient(blob).SetHttpHeadersAsync(
@@ -929,7 +929,7 @@ public sealed class CliTests : IDisposable
 
     private Dictionary<string, string?> Environment() => new()
     {
-        ["AZURE_STORAGE_CONNECTION_STRING"] = _azurite.ConnectionString,
+        ["AZURE_STORAGE_CONNECTION_STRING"] = _azure.ConnectionString,
         ["MYSYNC_CONTAINER"] = _container,
     };
 
@@ -950,7 +950,7 @@ public sealed class CliTests : IDisposable
 
         Dictionary<string, string?> environment = new()
         {
-            ["AZURE_STORAGE_CONNECTION_STRING"] = _azurite.ConnectionString,
+            ["AZURE_STORAGE_CONNECTION_STRING"] = _azure.ConnectionString,
             ["MYSYNC_CONTAINER"] = _container,
         };
         foreach ((string name, string? value) in overrides)

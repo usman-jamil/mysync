@@ -10,8 +10,14 @@ namespace MySync.Testing;
 /// <summary>
 /// A publishing account's static website in memory: blobs with their headers, the static website
 /// setting, and every operation in order (so a test can pin "index.html first"). Server-side copies
-/// read from <see cref="Source"/>'s URLs. Thread-safe.
+/// read from <see cref="Source"/>'s URLs, or natively from its objects. Thread-safe.
 /// </summary>
+/// <remarks>
+/// By default it behaves like Azure's static website: it copies from URLs, serves index documents,
+/// and 404 means "not served". Set the properties to behave like S3 (native copies within one
+/// credential scope, no index documents, 403 and 404 not served), or like a target of another
+/// provider (neither URLs nor native sources: every file is streamed).
+/// </remarks>
 public sealed class InMemoryPublishTarget(InMemoryShareStore source, string accountName = "publishacct", string baseUrl = "https://publishacct.z13.web.core.windows.net") : IPublishTarget
 {
     private readonly ConcurrentDictionary<string, StoredBlob> _blobs = new(StringComparer.Ordinal);
@@ -23,6 +29,24 @@ public sealed class InMemoryPublishTarget(InMemoryShareStore source, string acco
     public Error? LocationError { get; set; }
 
     public bool StaticWebsiteEnabled { get; set; } = true;
+
+    public string Provider { get; set; } = "in-memory";
+
+    public bool ServesIndexDocuments { get; set; } = true;
+
+    public IReadOnlySet<int> NotServedStatusCodes { get; set; } = new HashSet<int> { 404 };
+
+    /// <summary>Whether a URL source can be copied server-side (Azure's Put Blob From URL).</summary>
+    public bool CopiesFromUrls { get; set; } = true;
+
+    /// <summary>A native source with this credential scope (and <see cref="InMemoryShareStore.NativeProvider"/>) is copied natively, like S3's CopyObject.</summary>
+    public string? NativeCredentialScope { get; set; }
+
+    /// <summary>What <see cref="SharesAccountWith"/> answers.</summary>
+    public Func<Domain.State.StorageLocation, bool> SameAccount { get; set; } = location => string.Equals(location.AccountName, accountName, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>What <see cref="PreflightAsync"/> fails with instead of its static-website checks (e.g. an S3 bucket that isn't public).</summary>
+    public Error? PreflightError { get; set; }
 
     public string? IndexDocument { get; set; } = "index.html";
 
@@ -43,11 +67,29 @@ public sealed class InMemoryPublishTarget(InMemoryShareStore source, string acco
     public StoredBlob? Blob(string name) => _blobs.GetValueOrDefault(name);
 
     public Result<PublishLocation> GetLocation() =>
-        LocationError is { } error ? Result.Failure<PublishLocation>(error) : new PublishLocation(accountName, new Uri(baseUrl));
+        LocationError is { } error
+            ? Result.Failure<PublishLocation>(error)
+            : new PublishLocation(Provider, accountName, new Uri(baseUrl), ServesIndexDocuments, NotServedStatusCodes);
 
-    public Task<Result> CheckStaticWebsiteAsync(CancellationToken cancellationToken)
+    public bool SharesAccountWith(Domain.State.StorageLocation shares) => SameAccount(shares);
+
+    public bool CanCopy(CopySource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        bool fromUrl = CopiesFromUrls && source.Url is not null;
+        bool native = source.Native is { } reference && NativeCredentialScope is not null
+            && reference.Provider == InMemoryShareStore.NativeProvider && reference.CredentialScope == NativeCredentialScope;
+        return fromUrl || native;
+    }
+
+    public Task<Result> PreflightAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (PreflightError is { } preflight)
+        {
+            return Task.FromResult(Result.Failure(preflight));
+        }
+
         if (CannotReadServiceProperties)
         {
             return Task.FromResult(Result.Failure(PublishErrors.CannotReadServiceProperties(accountName)));
@@ -82,21 +124,29 @@ public sealed class InMemoryPublishTarget(InMemoryShareStore source, string acco
         return Result.Success(true);
     }
 
-    public Task<Result<CopyMethod>> CopyAsync(Uri source, long length, string blobName, PublishedBlob blob, CancellationToken cancellationToken)
+    public Task<Result<CopyMethod>> CopyAsync(CopySource source, long length, string blobName, PublishedBlob blob, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(source);
         cancellationToken.ThrowIfCancellationRequested();
+        if (!CanCopy(source))
+        {
+            throw new InvalidOperationException("CopyAsync called with a source CanCopy refused.");
+        }
+
         if (Before("copy", blobName) is { } failure)
         {
             return Task.FromResult(Result.Failure<CopyMethod>(failure));
         }
 
-        if (Source.ReadUrl(source) is not { } bytes)
+        bool native = source.Native is not null && NativeCredentialScope is not null && source.Native.CredentialScope == NativeCredentialScope;
+        byte[]? bytes = native ? Source.ReadNative(source.Native!) : Source.ReadUrl(source.Url!);
+        if (bytes is null)
         {
-            return Task.FromResult(Result.Failure<CopyMethod>(StorageErrors.NotFound(source.ToString())));
+            return Task.FromResult(Result.Failure<CopyMethod>(StorageErrors.NotFound(blobName)));
         }
 
         _blobs[blobName] = new StoredBlob(bytes, blob);
-        return Task.FromResult(Result.Success(CopyMethod.PutBlobFromUrl));
+        return Task.FromResult(Result.Success(native ? CopyMethod.CopyObject : CopyMethod.PutBlobFromUrl));
     }
 
     public Task<Result> DeleteAsync(string blobName, CancellationToken cancellationToken)
@@ -157,10 +207,14 @@ public sealed class InMemoryPublicationVerifier(InMemoryPublishTarget target) : 
 
     public List<Uri> Requests { get; } = [];
 
-    public Task<VerificationOutcome> VerifyAsync(Uri siteDataUrl, string publishId, CancellationToken cancellationToken)
+    /// <summary>The "not served" statuses the last verification was given.</summary>
+    public IReadOnlySet<int>? NotServedStatusCodes { get; private set; }
+
+    public Task<VerificationOutcome> VerifyAsync(Uri siteDataUrl, string publishId, IReadOnlySet<int> notServedStatusCodes, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(siteDataUrl);
         Requests.Add(siteDataUrl);
+        NotServedStatusCodes = notServedStatusCodes;
         if (Unreachable)
         {
             return Task.FromResult(new VerificationOutcome(false, "HTTP 404 Not Found"));

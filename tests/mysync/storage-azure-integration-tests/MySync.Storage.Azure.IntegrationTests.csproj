@@ -7,6 +7,8 @@
     <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- Without test storage every storage test skips; "zero tests ran" (exit 8) is then not a failure. CI sets MYSYNC_TEST_REQUIRE_STORAGE instead. -->
+    <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --ignore-exit-code 8</TestingPlatformCommandLineArguments>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,7 +18,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Shouldly" />
-    <PackageReference Include="Testcontainers.Azurite" />
     <PackageReference Include="xunit.v3.mtp-v2" />
   </ItemGroup>
 

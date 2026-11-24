@@ -1,7 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using Azure.Storage.Blobs;
-using Azure.Storage.Blobs.Models;
 using MySync.Application.Shares.Create;
 using MySync.Application.Sync.Run;
 using MySync.Domain.Content;
@@ -12,33 +10,40 @@ using MySync.Domain.Sync;
 using MySync.Testing;
 using Shouldly;
 using Xunit;
-using static MySync.EndToEndTests.AzureMachine;
+using static MySync.EndToEndTests.Machine;
 
 namespace MySync.EndToEndTests;
 
-/// <summary>
-/// A compressed share on Azurite with the full DI graph (CLAUDE.md §6, §9): text stored gzip, an
-/// already-compressed file raw, both machines always byte-identical, through edits, a conflict and
-/// its resolution, and compression turned off again.
-/// </summary>
-public sealed class CompressedShareTests : IDisposable
-{
-    private readonly AzuriteFixture _azurite;
-    private readonly AzureMachine _a;
-    private readonly AzureMachine _b;
-    private readonly string _container = AzuriteEnvironment.NewContainerName();
+public sealed class AzureCompressedShareTests(StorageFixture storage) : CompressedShareTests(storage.Azure);
 
-    public CompressedShareTests(AzuriteFixture azurite)
+public sealed class S3CompressedShareTests(StorageFixture storage) : CompressedShareTests(storage.S3);
+
+/// <summary>
+/// A compressed share on real storage with the full DI graph (CLAUDE.md §6, §9): text stored gzip
+/// (Content-Encoding: gzip on the object, round-tripping), an already-compressed file raw, both
+/// machines always byte-identical, through edits, a conflict and its resolution, and compression
+/// turned off again.
+/// </summary>
+public abstract class CompressedShareTests : IDisposable
+{
+    private readonly Backend _backend;
+    private readonly Machine _a;
+    private readonly Machine _b;
+    private readonly string _place;
+
+    protected CompressedShareTests(Backend backend)
     {
-        _azurite = azurite;
-        _a = new AzureMachine(azurite.ConnectionString, _container);
-        _b = new AzureMachine(azurite.ConnectionString, _container);
+        ArgumentNullException.ThrowIfNull(backend);
+        _backend = backend;
+        _place = backend.NewPlace();
+        _a = new Machine(backend, _place);
+        _b = new Machine(backend, _place);
     }
 
     [Fact]
     public async Task ACompressedShare_Should_StayByteIdentical_OnBothMachines_ThroughEditsConflictsAndTurningItOff()
     {
-        byte[] log = BigLog(16 * 1024 * 1024); // ~2x compressible: the gzip upload spans several 4 MiB blocks
+        byte[] log = BigLog(40 * 1024 * 1024); // ~2x compressible: the gzip upload spans several 4 MiB Azure blocks, and S3 parts of 16 MiB
         byte[] zip = RandomBytes(300_000);
         _a.Folder.WriteFile("logs/app.log", log).WriteFile("dist/bundle.zip", zip).WriteFile("notes.md", "# notes\n" + new string('n', 2000));
 
@@ -47,11 +52,11 @@ public sealed class CompressedShareTests : IDisposable
         created.Compression.ShouldBe(CompressionSetting.Gzip);
         created.Uploaded.StoredBytes.ShouldBeLessThan(created.Uploaded.Bytes);
 
-        BlobProperties logBlob = await PropertiesAsync(shareId, log);
+        StoredProperties logBlob = await PropertiesAsync(shareId, log);
         logBlob.ContentEncoding.ShouldBe("gzip");
-        logBlob.ContentLength.ShouldBeGreaterThan(4L * 1024 * 1024);
-        logBlob.ContentLength.ShouldBeLessThan(log.LongLength);
-        logBlob.Metadata["size"].ShouldBe(log.LongLength.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        logBlob.Length.ShouldBeGreaterThan(4L * 1024 * 1024);
+        logBlob.Length.ShouldBeLessThan(log.LongLength);
+        logBlob.Size.ShouldBe(log.LongLength.ToString(System.Globalization.CultureInfo.InvariantCulture));
         (await PropertiesAsync(shareId, zip)).ContentEncoding.ShouldBeNull();
 
         Ok(await _b.CloneAsync(shareId));
@@ -86,7 +91,7 @@ public sealed class CompressedShareTests : IDisposable
         (await PropertiesAsync(shareId, later)).ContentEncoding.ShouldBeNull();
         (await PropertiesAsync(shareId, longer)).ContentEncoding.ShouldBe("gzip");
 
-        using AzureMachine c = new(_azurite.ConnectionString, _container);
+        using Machine c = new(_backend, _place);
         Ok(await c.CloneAsync(shareId));
         c.Folder.Files().ShouldBe(_a.Folder.Files());
     }
@@ -101,12 +106,8 @@ public sealed class CompressedShareTests : IDisposable
         }
     }
 
-    private async Task<BlobProperties> PropertiesAsync(ShareId shareId, byte[] content)
-    {
-        BlobClient blob = new BlobContainerClient(_azurite.ConnectionString, _container)
-            .GetBlobClient(ShareLayout.For(shareId).ObjectBlob(ManifestBuilder.HashOf(content)));
-        return (await blob.GetPropertiesAsync(cancellationToken: TestContext.Current.CancellationToken)).Value;
-    }
+    private Task<StoredProperties> PropertiesAsync(ShareId shareId, byte[] content) =>
+        _backend.PropertiesAsync(_place, ShareLayout.For(shareId).ObjectBlob(ManifestBuilder.HashOf(content)));
 
     /// <summary>Log lines with a random hex id each: compresses to about half, not to nothing.</summary>
     private static byte[] BigLog(int length)
@@ -135,5 +136,6 @@ public sealed class CompressedShareTests : IDisposable
     {
         _a.Dispose();
         _b.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

@@ -11,6 +11,7 @@ using MySync.Cli.Rendering;
 using MySync.Infrastructure;
 using MySync.SiteAssets;
 using MySync.Storage.Azure;
+using MySync.Storage.S3;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -76,9 +77,30 @@ ReleaseSourceSelector.Register(
     builder.Configuration,
     System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0");
 
-if (environment.Provider == StorageProvider.AzureBlob)
+switch (environment.Provider)
 {
-    builder.Services.AddAzureBlobStorage().AddAzureStaticWebsitePublishing();
+    case StorageProvider.AzureBlob:
+        builder.Services.AddAzureBlobStorage();
+        break;
+    case StorageProvider.S3:
+        builder.Services.AddS3Storage();
+        break;
+}
+
+// Publications may go to another provider than the shares (MYSYNC_PUBLISH_PROVIDER); files are then
+// streamed through this machine, since neither provider can read the other's objects.
+switch (environment.PublishProvider)
+{
+    case StorageProvider.AzureBlob:
+        builder.Services.AddAzureStaticWebsitePublishing();
+        break;
+    case StorageProvider.S3:
+        builder.Services.AddS3Publishing();
+        break;
+    default:
+        builder.Services.AddSingleton<MySync.Application.Abstractions.Publishing.IPublishTarget>(
+            new UnconfiguredPublishTarget(environment.CheckPublishing().Error));
+        break;
 }
 
 // ConsoleAppFramework writes its own messages (unknown option, missing argument) to stdout by

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using MySync.Application.Abstractions.Publishing;
 using MySync.Application.Abstractions.Storage;
 using MySync.Domain.Content;
 using MySync.Domain.Manifests;
@@ -16,7 +17,7 @@ namespace MySync.Testing;
 /// An <see cref="IShareStore"/> in memory, with the same conditional-write semantics as Azure
 /// (<c>If-Match</c>, <c>If-None-Match: *</c>) and the same blob names (<see cref="ShareLayout"/>).
 /// Its behaviour is pinned by <see cref="Contracts.ShareStoreContractTests"/>, which also runs
-/// against Azurite: if the two disagree, this fake is wrong. Thread-safe.
+/// against real Azure and S3 storage: if they disagree, this fake is wrong. Thread-safe.
 /// </summary>
 public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageLocation? location = null) : IShareStore
 {
@@ -48,15 +49,34 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
     public Func<ContentHash, Error?>? BeforeDeleteObject { get; set; }
 
     /// <summary>
-    /// Whether <see cref="GetObjectReadUrlAsync"/> gives URLs (like Azure with an account key) or
+    /// Whether <see cref="GetCopySourceAsync"/> gives URLs (like Azure with an account key) or
     /// <c>null</c> (like a SAS-only connection string), so publishing streams instead.
     /// </summary>
     public bool CanMakeReadUrls { get; set; } = true;
 
+    /// <summary>
+    /// Whether <see cref="GetCopySourceAsync"/> also names the object natively (like S3), with this
+    /// credential scope; <c>null</c> for URL-only sources (like Azure).
+    /// </summary>
+    public string? NativeCredentialScope { get; set; }
+
+    /// <summary>The provider a native copy source names (<see cref="NativeCredentialScope"/>).</summary>
+    public const string NativeProvider = "in-memory";
+
     /// <summary>Runs just before a conditional write of <c>publications.json</c>: lets a test write it as "another machine".</summary>
     public Func<ShareId, Task>? BeforePutPublications { get; set; }
 
-    /// <summary>The bytes behind a URL from <see cref="GetObjectReadUrlAsync"/> (what a server-side copy reads), or <c>null</c>.</summary>
+    /// <summary>The bytes of a stored object named natively (what a native server-side copy reads), or <c>null</c>.</summary>
+    public byte[]? ReadNative(NativeObjectReference source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        lock (_gate)
+        {
+            return _blobs.TryGetValue(source.Key, out Blob? blob) ? blob.Bytes : null;
+        }
+    }
+
+    /// <summary>The bytes behind a URL from <see cref="GetCopySourceAsync"/> (what a server-side copy reads), or <c>null</c>.</summary>
     public byte[]? ReadUrl(Uri url)
     {
         ArgumentNullException.ThrowIfNull(url);
@@ -417,11 +437,13 @@ public sealed class InMemoryShareStore(IDateTimeProvider? clock = null, StorageL
         return Task.FromResult(Result.Success());
     }
 
-    public Task<Result<Uri?>> GetObjectReadUrlAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken cancellationToken)
+    public Task<Result<CopySource?>> GetCopySourceAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Uri? url = CanMakeReadUrls ? new Uri("memory://store/" + Uri.EscapeDataString(ShareLayout.For(shareId).ObjectBlob(hash))) : null;
-        return Task.FromResult(Result.Success(url));
+        string key = ShareLayout.For(shareId).ObjectBlob(hash);
+        Uri? url = CanMakeReadUrls ? new Uri("memory://store/" + Uri.EscapeDataString(key)) : null;
+        NativeObjectReference? native = NativeCredentialScope is { } scope ? new NativeObjectReference(NativeProvider, "memory", "mysync", key, scope) : null;
+        return Task.FromResult(Result.Success(url is null && native is null ? null : new CopySource(url, native)));
     }
 
     public Task<Result<PublicationsSnapshot?>> GetPublicationsAsync(ShareId shareId, CancellationToken cancellationToken)

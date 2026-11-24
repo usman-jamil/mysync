@@ -31,6 +31,9 @@ public class ErrorCatalogTests
         { ShareErrors.NameNotFound(ShareName.Create("next-wave").Value), "Shares.NameNotFound" }, // exit 8
         { ShareErrors.Incomplete(ShareName.Create("next-wave").Value, Share()), "Shares.Incomplete" }, // exit 8
         { StorageErrors.Unauthorized, "Storage.Unauthorized" }, // exit 8
+        { StorageErrors.UnauthorizedBecause("Check the AWS credentials."), "Storage.Unauthorized" }, // exit 8
+        { StorageErrors.ClockSkew(12), "Storage.ClockSkew" }, // exit 2
+        { MySync.Domain.Publishing.PublishErrors.UnauthorizedBecause("Check the AWS credentials."), "Publish.Unauthorized" }, // exit 8
         { MySync.Domain.Diffing.DiffErrors.VersionNotStored("a.txt", "remote"), "Diff.VersionNotStored" }, // exit 8
         { StorageErrors.UnsupportedEncoding("br"), "Storage.UnsupportedEncoding" }, // exit 8
         { StorageErrors.CorruptObject("shares/x/objects/ab/ab", "invalid gzip"), "Storage.CorruptObject" },
@@ -92,6 +95,35 @@ public class ErrorCatalogTests
         MySync.Domain.Sync.Push.PushErrors.InvalidSince("2x").Code.ShouldBe("Push.InvalidSince");
         MySync.Domain.Sync.Push.PushErrors.InvalidPattern("--exclude", "!a", "negated").Code.ShouldBe("Push.InvalidPattern");
         MySync.Domain.Sync.Push.PushErrors.InvalidSize("0").Code.ShouldBe("Push.InvalidSize");
+        ConfigurationErrors.WrongRegion("team-shares", "us-east-1", "eu-west-1").Type.ShouldBe(ErrorType.Validation);
+        ConfigurationErrors.BucketNotFound("MYSYNC_S3_BUCKET", "team-shares", "us-east-1").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Publishing.PublishErrors.NotPublic("team-publish", "https://team-publish.s3.eu-west-1.amazonaws.com").Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Publishing.PublishErrors.PublicListing("team-publish").Type.ShouldBe(ErrorType.Validation);
+    }
+
+    [Fact]
+    public void StorageMismatch_BetweenProviders_Should_SayWhichProviderTheFolderBelongsTo()
+    {
+        string description = StateErrors.StorageMismatch(
+            new StorageLocation("azure-blob", "teamsyncstorage", "mysync"),
+            new StorageLocation("s3", "eu-west-1", "team-shares")).Description;
+
+        description.ShouldBe(
+            "This folder belongs to azure-blob (account teamsyncstorage, container mysync), but the environment points at s3 (bucket team-shares in eu-west-1). " +
+            "Nothing was changed. Set MYSYNC_PROVIDER=azure-blob and its settings (AZURE_STORAGE_CONNECTION_STRING, MYSYNC_CONTAINER) to sync this folder.");
+    }
+
+    [Fact]
+    public void NotPublic_Should_GiveThePolicy_AndNameAllThreeBlockers()
+    {
+        string description = MySync.Domain.Publishing.PublishErrors.NotPublic("team-publish", "https://team-publish.s3.eu-west-1.amazonaws.com").Description;
+
+        description.ShouldContain("arn:aws:s3:::team-publish/p/*");
+        description.ShouldContain("arn:aws:s3:::team-publish/robots.txt");
+        description.ShouldNotContain("s3:ListBucket");
+        description.ShouldContain("the bucket's Block Public Access settings");
+        description.ShouldContain("the account-level Block Public Access settings");
+        description.ShouldContain("an organisation policy");
     }
 
     [Fact]

@@ -24,7 +24,8 @@ You need:
 
 - the **.NET 10 SDK** (the exact version is pinned in `global.json`);
 - **Node.js**, the version in `.nvmrc`, for Nx and the publication page;
-- **Docker**, for the Azurite-backed integration and end-to-end tests (optional for most changes);
+- optionally, **test storage** (a test-only Azure account and S3 bucket) for the integration and
+  end-to-end tests: [docs/ci-storage.md](docs/ci-storage.md). Without it those tests skip;
 - **git**, which the ignore-rule tests compare against.
 
 ```bash
@@ -38,12 +39,11 @@ npx nx build mysync          # builds the publication page, then the CLI
 directly, run `npx nx build mysync-site` once before it, or a Release build stops with a message
 telling you to.
 
-Try it against a local Azurite (the Azure Storage emulator):
+Try it against your own test storage ([docs/azure.md](docs/azure.md) or [docs/aws.md](docs/aws.md)):
 
 ```bash
-docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
-export AZURE_STORAGE_CONNECTION_STRING="UseDevelopmentStorage=true"
-dotnet run --project apps/mysync -- sync
+export AZURE_STORAGE_CONNECTION_STRING='…'      # or MYSYNC_PROVIDER=s3, MYSYNC_S3_BUCKET, MYSYNC_S3_REGION and AWS credentials
+dotnet run --project apps/mysync -- sync --name try-it
 ```
 
 To look at the publication page with a mocked share: `npm run site`.
@@ -51,15 +51,16 @@ To look at the publication page with a mocked share: `npm run site`.
 ## Running the tests
 
 ```bash
-npx nx run-many -t test --projects=tag:type:unit-test,tag:type:architecture-test   # fast, no Docker
+npx nx run-many -t test --projects=tag:type:unit-test,tag:type:architecture-test   # fast, no storage
 npx nx run-many -t lint,typecheck,test,build -p mysync-site                        # the web page
-npx nx run-many -t test --projects=tag:type:integration-test,tag:type:e2e-test     # Azurite (Docker)
+npx nx run-many -t test --projects=tag:type:integration-test,tag:type:e2e-test     # real test storage
 npx nx run-many -t test --all                                                      # everything
 ```
 
 CI runs the .NET tests on Linux, Windows and macOS, so path handling and the like must work on all
-three. The Azurite suites start their own container through Testcontainers; with Azurite already
-running, set `MYSYNC_TEST_AZURITE_CONNECTION_STRING` to skip that.
+three. The storage suites run against real test storage, never an emulator: CI sets it up from
+repository secrets, and [docs/ci-storage.md](docs/ci-storage.md) shows the variables to run them
+yourself. Without them, the tests that need storage skip.
 
 ## Where a change goes
 
@@ -102,8 +103,9 @@ build if one points the wrong way. In short:
 - A bug fix comes with a test that fails without it.
 - A new behaviour is tested at each layer it touches. The in-memory fakes in `tests/mysync/testing`
   (`InMemoryShareStore`, `InMemoryLocalFolder`, `InMemoryPublishTarget`, …) make most tests fast
-  and Docker-free.
-- A storage change updates the shared contract suite, which runs against both the fake and Azurite.
+  and need no storage.
+- A storage change updates the shared contract suite, which runs against the fake and against real
+  Azure and S3.
 - A change you can see from the command line gets an end-to-end test (`tests/mysync/end-to-end-tests`).
 
 ## Pull requests

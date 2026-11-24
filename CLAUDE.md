@@ -3,9 +3,9 @@
 Guidance for working in this repository. This is an **Nx monorepo** that houses the **mysync** stack:
 
 - **`apps/mysync`** — the CLI: a **.NET 10** console app (`MySync.Cli.csproj`, command name `mysync`) built with ConsoleAppFramework on `Microsoft.Extensions.Hosting`, rendering through Spectre.Console.
-- **`libs/mysync/*`** — its **Clean Architecture** backend: domain, application (use cases + abstractions), infrastructure (local disk, state file, hashing), and one project per **storage provider** (Azure Blob today, S3 later).
+- **`libs/mysync/*`** — its **Clean Architecture** backend: domain, application (use cases + abstractions), infrastructure (local disk, state file, hashing), and one project per **storage provider** (Azure Blob and AWS S3).
 - **`libs/shared/shared-kernel`** — dependency-free building blocks (`Result`, `Error`, `IDateTimeProvider`).
-- **`tests/mysync/*`** — unit, integration (**Azurite**), end-to-end and architecture tests.
+- **`tests/mysync/*`** — unit, integration and end-to-end tests (against **real** test storage, no emulator: §14), and architecture tests.
 
 > Working name: **mysync** (executable `mysync`, local state file `.mysynctool`).
 > A rename touches `AssemblyName` in `apps/mysync/MySync.Cli.csproj`, the file-name constants in `MySync.Domain.State.StateFileNames`, the release workflow's tag prefix and archive names (§16), and this file. Change them in the same commit.
@@ -16,7 +16,7 @@ The most important thing this file does is tell you **where a change belongs**. 
 
 ## 1. What this is
 
-`mysync` is an internal, cross-platform command-line tool for a small team. It moves folders between machines (laptops ↔ remote servers) through an **Azure Blob Storage container**. **No server or service of our own** sits behind it: all shared state lives in the blob container, and all per-folder state lives in a `.mysynctool` file inside the synced folder.
+`mysync` is an internal, cross-platform command-line tool for a small team. It moves folders between machines (laptops ↔ remote servers) through an **Azure Blob Storage container or an AWS S3 bucket** (`MYSYNC_PROVIDER`). **No server or service of our own** sits behind it: all shared state lives in the blob container, and all per-folder state lives in a `.mysynctool` file inside the synced folder.
 
 How it's used:
 
@@ -57,7 +57,7 @@ Published Q3 reports: revision 18, 142 files (38.2 MB)
 7. **Content-addressed storage layout**: blob names are content hashes, not mirrored folder paths.
 8. **All platforms**: Windows, Linux, macOS (x64 and arm64).
 9. Built in **.NET**, published as a **single self-contained executable** with the runtime bundled.
-10. Azure only for now, but the storage layer must be swappable (S3 etc. later).
+10. Azure Blob and AWS S3 (general purpose buckets, AWS only: no S3-compatible services), behind one storage abstraction so another provider is one more project.
 11. When both sides changed the same path, the change is **dropped and logged**, never auto-resolved (§9).
 
 ### Non-goals for v1
@@ -88,9 +88,10 @@ Published Q3 reports: revision 18, 142 files (38.2 MB)
 ├── .gitattributes                # *.cs checked out as CRLF everywhere, so IDE0055 agrees on every CI OS
 │
 ├── install.sh / install.ps1      # first install from GitHub releases, signature-checked (§16)
-├── docs/                         # storage setup guides linked from the README: azure.md, aws.md (S3: ahead of the provider)
+├── docs/                         # azure.md, aws.md (storage setup, linked from the README), ci-storage.md (the test storage and CI secrets)
 ├── tools/
 │   ├── unicode/GenerateNfcData.cs  # file-based app: UCD → NFC tables + conformance data (§8)
+│   ├── ci/check-storage-secrets.sh # every real-storage job's first step: names each missing repository secret
 │   └── release/                    # release signing public key, update/install end-to-end test, test-only fixtures (§16)
 │
 ├── apps/
@@ -113,10 +114,10 @@ Published Q3 reports: revision 18, 142 files (38.2 MB)
 │   │   ├── application/          # MySync.Application.csproj          (Nx: "mysync-application")
 │   │   ├── infrastructure/       # MySync.Infrastructure.csproj       (Nx: "mysync-infrastructure")
 │   │   ├── storage-azure/        # MySync.Storage.Azure.csproj        (Nx: "mysync-storage-azure")
+│   │   ├── storage-s3/           # MySync.Storage.S3.csproj           (Nx: "mysync-storage-s3") — AWS S3 (§11 "S3 differences")
 │   │   ├── updates-github/       # MySync.Updates.GitHub.csproj       (Nx: "mysync-updates-github") — `update`'s release source
 │   │   ├── site-assets/          # MySync.SiteAssets.csproj           (Nx: "mysync-site-assets") — embeds the mysync-site build
 │   │   └── tui/                  # MySync.Tui.csproj                  (Nx: "mysync-tui") — `mysync tui`'s presentation layer (§10d)
-│   │                             #   later: storage-s3/ MySync.Storage.S3.csproj
 │   └── shared/
 │       └── shared-kernel/        # SharedKernel.csproj — no dependencies (Nx: "shared-kernel")
 │
@@ -126,14 +127,17 @@ Published Q3 reports: revision 18, 142 files (38.2 MB)
 │       ├── domain-unit-tests/                # MySync.Domain.UnitTests.csproj
 │       ├── application-unit-tests/           # MySync.Application.UnitTests.csproj
 │       ├── infrastructure-unit-tests/        # MySync.Infrastructure.UnitTests.csproj
-│       ├── storage-azure-integration-tests/  # MySync.Storage.Azure.IntegrationTests.csproj (Azurite)
-│       ├── end-to-end-tests/                 # MySync.EndToEndTests.csproj (Azurite, full DI graph, two "machines")
+│       ├── storage-azure-integration-tests/  # MySync.Storage.Azure.IntegrationTests.csproj (real Azure test account)
+│       ├── storage-s3-unit-tests/            # MySync.Storage.S3.UnitTests.csproj (a substitute IAmazonS3, a stub anonymous web)
+│       ├── storage-s3-integration-tests/     # MySync.Storage.S3.IntegrationTests.csproj (real S3 test bucket)
+│       ├── end-to-end-tests/                 # MySync.EndToEndTests.csproj (real storage, both providers, full DI graph, two "machines")
 │       ├── site-assets-unit-tests/           # MySync.SiteAssets.UnitTests.csproj (needs the site build)
 │       ├── tui-unit-tests/                   # MySync.Tui.UnitTests.csproj (update, views as snapshots, terminal, runtime)
 │       └── architecture-tests/               # MySync.ArchitectureTests.csproj (dependency rules)
 │
 └── .github/workflows/
-    ├── ci.yml                    # site checks + build once; .NET build + unit tests on ubuntu/windows/macos; Azurite suites on ubuntu
+    ├── ci.yml                    # site checks + build once; .NET build + unit tests on ubuntu/windows/macos; real-storage suites on ubuntu
+    ├── real-storage.yml          # "Large share tests": manual + weekly, both providers
     └── release-mysync.yml        # tag-driven publish of every RID (§16)
 ```
 
@@ -172,7 +176,10 @@ Each project is an **Nx project** defined by its `project.json` (targets wrap `d
 | Publishing rules: publication IDs, the public layout, content types, the disposition policy, `site-data.js` content, download scripts | `libs/mysync/domain/Publishing` | Pure; `SiteDataBuilder` and `DownloadScripts` are string/data building only. |
 | The `publish` / `unpublish` / `publications` sequence, the registry read-modify-write | `libs/mysync/application/Publishing/` | `PublishShareCommand`, `UnpublishCommand`, `ListPublicationsQuery`; `PublicationRegistryUpdater`, `PublicationRemover`. |
 | How publications reach the static website (copies, headers, `$web`) | `libs/mysync/storage-azure` (`AzureStaticWebsitePublishTarget`) | Implements `IPublishTarget`. |
-| A new storage provider | a **new** `libs/mysync/storage-<name>` | Implements `IShareStore`; registered by the composition root. |
+| How a share is stored in S3 (requests, conditional writes and their 409/412/404 answers, multipart uploads, credentials, error mapping) | `libs/mysync/storage-s3` | The only library that references `AWSSDK.*`. `S3ShareStore`, `S3AliasStore`, `S3Uploader`, `S3ErrorMapper`, `S3Connection` (credentials once, on first use). |
+| How publications reach a public S3 bucket (preflight: region, anonymous probe, no public listing; copies) | `libs/mysync/storage-s3` (`S3PublishTarget`) | Implements `IPublishTarget`. |
+| Which provider is used (`MYSYNC_PROVIDER`, `MYSYNC_PUBLISH_PROVIDER`) | `apps/mysync/StorageProvider.cs`, `CliEnvironment.cs`, `Program.cs` | The composition root only. |
+| A new storage provider | a **new** `libs/mysync/storage-<name>` | Implements `IShareStore`, `IAliasStore`, `IPublishTarget`; passes the contract suites; registered by the composition root. |
 | Where `mysync update` gets releases (GitHub API) | `libs/mysync/updates-github` | Implements `IReleaseSource`; never references Infrastructure or storage. |
 | Swapping the running binary, staging an update | `libs/mysync/infrastructure/Updates` | `ExecutableInstaller` is the only OS-specific part of `update`. |
 | What the CLI looks like on screen | `apps/mysync/Rendering/` | Spectre.Console. No rendering below `apps/`. |
@@ -199,7 +206,7 @@ MySync.Cli ──────┤                            ├──▶ MySync.
 - `MySync.Domain` depends only on `SharedKernel`.
 - `MySync.Application` depends on `MySync.Domain` + `SharedKernel`. **It must NOT reference Infrastructure, any storage project, the Azure SDK, Spectre.Console or ConsoleAppFramework.**
 - `MySync.Infrastructure` and `MySync.Storage.*` depend on `MySync.Application` (and inward). They implement abstractions Application defines. **They never reference each other**, so a provider can be added or removed without touching local-disk code.
-- `MySync.Storage.Azure` is the **only** project that references `Azure.*` packages.
+- `MySync.Storage.Azure` is the **only** project that references `Azure.*` packages, and `MySync.Storage.S3` the only one that references `AWSSDK.*` (`Amazon.*`). The two never reference each other (architecture tests check the types used and the assembly references).
 - `MySync.SiteAssets`, `MySync.Updates.GitHub` and `MySync.Tui` depend on `MySync.Application` only, and nothing but the CLI (and their tests) references them. Inside `MySync.Tui`, the `State`, `Update`, `Views` and `Rendering` namespaces never reference `Terminal` or `Runtime`, the console or the disk (architecture tests). Only the CLI, its end-to-end and architecture tests, and `MySync.SiteAssets.UnitTests` need the web build.
 - `MySync.Cli` is the composition root. It references Application, Infrastructure and the storage projects, and wires everything together at startup. Only it references Spectre.Console and ConsoleAppFramework.
 
@@ -217,7 +224,8 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | `MySync.SiteAssets` (`libs/mysync/site-assets/MySync.SiteAssets.csproj`) | Publication page assets | `EmbeddedSiteAssetSource : ISiteAssetSource` (manifest resources `site/…` from `dist/apps/mysync-site`, `root/…` from `Root/`), `DependencyInjection.AddSiteAssets()`. Depends on Application only. |
 | `MySync.Tui` (`libs/mysync/tui/MySync.Tui.csproj`) | The terminal interface | `State` (`TuiState`, `ListModel`, `StatusSummary`), `Messages`, `Update` (`TuiUpdate`), `Effects`, `Views` (`Screens`), `Rendering` (`Frame`, `Theme`, `Symbols`, `Text`), `Terminal` (`ITerminal`, `AnsiTerminal`, `SystemConsole`, `TerminalDetection`), `Runtime` (`TuiRuntime`). No package. Depends on Application only. |
 | `MySync.Storage.Azure` (`libs/mysync/storage-azure/MySync.Storage.Azure.csproj`) | Azure Blob provider | `AzureBlobShareStore : IShareStore`, `AzureAliasStore : IAliasStore`, `AzureShareContainer` (the container both use), `AzureStorageOptions`, `AzureStaticWebsitePublishTarget : IPublishTarget` + `PublishStorageOptions` + `AzureCopyLimits`, `AzureErrorMapper` (`RequestFailedException` → `StorageErrors`), `ConnectionStringRedactor`, `DependencyInjection.AddAzureBlobStorage()` / `AddAzureStaticWebsitePublishing()`. |
-| `MySync.Cli` (`apps/mysync/MySync.Cli.csproj`) | Presentation / composition root | `Program.cs`, `Commands/`, `Rendering/`, `ExitCodes.cs`. Selects the provider from `MYSYNC_PROVIDER`. |
+| `MySync.Storage.S3` (`libs/mysync/storage-s3/MySync.Storage.S3.csproj`) | AWS S3 provider | `S3ShareStore : IShareStore`, `S3AliasStore : IAliasStore`, `S3PublishTarget : IPublishTarget` + `AnonymousProbe`, `S3Connection` + `S3Bucket` (settings offline, credentials once), `S3Uploader` + `S3PartSizes` + `S3Limits`, `S3ErrorMapper`, `S3Redactor`, `S3StorageOptions`, `S3PublishOptions`, `DependencyInjection.AddS3Storage()` / `AddS3Publishing()`. |
+| `MySync.Cli` (`apps/mysync/MySync.Cli.csproj`) | Presentation / composition root | `Program.cs`, `Commands/`, `Rendering/`, `ExitCodes.cs`. Selects the providers from `MYSYNC_PROVIDER` and `MYSYNC_PUBLISH_PROVIDER`. |
 
 ### Where abstractions live (critical)
 
@@ -225,8 +233,8 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 
 | Abstraction | Folder | Implemented by |
 |---|---|---|
-| `IShareStore` (+ `ManifestSnapshot`, `StoredObjectInfo`) | `Abstractions/Storage/` | `MySync.Storage.Azure` (later `.S3`) |
-| `IAliasStore` (+ `AliasSnapshot`) | `Abstractions/Storage/` | `MySync.Storage.Azure` `AzureAliasStore` (later `.S3`) |
+| `IShareStore` (+ `ManifestSnapshot`, `StoredObjectInfo`) | `Abstractions/Storage/` | `MySync.Storage.Azure` `AzureBlobShareStore`, `MySync.Storage.S3` `S3ShareStore` |
+| `IAliasStore` (+ `AliasSnapshot`) | `Abstractions/Storage/` | `MySync.Storage.Azure` `AzureAliasStore`, `MySync.Storage.S3` `S3AliasStore` |
 | `IManifestSerializer` | `Abstractions/Storage/` | Infrastructure (shared by every provider, so manifest JSON is identical everywhere) |
 | `ILocalFolder`, `IFileScanner`, `LocalFile`, `ScannedFolder` | `Abstractions/FileSystem/` | Infrastructure |
 | `ILocalFolderFactory` (`OpenPullDestination`) and `ILocalFolder.GetEntryKindAsync` (+ `LocalEntryKind`) | `Abstractions/FileSystem/` | Infrastructure `LocalFolderFactory` (pull: the same `LocalFolder` and `PathResolver` rules for any root; case sensitivity found without writing) |
@@ -244,7 +252,7 @@ These rules are enforced by `tests/mysync/architecture-tests` (NetArchTest). **I
 | `IReleaseSource` (+ `ReleaseInfo`, `ReleaseAsset`) | `Abstractions/Updates/` | `MySync.Updates.GitHub` (GitHub), Infrastructure `DirectoryReleaseSource` (a local folder) |
 | `IExecutableInstaller`, `IUpdateWorkspace` | `Abstractions/Updates/` | Infrastructure `ExecutableInstaller` |
 | `ISiteAssetSource` (+ `SiteAsset`) | `Abstractions/Publishing/` | `MySync.SiteAssets` `EmbeddedSiteAssetSource` |
-| `IPublishTarget` (+ `PublishLocation`, `PublishedBlob`, `CopyMethod`) | `Abstractions/Publishing/` | `MySync.Storage.Azure` `AzureStaticWebsitePublishTarget` |
+| `IPublishTarget` (+ `PublishLocation`, `PublishedBlob`, `CopyMethod`, `CopySource`, `NativeObjectReference`) | `Abstractions/Publishing/` | `MySync.Storage.Azure` `AzureStaticWebsitePublishTarget`, `MySync.Storage.S3` `S3PublishTarget`; the CLI's `UnconfiguredPublishTarget` for an unknown `MYSYNC_PUBLISH_PROVIDER` |
 | `IPublicationVerifier`, `ISiteDataSerializer` | `Abstractions/Publishing/` | Infrastructure `HttpPublicationVerifier`, `SiteDataSerializer` |
 | `IPublicationRegistrySerializer` | `Abstractions/Storage/` | Infrastructure (shared by every provider, like the manifest's) |
 
@@ -349,7 +357,7 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 
 - **Use `Host.CreateEmptyApplicationBuilder(...)`, not `CreateApplicationBuilder`.** The default builder adds `appsettings.json` and user-secret sources from the content root, and for a CLI the content root is **the folder being synced**. A user's `appsettings.json` would then silently configure mysync. Add **only** `AddEnvironmentVariables()`.
 - Logging is **Serilog writing to stderr**. Default level is `Warning`, `--verbose` → `Debug`, `--quiet` → `Error`. Nothing logs to stdout, because stdout carries `--json` output.
-- Register `AddApplication()`, `AddInfrastructure()`, then the provider chosen by `MYSYNC_PROVIDER` (`azure-blob` → `AddAzureBlobStorage()`). An unknown provider is a configuration error (exit `2`), reported when a command needs storage, not at startup. `AddInfrastructure()` takes the share root (`ShareRoot`) from the current directory unless one is registered first (tests register a temp folder).
+- Register `AddApplication()`, `AddInfrastructure()`, then the provider chosen by `MYSYNC_PROVIDER` (`azure-blob` → `AddAzureBlobStorage()`, `s3` → `AddS3Storage()`) and the publish target chosen by `MYSYNC_PUBLISH_PROVIDER` (default: the same; `AddAzureStaticWebsitePublishing()` / `AddS3Publishing()`). An unknown provider is a configuration error (exit `2`), reported when a command needs storage, not at startup. **`MYSYNC_PROVIDER` leads:** it decides which variables are read and required, and the other provider's are ignored (only the chosen provider's options are even registered), so both sets can sit in one environment. `AddInfrastructure()` takes the share root (`ShareRoot`) from the current directory unless one is registered first (tests register a temp folder).
 - Commands are registered with `consoleApp.Add<T>()`. Global options (`--verbose`, `--quiet`, `--json`, `--parallel`) use ConsoleAppFramework's global-options support.
 - **Don't use `builder.ToConsoleAppBuilder()`.** As soon as `ConfigureGlobalOptions` is called, ConsoleAppFramework builds its own (empty) service provider after parsing and replaces the host's, so no handler resolves. Instead `ConsoleApp.Create().ConfigureContainer(new HostServiceProviderFactory(builder))`: ConsoleAppFramework then builds the host itself, after global options are parsed, and the parsed `GlobalOptions` is registered into the same container via `ConfigureServices`.
 - `--verbose` / `--quiet` set a Serilog `LoggingLevelSwitch` from inside the `ConfigureGlobalOptions` callback. Write that lambda's parameter type out (`(ref ConsoleApp.GlobalOptionsBuilder options) => …`): with the inferred C# 14 form `(ref options)`, the ConsoleAppFramework 5.7.13 generator fails with a NullReferenceException (CS8785).
@@ -405,19 +413,26 @@ Decorator registration order defines wrapping order. New concerns (timing, metri
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `AZURE_STORAGE_CONNECTION_STRING` | yes (for storage commands) | Storage account connection string. `UseDevelopmentStorage=true` targets local Azurite. |
-| `MYSYNC_CONTAINER` | no | Blob container name. Default `mysync`. |
-| `MYSYNC_PROVIDER` | no | Default `azure-blob`. Reserved for future providers. |
+| `AZURE_STORAGE_CONNECTION_STRING` | with `azure-blob` | Storage account connection string. |
+| `MYSYNC_CONTAINER` | no | Blob container name. Default `mysync`. Azure only. |
+| `MYSYNC_PROVIDER` | no | `azure-blob` (default) or `s3`. It decides which of the variables below are read and required; the other provider's are ignored. |
+| `MYSYNC_S3_BUCKET` | with `s3` | The share bucket (must exist; never created). No dots in the name. |
+| `MYSYNC_S3_REGION` | with `s3`, else `AWS_REGION` | The bucket's region. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_EC2_METADATA_DISABLED`, … | with `s3` | The standard AWS credential chain, in the `aws` CLI's order: keys in the environment; the `AWS_PROFILE` (or `default`) profile of any kind, SSO and assumed roles included; web identity; ECS; the EC2 instance role. Read by the SDK, never stored. |
+| `MYSYNC_PUBLISH_PROVIDER` | no | Where publications go: `azure-blob` or `s3`. Default: `MYSYNC_PROVIDER`. Mixed providers stream every file. |
+| `MYSYNC_PUBLISH_S3_BUCKET` | for S3 publishing | The public publishing bucket (§10a). No dots. |
+| `MYSYNC_PUBLISH_S3_REGION` | no | Its region. Default: the share's (`MYSYNC_S3_REGION`, then `AWS_REGION`). |
+| `MYSYNC_PUBLISH_AWS_PROFILE` | no | A credential profile for publishing only; copies are then streamed (that identity may not read the share bucket). |
 | `MYSYNC_PARALLELISM` | no | Max concurrent transfers. Default `min(ProcessorCount * 2, 16)`. `--parallel` overrides it. |
 | `MYSYNC_COMPRESSION_LEVEL` | no | gzip level for uploads to a share with compression on: `fastest` (default) or `optimal`. Anything else is `ConfigurationErrors.Invalid` (exit `2`). |
 | `MYSYNC_PUBLISH_CONNECTION_STRING` | for `publish`, `unpublish`, and `delete` of a share that has publications | The **publishing** account (static website hosting on). May be the private account (`publish` warns); a separate one is better. A secret, like the other connection string. |
-| `MYSYNC_PUBLISH_BASE_URL` | same | The public URL of that account's static website, absolute `https` (e.g. `https://<account>.z13.web.core.windows.net`, or a custom domain). A connection string can't tell it, and mysync uses no management credentials. |
+| `MYSYNC_PUBLISH_BASE_URL` | same | The public URL of that account's static website, absolute `https` (e.g. `https://<account>.z13.web.core.windows.net`, or a custom domain); on S3 the bucket's REST address `https://<bucket>.s3.<region>.amazonaws.com` or CloudFront in front of it (the website endpoint is http only). A connection string can't tell it, and mysync uses no management credentials. |
 | `MYSYNC_UPDATE_SOURCE`, `GITHUB_TOKEN` | no | `update` only (§10). |
 
 - Options bind from environment variables into `AzureStorageOptions` / `PublishStorageOptions` / `SyncOptions`. They're **not validated at startup**, so `mysync --help` and `--version` work with nothing configured. A missing variable surfaces as `ConfigurationErrors.Missing(name)` → exit `2`, with a one-line message naming the variable. A malformed connection string or an invalid container name is `ConfigurationErrors.Invalid(name, reason)` (also exit `2`); the reason never contains the connection string. The Azure store reads its settings on first use, so the error comes from whichever call needs storage.
 - **Never prompt** for any credential or setting.
 - **Never print, log or store the connection string or account key**, including in exceptions, `--verbose` output, `--json` output and `.mysynctool`. `ConnectionStringRedactor` (`AccountKey=***`, `SharedAccessSignature=***`) is applied to anything from the Azure SDK that might echo it.
-- `.mysynctool` records the **provider, account name and container**, never secrets. If the current environment points at a different account or container than the one recorded, fail (`StateErrors.StorageMismatch`) rather than syncing against the wrong place.
+- `.mysynctool` records the **provider, account name and container** (S3: `s3`, the region, the bucket), never secrets. If the current environment points at a different account or container than the one recorded, fail (`StateErrors.StorageMismatch`) rather than syncing against the wrong place.
 - The container is created (`CreateIfNotExists`) only by the **create-share** flow.
 
 ---
@@ -446,7 +461,7 @@ Everything for a share lives under one prefix in the container. Key building is 
 - Object blob metadata: `sha256=<hex>`, `size=<bytes>` (always the **uncompressed** size), and for a gzip object `storedsize=<bytes>` plus `Content-Encoding: gzip`. Content-Type `application/octet-stream`. An unknown `Content-Encoding` is `Storage.UnsupportedEncoding` ("upgrade mysync", exit `8`), never guessed. Manifests are `application/json`, written byte-for-byte as `IManifestSerializer` produced them.
 - Identical files in a share are stored once. Renames cost nothing (only the manifest changes).
 - Dedupe is **per share**, not across shares. Shares stay independent, which keeps GC and deletion trivial.
-- `ShareLayout` is provider-agnostic (an S3 provider uses the same keys). Keep it flexible enough to move to one container per share later (§19).
+- `ShareLayout` is provider-agnostic: an S3 bucket holds exactly the keys an Azure container does. Keep it flexible enough to move to one container per share later (§19).
 
 ### Manifest (`manifest.json`)
 
@@ -823,13 +838,13 @@ Mapped from `Error.Code` (failures) or from the report (partial successes). Noth
 |---|---|---|
 | 0 | Success, nothing notable | |
 | 1 | Unexpected error | unhandled exception |
-| 2 | Usage or configuration error | `ValidationError`, `ConfigurationErrors.*`, `resolve` on a non-conflicted path; `ShareErrors.NameRequired`, `InvalidName`, `InvalidReference`; `Cli.NameWithShareReference`, `Cli.RenameNeedsName`; `DiffErrors.PathNotFound`, `VersionMissing`, `PrintNeedsOnePath`, `PrintCombined`, `Diff.InvalidContext`, `Diff.InvalidPrint`; `Cli.CompressionNeedsOnOrOff`; `PublishErrors.StaticWebsiteDisabled`, `IndexDocumentMismatch`, `OtherAccount`, `PublicationsNeedSettings`; `PushErrors.DuplicateSource`, `SourceNotFound`, `InvalidTarget`, `CreateNeedsName`, `InvalidSince`, `InvalidPattern`, `InvalidSize`, `Cli.PushNeedsShare`, `PullErrors.PathNotFound`, `DuplicateTarget`, `HostNotFound`, `LatestWithPaths`, `HostNeedsLatest`, `Cli.PullNeedsShare`, `TuiErrors.NotATerminal`, `TooSmall`; `CloneErrors.FolderRequired`, `Cli.CloneNeedsShare` |
+| 2 | Usage or configuration error | `ValidationError`, `ConfigurationErrors.*` (including `WrongRegion`, `BucketNotFound`, no AWS credentials), `StorageErrors.ClockSkew`, `PublishErrors.NotPublic`, `PublicListing`, `resolve` on a non-conflicted path; `ShareErrors.NameRequired`, `InvalidName`, `InvalidReference`; `Cli.NameWithShareReference`, `Cli.RenameNeedsName`; `DiffErrors.PathNotFound`, `VersionMissing`, `PrintNeedsOnePath`, `PrintCombined`, `Diff.InvalidContext`, `Diff.InvalidPrint`; `Cli.CompressionNeedsOnOrOff`; `PublishErrors.StaticWebsiteDisabled`, `IndexDocumentMismatch`, `OtherAccount`, `PublicationsNeedSettings`; `PushErrors.DuplicateSource`, `SourceNotFound`, `InvalidTarget`, `CreateNeedsName`, `InvalidSince`, `InvalidPattern`, `InvalidSize`, `Cli.PushNeedsShare`, `PullErrors.PathNotFound`, `DuplicateTarget`, `HostNotFound`, `LatestWithPaths`, `HostNeedsLatest`, `Cli.PullNeedsShare`, `TuiErrors.NotATerminal`, `TooSmall`; `CloneErrors.FolderRequired`, `Cli.CloneNeedsShare` |
 | 3 | Completed, but one or more conflicts were dropped and logged (still open) | `SyncReport.Conflicts` non-empty (takes precedence over 9) |
 | 4 | Folder precondition failed, or the name is taken | `ShareErrors.FolderNotEmpty`, `AlreadyAShare`, `NotAShare`, `UnsafeRoot`, `NameTaken`; `UpdateErrors.NotWritable`, `NotInstalledBinary`; `PushErrors.SourceIsTheShare`, `TargetIsAFile`; `PullErrors.DestinationOccupied`, `DestinationIsTheShare`; `CloneErrors.TargetIsAFile`, `InsideAShare`, `CannotCreate` (and `clone`'s own `Shares.FolderNotEmpty` / `UnsafeRoot` wording) |
 | 5 | Remote concurrency retries exhausted | `SyncErrors.CommitRetriesExhausted` (push: after 20 attempts), `SyncErrors.ShareChangedDuringGc`, `PublishErrors.RegistryRetriesExhausted` |
 | 6 | Another mysync process holds the lock for this folder | `StateErrors.FolderLocked`; `TuiErrors.AlreadyRunning` (another `mysync tui` here) |
 | 7 | Safety guard tripped (mass delete) | `SyncErrors.MassDeleteBlocked` |
-| 8 | Share not found, deleted, unfinished or no such name, or storage auth failure; no such release or publication | `ShareErrors.NotFound`, `ShareErrors.Deleted`, `NameNotFound`, `Incomplete`, `DiffErrors.VersionNotStored`, `StorageErrors.UnsupportedEncoding`, `StorageErrors.Unauthorized`, `UpdateErrors.ReleaseNotFound` / `NoBuildForPlatform`, `PublishErrors.NotFound` / `RevisionNotFound` / `Unauthorized` / `CannotReadServiceProperties`, `PullErrors.NoPushes` |
+| 8 | Share not found, deleted, unfinished or no such name, or storage auth failure; no such release or publication | `ShareErrors.NotFound`, `ShareErrors.Deleted`, `NameNotFound`, `Incomplete`, `DiffErrors.VersionNotStored`, `StorageErrors.UnsupportedEncoding`, `StorageErrors.Unauthorized` (also an expired AWS session), `UpdateErrors.ReleaseNotFound` / `NoBuildForPlatform`, `PublishErrors.NotFound` / `RevisionNotFound` / `Unauthorized` / `CannotReadServiceProperties`, `PullErrors.NoPushes` |
 | 9 | Completed, but some paths were skipped (locked, unstable, invalid name) | `SyncReport.Skipped`, `PushReport.Skipped` or `PullReport.Skipped` non-empty (push never exits 3 or 7; pull never 3, 5 or 7) |
 | 10 | Published, but the publication couldn't be opened anonymously (check `MYSYNC_PUBLISH_BASE_URL`) | `PublishReport.Verified` false |
 | 130 | Cancelled (Ctrl+C) | `OperationCanceledException` from the caller's token; `mysync tui` ended by a second Ctrl+C (or a stop) during a job |
@@ -869,25 +884,38 @@ $web/
 
 ### Headers and the disposition policy
 
-- **Compressed objects stay compressed** on the way to `$web`: a server-side copy carries the source object's encoding to the published blob (`PublishedBlob.ContentEncoding`, `Content-Encoding: gzip`), learned from one listing of the share's objects (no download). Browsers, `curl --compressed` (`download.sh`) and PowerShell (`download.ps1`, which also gunzips itself if a PowerShell didn't: only a file that still starts like gzip and fails its hash, so a real `.gz` is never touched) all end up with the original bytes, and both scripts verify the SHA-256 of the **decoded** file. `site-data.js` sizes and hashes are uncompressed. The streamed fallback (no SAS) decodes through `ObjectCodec` and publishes **raw**. Checked against a real static website by `real-azure.yml` (2026-11-22: served with the header, decoded by every client).
+- **Compressed objects stay compressed** on the way to `$web`: a server-side copy carries the source object's encoding to the published blob (`PublishedBlob.ContentEncoding`, `Content-Encoding: gzip`), learned from one listing of the share's objects (no download). Browsers, `curl --compressed` (`download.sh`) and PowerShell (`download.ps1`, which also gunzips itself if a PowerShell didn't: only a file that still starts like gzip and fails its hash, so a real `.gz` is never touched) all end up with the original bytes, and both scripts verify the SHA-256 of the **decoded** file. `site-data.js` sizes and hashes are uncompressed. The streamed fallback (no SAS) decodes through `ObjectCodec` and publishes **raw**. Checked against a real static website by the Azure storage tests in CI (`ARealStaticWebsite_Should_ServeGzipFiles…`; first on 2026-11-22: served with the header, decoded by every client); on S3 the public bucket serves the header too (`APublishedFile_Should_BeServedAnonymously…`).
 - `Content-Type` from `ContentTypeMap` (by extension; default `application/octet-stream`). The page's own files: `text/html|javascript|css|plain; charset=utf-8` (a module script with the wrong type doesn't run).
 - `Content-Disposition` from `DispositionPolicy`: `attachment; filename*=UTF-8''<RFC 8187-encoded name>`, except **inline** for `.txt .md .log .csv .json .pdf .png .jpg .jpeg .gif .webp`. **Never** inline `.html .htm .svg .xml .xhtml .js`: they would run script on the publishing origin, next to every other publication. The same answer goes into `site-data.js`, so the page opens inline files in a new tab and downloads the rest.
 - `Cache-Control`: `public, max-age=31536000, immutable` for published files and the page's assets; `no-cache` for `index.html`, `site-data.js`, the checksums and scripts, so `unpublish` takes effect.
 
 ### `publish` (`PublishShareCommand`)
 
-Preflight, before anything is written: the share (this folder's, or `--share <id>`); `MYSYNC_PUBLISH_CONNECTION_STRING` and an absolute `https` `MYSYNC_PUBLISH_BASE_URL` (`ConfigurationErrors` → `2`); same account → warning; static website on with `index.html` (`PublishErrors.StaticWebsiteDisabled` / `IndexDocumentMismatch`, with the exact `az storage blob service-properties update … --static-website --index-document index.html --404-document 404.html`; a credential that can't read service properties says so; mysync never turns it on); not the Debug placeholder (`Publish.SiteAssetsMissing`); HEAD (or `--revision n` from history) loads and isn't the deleted marker. Publishing this folder's share at HEAD runs the read-only preview (`status`) and warns if there are unsynced changes: the publication is the last **synced** state.
+Preflight, before anything is written: the share (this folder's, or `--share <id>`); the publishing settings and an absolute `https` `MYSYNC_PUBLISH_BASE_URL` (`ConfigurationErrors` → `2`); same account → warning (`IPublishTarget.SharesAccountWith`: same provider and the same account, or the same bucket on S3); **`IPublishTarget.PreflightAsync`**, the target's own readiness check, of which the application knows only "ready or not" (Azure: static website on with `index.html`, `PublishErrors.StaticWebsiteDisabled` / `IndexDocumentMismatch`, with the exact `az storage blob service-properties update … --static-website --index-document index.html --404-document 404.html`; a credential that can't read service properties says so; mysync never turns it on. S3: see "Publishing on S3" below); not the Debug placeholder (`Publish.SiteAssetsMissing`); HEAD (or `--revision n` from history) loads and isn't the deleted marker. Publishing this folder's share at HEAD runs the read-only preview (`status`) and warns if there are unsynced changes: the publication is the last **synced** state.
 
 Then, in order:
 1. A `pending` record in `publications.json` (`PublicationRegistryUpdater`: ETag read-modify-write, the manifest's retry rules). Whatever follows can always be found and removed.
 2. The `$web` root files, `If-None-Match: *`.
-3. Every file, in parallel (`--parallel` / `MYSYNC_PARALLELISM`), **server-side**: the private store gives a short-lived read-only SAS URL per object (`GetObjectReadUrlAsync`); the target copies with **Put Blob From URL** up to 5000 MiB, else **Put Block From URL** blocks (256 MiB) + commit, both setting the headers (`AzureCopyLimits` holds the limits, checked 2026-11-18). If the private credential can't sign (`null` URL), the object is streamed through this machine, decoded and its hash checked on the way (mismatch → `Storage.CorruptObject`, the blob deleted), published raw, and the output says so. The first failure stops the other copies.
+3. Every file, in parallel (`--parallel` / `MYSYNC_PARALLELISM`), **server-side** where the target can: the share's store offers a `CopySource` per object (`IShareStore.GetCopySourceAsync`: a short-lived readable URL, a native object reference, or both), and `IPublishTarget.CanCopy` says whether the target can use it. Azure copies from any readable URL (an Azure SAS, or an S3 presigned GET) with **Put Blob From URL** up to 5000 MiB, else **Put Block From URL** blocks (256 MiB) + commit, both setting the headers (`AzureCopyLimits`, checked 2026-11-18); S3 copies only an S3 object signed with its own credentials (`NativeObjectReference.CredentialScope`): **CopyObject** with `MetadataDirective=REPLACE` up to 5 GiB, a **multipart copy** (UploadPartCopy) above, aborted on failure. Otherwise (a credential that can't sign, an Azure share published to S3, another publishing profile) the object is streamed through this machine, decoded and its hash checked on the way (mismatch → `Storage.CorruptObject`, the blob deleted), published raw, and the output says so. The first failure stops the other copies.
 4. The page's assets, then `site-data.js`, `SHA256SUMS.txt`, `download.sh`, `download.ps1` (`DownloadScripts`: `sh` single-quotes every path; `ps1` carries paths as base64 UTF-8, ASCII only, because PowerShell also takes curly quotes as string delimiters).
 5. **`p/<publishId>/index.html` last** (`If-None-Match: *`): the commit point.
 6. The record becomes `published` (URL, revision, files, bytes, created, by, publishing account, `siteAssetsVersion`).
-7. **Verification:** `HttpPublicationVerifier` GETs `<url>site-data.js` anonymously (no credentials, three tries) and looks for the publication ID. Failure leaves the publication up, sets `PublishReport.Verified = false`, and the CLI exits `10`, pointing at `MYSYNC_PUBLISH_BASE_URL`.
+7. **Verification:** `HttpPublicationVerifier` GETs `<folder>/site-data.js` anonymously (no credentials, three tries) and looks for the publication ID; a status in the target's `PublishLocation.NotServedStatusCodes` is reported as "not served" (Azure: 404; S3: 403 and 404, since S3 answers 403 for a missing key to anyone who can't list the bucket). Failure leaves the publication up, sets `PublishReport.Verified = false`, and the CLI exits `10`, pointing at `MYSYNC_PUBLISH_BASE_URL`.
+
+**Links:** `PublicationLayout.FolderUrl` is `<base>/p/<id>/`, where the download scripts and `site-data.js` are; `PublicationLayout.Url(base, servesIndexDocuments)` is the link people open: the folder where the host serves index documents (`PublishLocation.ServesIndexDocuments`, Azure), else `<folder>index.html` (S3's REST address). The link is what's printed, in `--json` `url` and in the registry record; the one-liners use the folder.
 
 Failure or Ctrl+C before step 5: best-effort delete of `p/<publishId>/` and the record marked `failed` (`unpublish` removes whatever cleanup couldn't).
+
+### Publishing on S3 (`S3PublishTarget`)
+
+A dedicated public bucket (`MYSYNC_PUBLISH_S3_BUCKET`), served over **HTTPS** through its REST address `https://<bucket>.s3.<region>.amazonaws.com` (bucket policy: anonymous `s3:GetObject` on `p/*` and `robots.txt` only) or CloudFront in front of it; the S3 website endpoint is http only and refused. **No dots in the bucket name** (they break TLS on the virtual-hosted address). `ServesIndexDocuments = false`; "not served" is 403 or 404. `PublishLocation.AccountName` is `s3://<bucket>`, so an Azure record can never match it.
+
+`PreflightAsync`, in order, before anything is copied:
+1. The bucket exists in the configured region (`GetBucketLocation`; else `Configuration.WrongRegion` / `BucketNotFound`). This also resolves the credentials, whose scope `CanCopy` compares.
+2. **The anonymous probe:** `p/.mysync-probe-<random>` (`text/plain`, a random token) uploaded, read back with a plain `HttpClient` through `MYSYNC_PUBLISH_BASE_URL` (200 with the token, three tries), deleted whatever happens. Otherwise `Publish.NotPublic` (exit 2), with the bucket policy to apply and the three things that block it (the bucket's Block Public Access, the account-level Block Public Access, an organisation policy), since mysync can't tell them apart.
+3. **No public listing:** an anonymous `GET <base>/?list-type=2&prefix=p/` must not return a `ListBucketResult`; else `Publish.PublicListing` (exit 2). A listing would reveal every publication ID, the links' only secret.
+
+Uploads are PutObject (or a multipart upload, through `S3Uploader`) with `Content-Type`, `Content-Disposition`, `Cache-Control` and `Content-Encoding`; root files `If-None-Match: *`. `DeletePrefixAsync` lists, deletes the publication's `index.html` first on its own, then the rest in `DeleteObjects` batches of 1,000, checking every per-key error of each 200 answer. Never an ACL, never a bucket setting.
 
 ### `publications`, `unpublish`, and `delete`
 
@@ -999,7 +1027,7 @@ public interface IShareStore
     Task<Result> DeleteObjectAsync(ShareId shareId, ContentHash hash, CancellationToken ct);                // missing = success
 
     // Publishing (§10a)
-    Task<Result<Uri?>> GetObjectReadUrlAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken ct); // read-only SAS; null = can't sign → stream
+    Task<Result<CopySource?>> GetCopySourceAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken ct); // a readable URL and/or the object natively; null = stream
     Task<Result<PublicationsSnapshot?>> GetPublicationsAsync(ShareId shareId, CancellationToken ct);       // null value = none yet
     Task<Result<string>> PutPublicationsAsync(ShareId shareId, PublicationRegistry registry, string? ifMatchETag, CancellationToken ct); // null ETag = If-None-Match: *; else If-Match; PreconditionFailed
     Task<Result> DeletePublicationsAsync(ShareId shareId, CancellationToken ct);                           // missing = success
@@ -1010,14 +1038,43 @@ public sealed record PublicationsSnapshot(PublicationRegistry Registry, string E
 public sealed record StoredObjectInfo(ContentHash Hash, long Size, DateTimeOffset LastModifiedUtc);
 ```
 
-- **Every method returns `Result` / `Result<T>`.** The provider translates its SDK's failures into `StorageErrors` (`NotFound`, `PreconditionFailed`, `AlreadyExists`, `Unauthorized`, `Unreachable`, `Timeout`). Application code never sees `Azure.RequestFailedException`. Only `OperationCanceledException` from the caller's own token propagates.
+- **Every method returns `Result` / `Result<T>`.** The provider translates its SDK's failures into `StorageErrors` (`NotFound`, `PreconditionFailed`, `AlreadyExists`, `Unauthorized`, `Unreachable`, `Timeout`, `ClockSkew`, `TooLarge`) and `ConfigurationErrors`. Application code never sees `Azure.RequestFailedException` or `AmazonS3Exception`. Only `OperationCanceledException` from the caller's own token propagates.
 - Azure-specific retries use the SDK's built-in retry policy (exponential, ~5 tries). The pipeline's own retry is only for manifest precondition failures.
 - `AzureBlobShareStore` gets `IManifestSerializer` injected. It never serializes manifests itself.
 - **Objects carry an encoding** (`ObjectUpload`, `StoredObject`). `UploadObjectAsync(shareId, hash, ObjectUpload)` stores the bytes as given (raw or gzip) with that `Content-Encoding`; `size` metadata stays the **uncompressed** size, and a gzip object also gets `storedsize`. No length up front and no seekable stream: the Azure store stages blocks as it reads (nothing visible until the block list is committed), so a compressed upload streams through without a temporary file. **Integrity:** after the last byte the store calls `ObjectUpload.Verify` (the producer hashed the uncompressed bytes in the same pass that fed the compressor) and commits only if it succeeds; for raw bytes it also checks SHA-256 and length itself (`Storage.HashMismatch`). `OpenObjectReadAsync` returns the **stored** bytes, their encoding and length, never decoded; an unknown `Content-Encoding` is `Storage.UnsupportedEncoding` (also in listings, which report each object's encoding and stored length).
-- **The Azure SDK doesn't decode `Content-Encoding: gzip`** (checked 2026-11-22, Azure.Storage.Blobs on Azurite): a GET answers with that header and the client still returns the compressed bytes, and `OpenReadAsync` reads ranges of the blob as stored. Pinned by the contract case `AGzipObject_Should_ReadBackAsStored_NotDecoded` and the Azure-only `AGzipObject_Should_CarryContentEncoding…`, so a change in the SDK fails a test rather than decoding twice.
+- **The Azure SDK doesn't decode `Content-Encoding: gzip`** (checked 2026-11-22, Azure.Storage.Blobs): a GET answers with that header and the client still returns the compressed bytes, and `OpenReadAsync` reads ranges of the blob as stored. Pinned by the contract case `AGzipObject_Should_ReadBackAsStored_NotDecoded` and the Azure-only `AGzipObject_Should_CarryContentEncoding…`, so a change in the SDK fails a test rather than decoding twice.
 - Azure details (`libs/mysync/storage-azure`): a missing container or blob reads as "no share" (`GetManifestAsync` → null, listings → empty), never an error. `ReplaceManifestAsync` maps both 412 and 404 to `PreconditionFailed`, so the pipeline re-reads. `AzureErrorMapper` maps 401/403 → `Unauthorized`, 404 → `NotFound`, 408 and network timeouts → `Timeout`, 409 → `AlreadyExists`, 412 → `PreconditionFailed`, no response or 5xx after retries → `Unreachable`. No `Error` carries SDK text; the SDK's message goes to the debug log through `ConnectionStringRedactor`. `AzureTransferSettings` (block size, retries, timeout) is fixed in production; tests use small blocks and fewer retries.
-- `MySync.Testing` provides an `InMemoryShareStore` that enforces ETag semantics exactly like Azure (`If-Match`, `If-None-Match: *`). Most pipeline tests run against it. Its behaviour is pinned against Azurite by a shared contract-test suite (§14).
-- Future S3 provider: S3 supports conditional writes (`If-None-Match` / `If-Match` on PutObject). Verify that against the target S3-compatible service before relying on it, keep the same commit protocol, and run the same contract-test suite against it.
+- `MySync.Testing` provides an `InMemoryShareStore` that enforces ETag semantics exactly like Azure (`If-Match`, `If-None-Match: *`). Most pipeline tests run against it. Its behaviour is pinned against real Azure and real S3 by the shared contract-test suites (§14).
+
+### S3 differences (`libs/mysync/storage-s3`)
+
+AWS S3 general purpose buckets only, through `AWSSDK.S3`; **S3-compatible services are not supported** and there is no endpoint setting. The layout is `ShareLayout`'s, key for key. Where copying the Azure store's logic would be wrong:
+
+- **Conditional requests have three outcomes.** 412 is the answer (`AlreadyExists` for a create, `PreconditionFailed` for a replace or delete; never retried). **409 ConditionalRequestConflict on PutObject** means a concurrent request got in the way and the outcome is undecided: the same PutObject is retried with back-off (`S3TransferSettings.ConditionalConflictAttempts`, then `Unreachable`), so a 409 never reaches the commit loop as a lost race. **409 on CompleteMultipartUpload** kills the upload: it is aborted, the object HEADed (a competing upload of the same content may have stored it: success), and the upload restarted from the start of the content when it can be read again, else `Unreachable` (the next run uploads it). **404 on an `If-Match` write or delete** (the key is gone) is `PreconditionFailed`, as on Azure. Conditional deletes (aliases) are `DeleteObject` with `If-Match`, which needs `s3:GetObject` as well as `s3:DeleteObject`.
+- **ETags follow the content, not the write.** Identical bytes get the same ETag (pinned by `IdenticalBytes_Should_KeepTheirETag_OnS3`), and a metadata-only change keeps it. Every `If-Match` decision therefore depends on the body alone: a manifest's bytes change with every commit (the revision; `ManifestSerializerTests.EveryCommit_Should_ChangeTheBytes…`), `publications.json` changes with every record change, and **an alias's body holds the share ID** (and when and who), so a name re-pointed at another share has another ETag and a stale conditional delete can't remove it (`AliasStoreContractTests.AnAliasRecreated_ForAnotherShare…`). The body is the source of truth (`GetAsync` reads it); the `x-amz-meta-*` copy is for listing. An alias deleted and recreated for the same share by the same person at the same instant keeps its ETag; a stale delete then removes an alias saying exactly what the caller read, which is accepted. ETags are opaque: passed back as S3 returned them, quotes included, never read as an MD5.
+- **A listing returns neither metadata nor `Content-Encoding`:** `S3AliasStore.ListAsync` is one ListObjectsV2 of `aliases/` plus a HEAD per alias, and `S3ShareStore.ListObjectsAsync` a HEAD per object, at most `MYSYNC_PARALLELISM` at once. `aws-chunked` in a returned `Content-Encoding` (an upload's framing) is ignored.
+- **403 can mean "missing".** Without `s3:ListBucket`, S3 answers 403 for a key that doesn't exist. The documented policy grants it, so on the share bucket 404 means missing and a 403 on a read is `Unauthorized` with that hint, never "not found". Anonymous readers of the publishing bucket never have it: `NotServedStatusCodes` is {403, 404}.
+- **Uploads of unknown length** (gzip): up to one part is read; if the content ends inside it, one conditional PutObject; else a multipart upload, part by part, holding one part in memory, with `If-None-Match: *` on the completion and the hash check before it (`S3Uploader`). Part sizes (`S3PartSizes`): known length `max(16 MiB, ceil(length / 10,000))`; unknown length starts there for the uncompressed size and doubles every 1,000 parts up to 1 GiB, about 4.87 TiB in 10,000 parts from 16 MiB; past that `Storage.TooLarge`, never an SDK error at part 10,001. A failed or cancelled multipart upload is aborted (best effort; the setup guide's lifecycle rule removes what can't be). Limits in `S3Limits` (5 MiB–5 GiB parts, 10,000 parts, 5 TiB objects, 5 GiB PutObject/CopyObject).
+- **Credentials** are resolved **once, on first use** (`S3Connection`), so `--help`, `--version` and `self-check` never touch them: keys in the environment; else the `AWS_PROFILE` (or `default`) profile through `CredentialProfileStoreChain`, of any kind (the SDK's default chain refuses SSO profiles); else the rest of the chain (web identity, ECS, the EC2 instance role, which fails within about a second off EC2; `AWS_EC2_METADATA_DISABLED` skips it). Nothing found is `Configuration.Missing` listing the sources; an expired or never-started SSO session is `Unauthorized` with "run `aws sso login`"; an SSO portal or STS out of reach is `Unreachable`. `AWSSDK.SSO`, `AWSSDK.SSOOIDC` and `AWSSDK.SecurityToken` are referenced because the SDK loads them by name for those profiles (checked in the published single-file binary). The credential scope (`aws:` + a hash of the access key ID) decides native copies.
+- **Wrong region and clock:** redirects are never followed (`AllowAutoRedirect = false`); 301 `PermanentRedirect`, 400 `AuthorizationHeaderMalformed` / `IllegalLocationConstraintException` are `Configuration.WrongRegion`, naming the bucket, the configured region and the right one when the body says (`<Region>`, `<Endpoint>`). The SDK's clock-skew correction stays on; a `RequestTimeTooSkewed` that still surfaces is `Storage.ClockSkew` ("off by about N minutes", exit `2`), not `Unauthorized`.
+- **Versioning:** `CountRecoverableCopiesAsync` counts non-current versions and delete markers under the share's prefix when the bucket's versioning is on or suspended (0 when off); `delete` then warns.
+- **Checksums** stay on (the SDK's defaults). **No ACL is ever sent.** Every published object has an explicit `Content-Type`. Redirects, ACLs and bucket settings are never changed by mysync; `.mysynctool` records `s3`, the region and the bucket.
+- **Copy sources:** `GetCopySourceAsync` gives the object natively (`NativeObjectReference`: `s3`, region, bucket, key, credential scope) and a presigned GET (at most an hour; it dies with temporary credentials that signed it).
+- **Redaction:** `S3Redactor` masks `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` values (and their config-file spellings) and a presigned URL's `X-Amz-Signature`, `X-Amz-Credential` and `X-Amz-Security-Token`; the CLI applies it with `ConnectionStringRedactor` to anything unexpected.
+
+**S3 error mapping (`S3ErrorMapper`, the one place):**
+
+| S3 | mysync |
+|---|---|
+| 412 PreconditionFailed | `PreconditionFailed` (`AlreadyExists` for an `If-None-Match` create) |
+| 409 ConditionalRequestConflict | PutObject: retried; CompleteMultipartUpload: aborted and restarted (above); left over: `Unreachable` |
+| 503 SlowDown, 500, timeouts, connection failures | the SDK's retries, then `Unreachable` / `Timeout` |
+| 404 NoSuchKey (HEAD: a body-less 404) | `NotFound` (or null / false / `PreconditionFailed` where the method says so) |
+| 404 NoSuchBucket | `Configuration.BucketNotFound`, naming the bucket and region |
+| 403 AccessDenied | `Unauthorized`, with the `s3:ListBucket` hint on reads and the `s3:GetObject` hint on conditional deletes |
+| 403 InvalidAccessKeyId, SignatureDoesNotMatch; ExpiredToken | `Unauthorized` (with the `aws sso login` hint for an expired session) |
+| 403 RequestTimeTooSkewed | `Storage.ClockSkew` (exit 2) |
+| 301 PermanentRedirect, 400 AuthorizationHeaderMalformed, IllegalLocationConstraint | `Configuration.WrongRegion` |
 
 ---
 
@@ -1051,13 +1108,15 @@ public sealed record StoredObjectInfo(ContentHash Hash, long Size, DateTimeOffse
 | `FluentValidation`, `FluentValidation.DependencyInjectionExtensions` | `MySync.Application` | Command validators (`AddValidatorsFromAssembly`, including internal types) |
 | `Microsoft.Extensions.DependencyInjection.Abstractions`, `Microsoft.Extensions.Options`, `Microsoft.Extensions.Logging.Abstractions` | libraries | `DependencyInjection.cs` extensions, options, `ILogger<T>` |
 | `Azure.Storage.Blobs` | `MySync.Storage.Azure` **only** among libraries (tests and `MySync.Testing` may use it) | Blob provider; the publish target (`Put Blob From URL`, `Put Block From URL`, service properties) |
+| `AWSSDK.S3` | `MySync.Storage.S3` **only** among libraries (tests and `MySync.Testing` may use it) | S3 provider and publish target: conditional PutObject / CompleteMultipartUpload / DeleteObject, multipart, CopyObject, presigning. One release set with the three below (2026-11-10, `AWSSDK.Core` 4.0.103); +1 MB on the `linux-x64` binary |
+| `AWSSDK.SSO`, `AWSSDK.SSOOIDC`, `AWSSDK.SecurityToken` | `MySync.Storage.S3` | Never called directly: the SDK loads them by name for SSO, assumed-role and web-identity profiles, which otherwise fail at runtime |
 | (none) | `MySync.Updates.GitHub` | `update` uses the BCL only: `HttpClient`, `System.Text.Json`, `System.Formats.Tar`, `ZipFile`, `ECDsa` |
 | `SonarAnalyzer.CSharp` | all (via `Directory.Build.props`) | Analyzers |
 | `xunit.v3` | tests | Test framework, on **Microsoft.Testing.Platform** |
 | `Shouldly` | tests | Assertions |
 | `NSubstitute` | tests | Substitutes for abstractions in handler tests |
 | `xunit.v3.extensibility.core` | `MySync.Testing` | `[Fact]` and `TestContext` for the abstract contract suites, without making the library a test project |
-| `Testcontainers.Azurite` | `MySync.Testing`, Azurite-backed suites | Starts the Azurite container. Keep ≥ 4.16: 4.13 pulls in an SSH.NET with known vulnerabilities (NU1903 fails the build) |
+| `xunit.v3.assert` | `MySync.Testing` | `SkipException`: a test whose storage isn't configured skips (`TestStorage`) |
 | `Microsoft.Extensions.DependencyInjection` | tests only | A concrete `ServiceCollection` for DI tests (the libraries reference only the abstractions) |
 | `NetArchTest.Rules` | architecture tests | Dependency rules (§3) |
 | `JsonSchema.Net` | infrastructure tests only | Validates the `site-data.js` mysync writes against `apps/mysync-site/contract/site-data.schema.json` |
@@ -1089,8 +1148,10 @@ Every test project is xUnit v3 on the Microsoft Testing Platform with Shouldly, 
 | `MySync.Domain.UnitTests` (`tests/mysync/domain-unit-tests/`) | `type:unit-test` | `MergePlanner`, `SharePath` / `PathRules`, `MassDeleteGuard`, `ShareLayout`, value objects, `CloneTarget` | none (pure) |
 | `MySync.Application.UnitTests` (`tests/mysync/application-unit-tests/`) | `type:unit-test` | Handlers, validators, `SyncPipeline`, `RemoteCommitter`, decorators | `InMemoryShareStore`, `InMemoryLocalFolder`, NSubstitute for single-failure cases |
 | `MySync.Infrastructure.UnitTests` (`tests/mysync/infrastructure-unit-tests/`) | `type:unit-test` | `LocalFolderContractTests` on disk, `LocalFolder`, `FileScanner`, `Sha256ContentHasher`, hash cache, `JsonShareStateStore`, `FolderLock`, `FileConflictLog` rotation, `GitIgnoreMatcher` (against `git`), `ManifestSerializer` (exact JSON pinned), `PublicationRegistrySerializer` (pinned), `SiteDataContractTests` (generated `site-data.js` against the site's JSON Schema, escaping), `DownloadScriptExecutionTests` (the generated `download.sh` run with real `sh` + `curl` on hostile names), `PatchAppliesWithGitTests` (every `diff` patch turns A into B with `git apply`), `GzipDownloadScriptTests` (both download scripts against a local HTTP server serving gzip, with and without the header; `pwsh` when installed), `LocalSourcesTests` (push's reader on disk: excludes at any depth, symlinks, a file shared with its writer, `.mysynctool` in parents), `PushRecordSerializerTests` (pinned JSON, with and without filters), `DiskPullTests` (pull onto a real disk: mtimes and modes, `--to`, a re-run by content, leftover staging, a symlink in the destination stopping the pull with nothing written outside, the same-share refusal, a dry run writing nothing, the read-only case probe agreeing with the writing one), `DiskCloneTests` (`clone` on a real disk through the real `FolderCloneRunner`: the folder for a name, an ID with one, several or no names, relative and absolute folders, every row of the target table, unresolvable shares creating nothing; the clean-up after a failure, an exception and a cancellation, an existing target kept, something written meanwhile left and reported, an undeletable file reported after the clone's error, skipped paths keeping everything), and `DiskSyncTests`: the real pipeline over two temp folders with `InMemoryShareStore` | real temp directories (`TempShareFolder`), `git`, `sh`, `curl` |
-| `MySync.Storage.Azure.IntegrationTests` (`tests/mysync/storage-azure-integration-tests/`) | `type:integration-test` | `AzureBlobShareStore` against **Azurite**, plus the `IShareStore` **contract suite**; `AzureAliasStore` with the `IAliasStore` contract suite and Azure-only cases (blob shape, damaged and stray aliases, no container); `AzureStaticWebsitePublishTarget` on Azurite's publishing accounts (static website check, headers stored, `If-None-Match` root files, server-side copies incl. multi-block, prefix delete, configuration errors, no key in errors or logs) | Azurite (four accounts) |
-| `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + Azure) with two temp folders as two "machines"; `CompressedShareTests` (a compressed share across two machines: blob properties, multi-block gzip uploads, conflicts, compression off again, byte-identical folders); `Cli/ShellQuoteTests`, `Cli/TerminalTextTests` and `Cli/CloneLocationTests` unit-test those BCL-only CLI helpers (compiled in as linked source); `Cli/CliTests` runs the **built `mysync` as a process** (`CliProcess`, fresh environment, stdin closed) for exit codes, stdout/stderr, `--json` and the no-terminal prompt rule; `PublishingTests` publish, unpublish and delete with the real embedded site; `PushTests` (two servers pushing at once from ordinary folders, the laptop's sync getting both byte for byte, deleting a pushed folder, `--create`, a folder of another share, a folder of the target share refused, a second `--updated-since last` push holding only the changed files, `--include` + `--max-size`) and `Cli/PushCliTests` (option order, plain output, `--json`, dry run, exit codes 0/2/4/8/9; repeated `--exclude` in any position, patterns with brackets and commas, every invalid filter value, the filter line, `filters` / `filteredOut`; `--create --compress` making a format-3 share a laptop clones byte for byte, `--compress` on an existing share warning); `PullTests` (a collector pulling `--latest` from two servers, then one folder with `--to`; an ordinary share pulled without changing its HEAD; a pull into the share's own folder refused) and `Cli/PullCliTests` (option order, repeated `--host`, `--json`, a re-run, dry run, exit codes 0/2/4/8/9); `TuiTests` (the runtime with a scripted terminal on the real composition: upload, another machine's change downloaded, a conflict recorded by a sync and resolved with `m`, a folder pushed with `--create` to a second share that a third machine pulls), `Cli/TuiCliTests` (no terminal → 2; in a pseudo-terminal via `script`: too small → 2, no `--name` → 2 and no screen, a taken name → 4, a second instance → 6) `Cli/SwitchableLogSinkTests` (nothing logged to the console while held) and `Cli/CloneCliTests` (`clone <name>` creating the folder and a sync there both ways, `clone <id> <folder>` with the quoted `cd` hint, the current folder, a second clone and a non-empty folder refused, `--json`'s `folder` / `createdFolder`, exit codes 0/2/4/8, `sync <share>` unchanged) | Azurite |
+| `MySync.Storage.Azure.IntegrationTests` (`tests/mysync/storage-azure-integration-tests/`) | `type:integration-test` | `AzureBlobShareStore` against the **real Azure test account**, plus the `IShareStore` **contract suite**; `AzureAliasStore` with the `IAliasStore` contract suite and Azure-only cases (blob shape, damaged and stray aliases, no container; a new ETag for identical bytes); `AzureStaticWebsitePublishTarget` on the test publishing account (preflight, headers stored, `If-None-Match` root files, server-side copies by Put Blob From URL and, with its limit lowered, by blocks; prefix delete, configuration errors, no key in errors or logs; a real static website serving gzip files that every client decodes); the static-website rules and configuration parsing offline | real Azure (`MYSYNC_TEST_AZURE_*`) |
+| `MySync.Storage.S3.UnitTests` (`tests/mysync/storage-s3-unit-tests/`) | `type:unit-test` | Against a substitute `IAmazonS3`: every row of the S3 error mapping and its hints, the 409/412/404 outcomes per operation, the single-part shortcut, multipart uploads (part order, the verdict after the last byte, abort on failure and on cancellation, the restart after a 409 on completion, `TooLarge` before part 10,001), part-size arithmetic at the limits, alias listing with the bounded HEAD fan-out (damaged, stray and vanished aliases), batch-delete partial failure, native and multipart copies, the preflight's order against a stub anonymous web (probe served or not, a public listing), credential errors (none, SSO without a token, unreachable portal), redaction | NSubstitute, a stub `HttpMessageHandler` |
+| `MySync.Storage.S3.IntegrationTests` (`tests/mysync/storage-s3-integration-tests/`) | `type:integration-test` | The `IShareStore` and `IAliasStore` **contract suites, unchanged**, against the **real S3 test bucket** (each store under its own key prefix); S3-only cases (a three-part upload, gzip multipart read back as stored, identical bytes keeping their ETag, wrong region, a bucket that doesn't exist, wrong keys with no secret in any log, a presigned URL readable anonymously, damaged and stray aliases, the alias body's shape); `S3PublishTarget` on the public test bucket (the preflight's probe and listing check for real, headers served anonymously, CopyObject with replaced metadata, a multipart copy with the threshold lowered to 5 MiB, prefix delete) | real S3 (`MYSYNC_TEST_S3_*`, AWS credentials) |
+| `MySync.EndToEndTests` (`tests/mysync/end-to-end-tests/`) | `type:e2e-test` | Full DI graph (Application + Infrastructure + the provider) with temp folders as "machines", **each flow written once against a `Backend` and run once per provider** (`AzureBackend`: a container per test; `S3Backend`: a key prefix per test): `SyncTests` (create, clone, two-way sync, concurrent commits, a multi-part file, a conflict, the state file, a mismatch, delete), `CompressedShareTests` (a compressed share across two machines: blob properties, multi-block gzip uploads, conflicts, compression off again, byte-identical folders); `Cli/ShellQuoteTests`, `Cli/TerminalTextTests` and `Cli/CloneLocationTests` unit-test those BCL-only CLI helpers (compiled in as linked source); `Cli/CliTests` runs the **built `mysync` as a process** (`CliProcess`, fresh environment, stdin closed) for exit codes, stdout/stderr, `--json` and the no-terminal prompt rule; `PublishingTests` publish, unpublish and delete with the real embedded site, checked anonymously through the base URL, for Azure→Azure, S3→S3 (native copies), Azure→S3 (streamed) and S3→Azure (Put Blob From URL from presigned URLs); `PushTests` (two servers pushing at once from ordinary folders, the laptop's sync getting both byte for byte, deleting a pushed folder, `--create`, a folder of another share, a folder of the target share refused, a second `--updated-since last` push holding only the changed files, `--include` + `--max-size`) and `Cli/PushCliTests` (option order, plain output, `--json`, dry run, exit codes 0/2/4/8/9; repeated `--exclude` in any position, patterns with brackets and commas, every invalid filter value, the filter line, `filters` / `filteredOut`; `--create --compress` making a format-3 share a laptop clones byte for byte, `--compress` on an existing share warning); `PullTests` (a collector pulling `--latest` from two servers, then one folder with `--to`; an ordinary share pulled without changing its HEAD; a pull into the share's own folder refused) and `Cli/PullCliTests` (option order, repeated `--host`, `--json`, a re-run, dry run, exit codes 0/2/4/8/9); `TuiTests` (the runtime with a scripted terminal on the real composition: upload, another machine's change downloaded, a conflict recorded by a sync and resolved with `m`, a folder pushed with `--create` to a second share that a third machine pulls), `Cli/TuiCliTests` (no terminal → 2; in a pseudo-terminal via `script`: too small → 2, no `--name` → 2 and no screen, a taken name → 4, a second instance → 6) `Cli/SwitchableLogSinkTests` (nothing logged to the console while held) `Cli/S3CliTests` (the built binary with `MYSYNC_PROVIDER=s3`: the other provider's variables ignored either way, a missing bucket or region, a folder of one provider refused under the other with `State.StorageMismatch` and nothing changed, and a create / clone / sync / info / shares / delete round trip on the real bucket) and `Cli/CloneCliTests` (`clone <name>` creating the folder and a sync there both ways, `clone <id> <folder>` with the quoted `cd` hint, the current folder, a second clone and a non-empty folder refused, `--json`'s `folder` / `createdFolder`, exit codes 0/2/4/8, `sync <share>` unchanged) | real Azure and S3 (the CLI-process tests on Azure, `S3CliTests` on S3) |
 | `MySync.Tui.UnitTests` (`tests/mysync/tui-unit-tests/`) | `type:unit-test` | `UpdateTests` (every screen's keys, filters, search, dialogs, confirmations, session events, resize), `ViewSnapshotTests` (every screen at 100×30 and 80×24, Unicode and `--ascii`, text and styles compared with `Snapshots/*.txt`; a missing one is written and fails; `MYSYNC_UPDATE_SNAPSHOTS=1` rewrites), `LayoutTests` (columns, cutting, key hints, 100,000 entries drawing in the same time), `AnsiTerminalTests` (bytes: alternate screen, diffed drawing, every colour depth, the cursor, keys, detection), `RuntimeTests` (whole sessions with `ScriptedTerminal` and the real session over the in-memory fakes: rescan → sync with progress → resolve → push → quit; Ctrl+C twice → 130; a throwing view and a stop request still restore the terminal; resizes; a new empty share) | in-memory fakes, `ScriptedTerminal` |
 | `MySync.ArchitectureTests` (`tests/mysync/architecture-tests/`) | `type:architecture-test` | The dependency rules in §3 | none |
 | `MySync.SiteAssets.UnitTests` (`tests/mysync/site-assets-unit-tests/`) | `type:unit-test`, `requires:site-build` | The embedded set is exactly the four site files plus the three root files, `index.html` loads `./site-data.js` then `./assets/app.js`, content types, the version digest, placeholder detection, and the embedded bytes equal `dist/apps/mysync-site` | the real site build (fails with advice if the placeholder is embedded) |
@@ -1103,23 +1164,20 @@ Every test project is xUnit v3 on the Microsoft Testing Platform with Shouldly, 
 - **Handler tests never touch real storage or disk.** Use `InMemoryShareStore` / `InMemoryLocalFolder` for behaviour, and NSubstitute when a test is about one failing call.
 - **Progress is asserted as a sequence**, not as counters. `RecordingSyncProgressReporter` writes each call down as a line, so a test pins the whole order. Nothing in `apps/mysync/Rendering` is unit-tested, so this is where the reporting contract is held.
 - **One contract suite per abstraction, run against the fake and the real thing.** `LocalFolderContractTests` does for `ILocalFolder` what `ShareStoreContractTests` does for storage: it runs against `InMemoryLocalFolder` (as Unix and as Windows) in the application tests, and against the real folder in the infrastructure tests.
-- **One contract suite, many stores.** `ShareStoreContractTests` (abstract, in `MySync.Testing`) pins ETag and conditional-write behaviour: `If-Match` mismatch → `PreconditionFailed`, `If-None-Match: *` on an existing blob → `AlreadyExists`, missing manifest → null, object idempotency. It runs against `InMemoryShareStore` (in application unit tests) **and** against Azurite (in the storage integration tests). If the fake and Azurite disagree, the fake is wrong.
+- **One contract suite, many stores.** `ShareStoreContractTests` (abstract, in `MySync.Testing`) pins ETag and conditional-write behaviour: `If-Match` mismatch → `PreconditionFailed`, `If-None-Match: *` on an existing blob → `AlreadyExists`, missing manifest → null, object idempotency. It runs against `InMemoryShareStore` (in application unit tests) **and** against real Azure and real S3 (in the storage integration tests), unchanged. If the fake and a provider disagree, the fake is wrong. What is genuinely provider-specific (whether identical bytes get a new ETag) is pinned in that provider's own tests, not the suite.
 - Tests that touch the environment use their own variables and never read the developer's real `AZURE_STORAGE_CONNECTION_STRING`.
 
-### Azurite (the official Azure Storage emulator)
+### Real test storage (no emulator)
 
-Both Azurite-backed suites use `Testcontainers.Azurite` with the image `mcr.microsoft.com/azure-storage/azurite`, **pinned to a specific tag** in one place (`MySync.Testing/AzuriteImage.cs`).
+The integration and end-to-end suites run against **real storage**, never an emulator: a test-only Azure storage account (plus one with static website hosting for publishing) and a test-only S3 bucket (plus a public publishing bucket), described in `docs/ci-storage.md`.
 
-- **One container per test assembly** (an xUnit v3 assembly fixture). Each test uses **its own blob container** (`AzuriteEnvironment.NewContainerName()`: `t-<8-hex run prefix>-<24 hex>`, 35 chars), so tests are isolated and can run in parallel. Always take names from there: tests must never assume Azurite's account name (use the fixture's `AccountName`) or leave containers behind.
-- Run the blob service only.
-- The Azure SDK can send an `x-ms-version` newer than the pinned Azurite knows. **Chosen:** Azurite starts with `--skipApiVersionCheck` (`MySync.Testing/AzuriteEnvironment.cs`).
-- `AzuriteEnvironment` (in `MySync.Testing`) starts the container or picks up the bring-your-own instance and hands out container names. Each Azurite suite wraps it in its own small `AzuriteFixture : IAsyncLifetime`, registered with `[assembly: AssemblyFixture(...)]`.
-- **Bring-your-own storage:** if `MYSYNC_TEST_AZURITE_CONNECTION_STRING` is set, the fixture uses that storage instead of starting a container: a running Azurite (no Docker, faster local loops) or a real, test-only account. Supplied storage outlives the run, so each fixture deletes every container with this run's `AzuriteEnvironment.RunPrefix` when it is disposed.
-- Docker is required otherwise. CI runs the Azurite suites on the Ubuntu runner only, with the pinned image cached (`actions/cache`, keyed on the tag in `AzuriteImage.cs`) and Testcontainers' reaper off (`TESTCONTAINERS_RYUK_DISABLED`: the runner is discarded anyway).
-- Azurite isn't Azure. **`.github/workflows/real-azure.yml`** (manual only) runs the storage and end-to-end suites against a real account from the repository secret `MYSYNC_REAL_AZURE_CONNECTION_STRING` (optional `MYSYNC_REAL_AZURE_PUBLISH_CONNECTION_STRING` + `MYSYNC_REAL_AZURE_PUBLISH_BASE_URL`: the publishing tests, and that a real static website serves `Content-Encoding: gzip` files so every client decodes them), which must be an account-key connection string for a test-only account. It fails at once with instructions if the secret is missing.
-- **Publishing accounts:** the started Azurite has `AZURITE_ACCOUNTS` = `devstoreaccount1` plus `mysyncpublish` (static website on, `index.html`), `mysyncnoweb` (off) and `mysyncwrongindex` (`home.html`): static website settings are account-wide, so parallel tests can't share one that flips. With supplied storage, the publishing tests need `MYSYNC_TEST_PUBLISH_CONNECTION_STRING` (a test-only account with static website on) and skip without it; the fixtures delete every `$web/p/…` blob the run wrote. The real-Azure workflow passes the optional secret `MYSYNC_REAL_AZURE_PUBLISH_CONNECTION_STRING`.
-- **Azurite gaps (checked against 3.37.0):** no static website *endpoint* (anonymous reads get 403), so public verification is faked (`InMemoryPublicationVerifier`, end-to-end `AzuriteWebsiteVerifier` reads the `$web` blob the URL names) and the real `HttpPublicationVerifier` meets an unresolvable URL in the CLI tests (exit `10`); **no Put Blob From URL** (501), so Azurite exercises the blocks-from-URL path and real Azure the one-request path; Copy Blob across accounts fails under a mapped port (Azurite fetches the URL itself), which is why mysync doesn't use it. Static website *properties* (get/set) do work.
-- **Large-share tests** (`end-to-end-tests/LargeShareTests`: a 300 MB file, a 5,000-file share) skip unless `MYSYNC_TEST_LARGE=1`, which that workflow sets when its *large* input is ticked. Regular CI stays at 5 MB.
+- **Configuration** (`MySync.Testing`): `AzureTestStorage` reads `MYSYNC_TEST_AZURE_CONNECTION_STRING` (account key), `MYSYNC_TEST_AZURE_PUBLISH_CONNECTION_STRING`, `MYSYNC_TEST_AZURE_PUBLISH_BASE_URL`; `S3TestStorage` reads `MYSYNC_TEST_S3_BUCKET`, `MYSYNC_TEST_S3_REGION`, `MYSYNC_TEST_S3_PUBLISH_BUCKET`, `MYSYNC_TEST_S3_PUBLISH_BASE_URL`, with credentials from the AWS chain. The developer's own `AZURE_STORAGE_CONNECTION_STRING` and `MYSYNC_S3_*` are never read.
+- **Skip or fail:** a test whose storage isn't configured **skips** (`TestStorage.Unavailable`, an xUnit dynamic skip, from a constructor or a fixture property). With **`MYSYNC_TEST_REQUIRE_STORAGE=1`** (CI) it **fails** instead, so missing secrets can't pass as green. A project whose every test skipped exits 0 (`--ignore-exit-code 8` in its csproj).
+- **Isolation:** Azure: a container per test (`AzureTestStorage.NewContainerName()`, `t-<8-hex run prefix>-<24 hex>`). S3: buckets can't be made per test (the documented policy has no `s3:CreateBucket`), so a key prefix per test (`S3TestStorage.NewKeyPrefix()`, `t-<run>/<24 hex>/`), passed to the stores as the tests-only `S3StorageOptions.KeyPrefix` (never bound from the environment; in production keys are exactly `ShareLayout`'s). The CLI-process round trip on S3 writes at the bucket root and removes its share and name itself.
+- **Clean-up:** each assembly fixture (`AzureStorageFixture`, `S3StorageFixture`, the end-to-end `StorageFixture`) deletes this run's containers and everything under its S3 prefix, and the publications written since the run started. The test bucket also has a two-day expiry rule for runs that die.
+- **CI:** `ci.yml`'s *Storage + end-to-end tests* job (and the release workflow's test job) maps repository secrets to these variables, runs `tools/ci/check-storage-secrets.sh` first (one error per missing secret), and runs one at a time (`concurrency: real-storage`). Pull requests from forks get no secrets and skip the job. The S3 user has exactly the permissions of `docs/aws.md`, so a call needing more fails a test.
+- **Large-share tests** (`end-to-end-tests/LargeShareTests`: a 300 MB file, a 5,000-file share) skip unless `MYSYNC_TEST_LARGE=1`, which the manual and weekly `real-storage.yml` (*Large share tests*) sets for both providers.
+- **What only real storage can prove** is the point: conditional-write races and their 409s, ETag behaviour, the anonymous reads of published files, credentials and permissions. What a substitute can prove (every error mapping, multipart edge cases, the preflight's logic) is in `MySync.Storage.S3.UnitTests`, run on every OS.
 
 ### What must be covered
 
@@ -1149,14 +1207,15 @@ Both Azurite-backed suites use `Testcontainers.Azurite` with the image `mcr.micr
 - Paths: an NFD name on disk is found by its NFC path; a path through a symlink is refused; a skipped directory hides its contents.
 - Exec bit and mtime application on Unix (skipped on Windows runners).
 
-**Azurite suites:**
-- The `IShareStore` contract suite (`AzureShareStoreContractTests`), plus Azure-only cases: multi-block uploads, a mismatched upload leaving nothing visible, metadata, stray blobs ignored, a mid-download failure as `IOException`, configuration errors, `Unauthorized` / `Unreachable`, and no key in any error or log line.
-- Real round-trip of create / clone / two-way sync with two temp folders (`end-to-end-tests/AzureSyncTests`, each machine the full DI graph via `AzureMachine`).
+**Real-storage suites (both providers):**
+- The `IShareStore` and `IAliasStore` contract suites (`AzureShareStoreContractTests`, `S3ShareStoreContractTests`, …), plus Azure-only cases: multi-block uploads, a mismatched upload leaving nothing visible, metadata, stray blobs ignored, a mid-download failure as `IOException`, configuration errors, `Unauthorized` / `Unreachable`, and no key in any error or log line.
+- Real round-trip of create / clone / two-way sync with two temp folders (`end-to-end-tests/SyncTests`, per provider, each machine the full DI graph via `Machine`).
 - Two pipelines committing concurrently: both finish, nothing lost, revisions strictly sequential.
-- A 5 MB file (two blocks) upload and download with hash verification. Large shares are tested against real Azure, not Azurite.
+- A 17 MB file (several Azure blocks, two S3 parts) upload and download with hash verification; large shares in `real-storage.yml`.
+- S3: the conditional-write answers (412, and 409 retried) as the contract's concurrency cases see them; multipart uploads and copies; the publishing preflight against the real public bucket.
 - `gc` keeps objects referenced by kept history and within the grace period.
 
-**CI (`ci.yml`):** a `site` job (Node from `.nvmrc`, `npm ci`, then `nx run-many -t lint,typecheck,test,build -p mysync-site`) runs first and uploads the build; every .NET job downloads it into `dist/apps/mysync-site` before building. Then build + unit + architecture tests on `ubuntu-latest`, `windows-latest` and `macos-latest`, and the Azurite suites on `ubuntu-latest`.
+**CI (`ci.yml`):** a `site` job (Node from `.nvmrc`, `npm ci`, then `nx run-many -t lint,typecheck,test,build -p mysync-site`) runs first and uploads the build; every .NET job downloads it into `dist/apps/mysync-site` before building. Then build + unit + architecture tests (the S3 unit tests included) on `ubuntu-latest`, `windows-latest` and `macos-latest`, and the real-storage suites on `ubuntu-latest`.
 
 ---
 
@@ -1170,7 +1229,7 @@ nx run-many -t lint,typecheck,test,build -p mysync-site  # the publication page 
 npm run site                                             # the page with a mocked share, in your browser (npm run site:large: 100,000 files)
 nx run-many -t test --projects=tag:type:unit-test        # all unit tests
 nx run-many -t test --projects=tag:type:architecture-test
-nx run-many -t test --projects=tag:type:integration-test,tag:type:e2e-test   # Azurite suites (needs Docker or BYO Azurite)
+nx run-many -t test --projects=tag:type:integration-test,tag:type:e2e-test   # real-storage suites (docs/ci-storage.md; skip without it)
 nx run-many -t test --all                                # everything
 nx publish mysync --rid=linux-x64                        # local single-file publish (same flags as the release workflow)
 ```
@@ -1191,12 +1250,7 @@ dotnet publish apps/mysync/MySync.Cli.csproj -c Release -r linux-x64 --self-cont
   -p:IncludeNativeLibrariesForSelfExtract=true -p:InvariantGlobalization=true -p:DebugType=embedded -o out/linux-x64
 ```
 
-Manual testing against a local Azurite:
-
-```bash
-docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
-export AZURE_STORAGE_CONNECTION_STRING="UseDevelopmentStorage=true"
-```
+Manual testing against your own test storage: set `AZURE_STORAGE_CONNECTION_STRING` (Azure) or `MYSYNC_PROVIDER=s3`, `MYSYNC_S3_BUCKET`, `MYSYNC_S3_REGION` and AWS credentials (S3), as `docs/azure.md` and `docs/aws.md` describe.
 
 `global.json`:
 
@@ -1226,6 +1280,7 @@ The tag is the version. `mysync-` and an optional `v` are stripped; the rest mus
 - **Not trimmed**, deliberately: the configuration binder and Serilog resolve types by reflection, and the Azure SDK emits trim warnings. Trimming breaks these silently.
 - Archives are `mysync-<version>-<rid>.tar.gz` (Unix) / `.zip` (Windows), plus a collected `SHA256SUMS.txt`.
 - **The site is built once:** the `site` job runs `npm ci` and the site's lint/typecheck/test/build and uploads `dist/apps/mysync-site`; the test job and all seven builds download that same build, so every binary embeds identical assets.
+- **Tests before release:** the release workflow's *Test* job runs every suite, the storage and end-to-end ones against the real test storage, with the same secrets as `ci.yml` (`docs/ci-storage.md`); a missing secret fails the release.
 - **Smoke tests:** a step runs the `linux-x64` binary inside a stock `ubuntu:24.04` container and the `linux-musl-x64` binary inside `alpine`, asserts each prints the tagged version, runs the NFC-normalization self-check (§8), and runs the hidden `mysync debug site-assets`, which lists each embedded asset with its SHA-256 and exits `1` on the Debug placeholder. That's the self-containment claim tested rather than assumed. Keep it.
 - Binaries are unsigned. Release notes tell macOS users about `xattr -d com.apple.quarantine ./mysync` and Windows users about SmartScreen. Signing is the next step if that becomes a problem.
 - **Signing:** the repository secret **`MYSYNC_RELEASE_SIGNING_KEY`** (a PEM P-256 private key) is the release's identity. The *Release identity* job checks it first (fails before any build if the secret is missing or not P-256). Every build gets `-p:MySyncReleaseRepository=${{ github.repository }}` and `-p:MySyncReleasePublicKey=<its public half>`, which each job derives itself with `tools/release/public-key.sh` (and fails if it's empty, rather than silently trusting the built-in key). **Never pass the public key through a job output:** GitHub masks every line of a secret, a line of an EC private key's PEM can occur inside its public key's base64, and the output then arrives empty (this broke the first 0.5.0 release run). The *Publish release* job signs `SHA256SUMS.txt` (`openssl dgst -sha256 -sign`), checks the signature against the derived key, and publishes `SHA256SUMS.txt.sig` plus `mysync-release-signing.pub.pem`. In the upstream repository (`UPSTREAM`) the key must also equal `tools/release/mysync-release-signing.pub.pem` (= `ReleaseSignature.ProductionPublicKeyPem`, pinned by a test), so local builds trust the same key.
@@ -1244,7 +1299,7 @@ The tag is the version. `mysync-` and an optional `v` are stripped; the rest mus
 4. **Infrastructure / storage:** implement new abstractions in `libs/mysync/infrastructure` or the storage project, and register them in that project's `DependencyInjection.cs`. A new storage capability means updating the `IShareStore` contract suite and `InMemoryShareStore` too.
 5. **CLI** (`apps/mysync/Commands/` + `Rendering/`): a thin command, its view, `--json` shape, and any new `ExitCodes` mapping.
 6. **Tests:** unit tests at each layer you touched, contract tests if storage changed, and an end-to-end case if user-visible behaviour changed.
-7. **Verify:** `dotnet build` clean, unit + architecture tests green on all OSes, Azurite suites green.
+7. **Verify:** `dotnet build` clean, unit + architecture tests green on all OSes, real-storage suites green (CI).
 8. **Docs:** update this file if a rule, layout, command, exit code or package changed.
 
 ---
@@ -1257,7 +1312,7 @@ The tag is the version. `mysync-` and an optional `v` are stripped; the rest mus
 4. Application abstractions, messaging and decorators. `InMemoryShareStore`, `InMemoryLocalFolder` and the `IShareStore` contract suite in `MySync.Testing`.
 5. `SyncPipeline` + `RemoteCommitter`, then the Create, Clone and Run slices against the in-memory fakes.
 6. Infrastructure: scanner with hash cache, hasher, state store + lock, ignore loader, conflict log, manifest serializer.
-7. `MySync.Storage.Azure` + the Azurite storage integration tests (contract suite first).
+7. `MySync.Storage.Azure` + the storage integration tests against real test storage (contract suite first).
 8. CLI host, commands, rendering, exit codes, safety guards. End-to-end tests.
 9. `status`, `info`, `conflicts`, `resolve`, `gc`.
 10. `ci.yml` and `release-mysync.yml`; README with install, env-var setup and the macOS/Windows notes.
@@ -1266,7 +1321,7 @@ The tag is the version. `mysync-` and an optional `v` are stripped; the rest mus
 
 ## 19. Roadmap (not v1; don't build unless asked)
 
-- S3 / S3-compatible provider (`libs/mysync/storage-s3`, `MySync.Storage.S3`), passing the same contract suite.
+- S3-compatible services (R2, MinIO, …): only after verifying their conditional writes and error codes against the contract suites; today there is deliberately no endpoint setting.
 - Compression: zstd (a new `ObjectEncoding`, a higher manifest format); recompressing or decompressing objects already stored; a per-run opt-out (e.g. `sync --no-compress` on a slow CPU). Manifests stay uncompressed.
 - Share codes with an embedded, scoped, expiring SAS so recipients need no env credentials. Needs either one container per share or an ADLS Gen2 (hierarchical namespace) account for directory SAS. Keep `ShareLayout` flexible for this.
 - `mysync restore --revision <n>` using history manifests.

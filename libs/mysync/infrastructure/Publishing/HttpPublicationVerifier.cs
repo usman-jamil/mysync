@@ -12,9 +12,10 @@ internal sealed class HttpPublicationVerifier(HttpClient http, TimeProvider time
     private const int Attempts = 3;
     private static readonly TimeSpan Pause = TimeSpan.FromSeconds(2);
 
-    public async Task<VerificationOutcome> VerifyAsync(Uri siteDataUrl, string publishId, CancellationToken cancellationToken)
+    public async Task<VerificationOutcome> VerifyAsync(Uri siteDataUrl, string publishId, IReadOnlySet<int> notServedStatusCodes, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(siteDataUrl);
+        ArgumentNullException.ThrowIfNull(notServedStatusCodes);
         string detail = "no answer";
 
         for (int attempt = 1; attempt <= Attempts; attempt++)
@@ -31,6 +32,11 @@ internal sealed class HttpPublicationVerifier(HttpClient http, TimeProvider time
                     }
 
                     detail = "the page answered, but with another publication's data";
+                }
+                else if (notServedStatusCodes.Contains((int)response.StatusCode))
+                {
+                    // S3 answers 403 for a missing key to anyone who can't list the bucket.
+                    detail = $"not served: HTTP {(int)response.StatusCode} {response.ReasonPhrase} (missing, or not public)";
                 }
                 else
                 {

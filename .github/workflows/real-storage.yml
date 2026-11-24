@@ -1,0 +1,58 @@
+name: Large share tests
+
+# What the regular runs don't spend time on: a 300 MB file and a 5,000-file share, on both
+# providers' real test storage (ci.yml runs everything else against the same storage on every
+# push). Manual, plus once a week so a slow regression shows up. Setup: docs/ci-storage.md.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1' # Mondays, 03:17 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-storage
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: '10.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  TESTINGPLATFORM_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  large:
+    name: Large shares on real Azure and S3
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MYSYNC_TEST_REQUIRE_STORAGE: '1'
+      MYSYNC_TEST_LARGE: '1'
+      MYSYNC_TEST_AZURE_CONNECTION_STRING: ${{ secrets.MYSYNC_REAL_AZURE_CONNECTION_STRING }}
+      MYSYNC_TEST_AZURE_PUBLISH_CONNECTION_STRING: ${{ secrets.MYSYNC_REAL_AZURE_PUBLISH_CONNECTION_STRING }}
+      MYSYNC_TEST_AZURE_PUBLISH_BASE_URL: ${{ secrets.MYSYNC_REAL_AZURE_PUBLISH_BASE_URL }}
+      MYSYNC_TEST_S3_BUCKET: ${{ secrets.MYSYNC_REAL_S3_BUCKET }}
+      MYSYNC_TEST_S3_REGION: ${{ secrets.MYSYNC_REAL_S3_REGION }}
+      MYSYNC_TEST_S3_PUBLISH_BUCKET: ${{ secrets.MYSYNC_REAL_S3_PUBLISH_BUCKET }}
+      MYSYNC_TEST_S3_PUBLISH_BASE_URL: ${{ secrets.MYSYNC_REAL_S3_PUBLISH_BASE_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.MYSYNC_REAL_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.MYSYNC_REAL_AWS_SECRET_ACCESS_KEY }}
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the secrets are configured
+        run: tools/ci/check-storage-secrets.sh
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Build
+        run: dotnet build mysync.slnx --configuration Release
+
+      - name: Large share tests
+        run: dotnet test --project tests/mysync/end-to-end-tests/MySync.EndToEndTests.csproj --configuration Release --no-build --filter-class "*LargeShareTests"

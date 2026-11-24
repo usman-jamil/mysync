@@ -13,8 +13,8 @@ internal sealed record CliResult(int ExitCode, string StdOut, string StdErr)
 /// <summary>
 /// Runs the built <c>mysync</c> as a separate process, the only honest way to check exit codes,
 /// the stdout/stderr split and how it behaves without a terminal (CLAUDE.md §4, §10). The
-/// environment is built from scratch: the developer's own <c>AZURE_STORAGE_CONNECTION_STRING</c>
-/// and <c>MYSYNC_*</c> variables never reach it.
+/// developer's own <c>AZURE_*</c> and <c>MYSYNC_*</c> variables never reach it; the <c>AWS_*</c>
+/// ones do, as the standard credential chain the S3 runs sign with (CI: the test IAM user's keys).
 /// </summary>
 internal static class CliProcess
 {

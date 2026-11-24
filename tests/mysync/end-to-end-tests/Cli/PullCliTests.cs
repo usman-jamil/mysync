@@ -17,14 +17,14 @@ namespace MySync.EndToEndTests.Cli;
 /// </summary>
 public sealed class PullCliTests : IDisposable
 {
-    private readonly AzuriteFixture _azurite;
+    private readonly AzureTestStorage _azure;
     private readonly TempShareFolder _laptop = new();
     private readonly TempShareFolder _server = new();
     private readonly TempShareFolder _collector = new();
-    private readonly string _container = AzuriteEnvironment.NewContainerName();
+    private readonly string _container = AzureTestStorage.NewContainerName();
     private readonly string _name = "pull-" + Guid.NewGuid().ToString("N")[..12];
 
-    public PullCliTests(AzuriteFixture azurite) => _azurite = azurite;
+    public PullCliTests(StorageFixture storage) => _azure = storage.AzureStorage;
 
     private async Task<string> CreateShareAsync()
     {
@@ -122,7 +122,7 @@ public sealed class PullCliTests : IDisposable
     public async Task AMissingObject_Should_SkipThatFile_AndExitNine()
     {
         string shareId = await CreateShareAsync();
-        using AzureMachine admin = new(_azurite.ConnectionString, _container);
+        using Machine admin = new(new AzureBackend(_azure), _container);
         var guide = ContentHash.FromBytes(SHA256.HashData(Encoding.UTF8.GetBytes("guide\n")));
         ShareId id = ShareId.TryParse(shareId, out ShareId? parsed) ? parsed : throw new InvalidOperationException(shareId);
         bool deleted = await admin.WithStoreAsync(async store => (await store.DeleteObjectAsync(id, guide, TestContext.Current.CancellationToken)).IsSuccess);
@@ -217,7 +217,7 @@ public sealed class PullCliTests : IDisposable
     private Task<CliResult> RunAsync(TempShareFolder folder, params string[] arguments) =>
         CliProcess.RunAsync(folder.Path, new Dictionary<string, string?>
         {
-            ["AZURE_STORAGE_CONNECTION_STRING"] = _azurite.ConnectionString,
+            ["AZURE_STORAGE_CONNECTION_STRING"] = _azure.ConnectionString,
             ["MYSYNC_CONTAINER"] = _container,
         }, arguments);
 }

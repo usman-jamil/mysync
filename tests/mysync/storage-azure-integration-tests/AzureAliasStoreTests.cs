@@ -13,28 +13,28 @@ using Xunit;
 
 namespace MySync.Storage.Azure.IntegrationTests;
 
-/// <summary>The alias contract on Azurite: each store gets its own container.</summary>
-public sealed class AzureAliasStoreContractTests(AzuriteFixture azurite) : AliasStoreContractTests
+/// <summary>The alias contract on real Azure storage: each store gets its own container.</summary>
+public sealed class AzureAliasStoreContractTests(AzureStorageFixture azure) : AliasStoreContractTests
 {
     protected override async Task<IAliasStore> CreateStoreAsync(int? pageSize = null)
     {
-        string container = AzuriteEnvironment.NewContainerName();
-        await new BlobContainerClient(azurite.ConnectionString, container).CreateAsync(cancellationToken: TestContext.Current.CancellationToken);
-        return AzureAliases.Create(azurite.ConnectionString, container, pageSize);
+        string container = AzureTestStorage.NewContainerName();
+        await new BlobContainerClient(azure.ConnectionString, container).CreateAsync(cancellationToken: TestContext.Current.CancellationToken);
+        return AzureAliases.Create(azure.ConnectionString, container, pageSize);
     }
 }
 
 /// <summary>What only the Azure alias store has: the blob's shape, damaged or stray blobs, configuration.</summary>
-public sealed class AzureAliasStoreTests(AzuriteFixture azurite)
+public sealed class AzureAliasStoreTests(AzureStorageFixture azure)
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private async Task<(AzureAliasStore Store, BlobContainerClient Container)> StoreAsync()
     {
-        string name = AzuriteEnvironment.NewContainerName();
-        BlobContainerClient container = new(azurite.ConnectionString, name);
+        string name = AzureTestStorage.NewContainerName();
+        BlobContainerClient container = new(azure.ConnectionString, name);
         await container.CreateAsync(cancellationToken: Ct);
-        return (AzureAliases.Create(azurite.ConnectionString, name, pageSize: null), container);
+        return (AzureAliases.Create(azure.ConnectionString, name, pageSize: null), container);
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public sealed class AzureAliasStoreTests(AzuriteFixture azurite)
     [Fact]
     public async Task AContainerThatDoesNotExist_Should_HaveNoNames()
     {
-        AzureAliasStore store = AzureAliases.Create(azurite.ConnectionString, AzuriteEnvironment.NewContainerName(), pageSize: null);
+        AzureAliasStore store = AzureAliases.Create(azure.ConnectionString, AzureTestStorage.NewContainerName(), pageSize: null);
 
         (await store.GetAsync(ShareName.Create("next-wave").Value, Ct)).Value.ShouldBeNull();
         (await store.FindByShareAsync(ShareId.New(), Ct)).Value.ShouldBeEmpty();

@@ -283,6 +283,27 @@ public class ManifestSerializerTests
         Read(good.Replace("\"revision\": 17", "\"revision\": 0", StringComparison.Ordinal)).Error.Code.ShouldBe("Shares.InvalidManifest");
     }
 
+    /// <summary>
+    /// S3's ETag follows an object's bytes, so the commit protocol's If-Match is only sound because
+    /// no two commits of a share ever write the same bytes: the revision is in them, and every commit
+    /// (a sync, a compression change, the deleted marker) takes the next one, whatever else changed.
+    /// </summary>
+    [Fact]
+    public void EveryCommit_Should_ChangeTheBytes_EvenWithNothingElseChanged()
+    {
+        Manifest head = Sample();
+        DateTimeOffset sameTime = head.UpdatedUtc;
+
+        Manifest unchanged = head.CreateNextRevision(head.Entries, sameTime, head.UpdatedBy).Value;
+        Manifest compression = head.WithCompression(head.Compression, sameTime, head.UpdatedBy).Value;
+        Manifest deleted = head.CreateDeletedRevision(sameTime, head.UpdatedBy).Value;
+
+        string[] bytes = [.. new[] { head, unchanged, unchanged.CreateNextRevision(unchanged.Entries, sameTime, head.UpdatedBy).Value, compression, deleted }
+            .Select(manifest => Convert.ToHexString(_serializer.Serialize(manifest)))];
+        bytes.Distinct(StringComparer.Ordinal).Count().ShouldBe(4, "only `unchanged` and `compression` share a revision, and they're two different next commits of one HEAD");
+        Convert.ToHexString(_serializer.Serialize(unchanged)).ShouldNotBe(bytes[0]);
+    }
+
     private Result<Manifest> Read(string json) => _serializer.Deserialize(Encoding.UTF8.GetBytes(json));
 
     private static string WithEntries(string entries) => $$"""

@@ -44,6 +44,23 @@ public static class StorageErrors
     public static readonly Error Unauthorized = Error.Problem(
         "Storage.Unauthorized", "The storage account rejected the credentials. Check AZURE_STORAGE_CONNECTION_STRING.");
 
+    /// <summary>The storage rejected the credentials or the request; <paramref name="hint"/> says what to check for that provider. Same code as <see cref="Unauthorized"/> (exit 8).</summary>
+    public static Error UnauthorizedBecause(string hint) => Error.Problem(
+        "Storage.Unauthorized", $"The storage rejected the request. {hint}");
+
+    /// <summary>
+    /// This machine's clock is too far from the storage service's for a signed request to be
+    /// accepted (S3's <c>RequestTimeTooSkewed</c>). Not a credential problem.
+    /// </summary>
+    public static Error ClockSkew(int minutes) => Error.Problem(
+        "Storage.ClockSkew",
+        $"The storage service refused the request because this machine's clock is off by about {minutes} minute(s). Fix the clock (turn on NTP time sync) and run it again.");
+
+    /// <summary>An object larger than the provider (or mysync's upload scheme for it) can store; nothing was stored.</summary>
+    public static Error TooLarge(string blobName, long limitBytes) => Error.Problem(
+        "Storage.TooLarge",
+        $"'{blobName}' is larger than this storage can take in one object ({limitBytes:N0} bytes); it was not stored.");
+
     public static readonly Error Unreachable = Error.Problem(
         "Storage.Unreachable", "The storage account could not be reached. Check the network and the account name.");
 

@@ -7,29 +7,35 @@ using MySync.Domain.State;
 using MySync.Testing;
 using Shouldly;
 using Xunit;
-using static MySync.EndToEndTests.AzureMachine;
+using static MySync.EndToEndTests.Machine;
 
 namespace MySync.EndToEndTests;
 
 /// <summary>
-/// <c>mysync pull</c> on Azurite with the full DI graph and real folders (CLAUDE.md §10c): a
+/// <c>mysync pull</c> on real storage with the full DI graph and real folders (CLAUDE.md §10c): a
 /// collector fetches what servers pushed, and anyone can download an ordinary share without
 /// changing it.
 /// </summary>
-public sealed class PullTests : IDisposable
-{
-    private readonly AzureMachine _laptop;
-    private readonly AzureMachine _web01;
-    private readonly AzureMachine _web02;
-    private readonly AzureMachine _collector;
-    private readonly string _container = AzuriteEnvironment.NewContainerName();
+public sealed class AzurePullTests(StorageFixture storage) : PullTests(storage.Azure);
 
-    public PullTests(AzuriteFixture azurite)
+public sealed class S3PullTests(StorageFixture storage) : PullTests(storage.S3);
+
+/// <summary>Written once, run once per provider.</summary>
+public abstract class PullTests : IDisposable
+{
+    private readonly Machine _laptop;
+    private readonly Machine _web01;
+    private readonly Machine _web02;
+    private readonly Machine _collector;
+
+    protected PullTests(Backend backend)
     {
-        _laptop = new AzureMachine(azurite.ConnectionString, _container);
-        _web01 = new AzureMachine(azurite.ConnectionString, _container);
-        _web02 = new AzureMachine(azurite.ConnectionString, _container);
-        _collector = new AzureMachine(azurite.ConnectionString, _container);
+        ArgumentNullException.ThrowIfNull(backend);
+        string place = backend.NewPlace();
+        _laptop = new Machine(backend, place);
+        _web01 = new Machine(backend, place);
+        _web02 = new Machine(backend, place);
+        _collector = new Machine(backend, place);
     }
 
     private static ShareReference Ref(string share) => ShareReference.Parse(share).Value;
@@ -111,5 +117,6 @@ public sealed class PullTests : IDisposable
         _web01.Dispose();
         _web02.Dispose();
         _collector.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

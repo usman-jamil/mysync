@@ -12,6 +12,7 @@ using Azure.Storage.Sas;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using MySync.Application.Abstractions.Publishing;
 using MySync.Application.Abstractions.Storage;
 using MySync.Domain.Configuration;
 using MySync.Domain.Content;
@@ -404,18 +405,18 @@ internal sealed partial class AzureBlobShareStore : IShareStore
         DeleteAsync(ShareLayout.For(shareId).ObjectBlob(hash), cancellationToken);
 
     /// <summary>
-    /// A read-only SAS for this one blob, signed with the account key from the connection string.
+    /// A read-only SAS URL for this one blob, signed with the account key from the connection string.
     /// <c>null</c> when the connection string has no key (e.g. it is itself a SAS): the caller streams.
     /// </summary>
-    public Task<Result<Uri?>> GetObjectReadUrlAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken cancellationToken)
+    public Task<Result<CopySource?>> GetCopySourceAsync(ShareId shareId, ContentHash hash, TimeSpan lifetime, CancellationToken cancellationToken)
     {
         string name = ShareLayout.For(shareId).ObjectBlob(hash);
 
-        return CallAsync<Uri?>(name, container =>
+        return CallAsync<CopySource?>(name, container =>
         {
             BlobClient blob = container.GetBlobClient(name);
-            Uri? url = blob.CanGenerateSasUri ? blob.GenerateSasUri(BlobSasPermissions.Read, _timeProvider.GetUtcNow().Add(lifetime)) : null;
-            return Task.FromResult(Result.Success(url));
+            CopySource? source = blob.CanGenerateSasUri ? new CopySource(blob.GenerateSasUri(BlobSasPermissions.Read, _timeProvider.GetUtcNow().Add(lifetime))) : null;
+            return Task.FromResult(Result.Success(source));
         }, cancellationToken);
     }
 

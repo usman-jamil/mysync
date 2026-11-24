@@ -16,7 +16,6 @@ using MySync.Application.Publishing.List;
 using MySync.Application.Publishing.Publish;
 using MySync.Application.Publishing.Unpublish;
 using MySync.SiteAssets;
-using MySync.Storage.Azure;
 using MySync.Testing;
 using SharedKernel;
 using Shouldly;
@@ -26,19 +25,24 @@ namespace MySync.EndToEndTests;
 
 /// <summary>
 /// One "machine": a real temp folder and the full DI graph the CLI builds (Application,
-/// Infrastructure, Azure), pointed at Azurite through configuration keys named like the
-/// environment variables. Each command gets a fresh container, as each CLI run would.
+/// Infrastructure, the provider), pointed at the test storage through configuration keys named
+/// like the environment variables. Each command gets a fresh composition, as each CLI run would.
 /// </summary>
-internal sealed class AzureMachine(string connectionString, string container) : IDisposable
+internal sealed class Machine(Backend backend, string place) : IDisposable
 {
     public TempShareFolder Folder { get; } = new();
 
-    public string Container { get; set; } = container;
+    /// <summary>The share provider; another one makes this folder's next command see another storage.</summary>
+    public Backend Backend { get; set; } = backend;
 
-    /// <summary>MYSYNC_PUBLISH_CONNECTION_STRING for this machine; <c>null</c> leaves it unset.</summary>
-    public string? PublishConnectionString { get; set; }
+    /// <summary>The isolated place in <see cref="Backend"/> (an Azure container, an S3 key prefix).</summary>
+    public string Place { get; set; } = place;
 
-    public const string PublishBaseUrl = "https://mysyncpublish.z13.web.core.windows.net";
+    /// <summary>Where publications go (MYSYNC_PUBLISH_PROVIDER and its settings); <c>null</c> leaves the publishing settings unset.</summary>
+    public Backend? Publishing { get; set; }
+
+    /// <summary>Settings applied over the backend's (e.g. <see cref="Backend.Elsewhere"/>).</summary>
+    public Dictionary<string, string?> Overrides { get; } = [];
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -127,30 +131,42 @@ internal sealed class AzureMachine(string connectionString, string container) : 
         return await scope.ServiceProvider.GetRequiredService<ICommandHandler<TCommand, TResponse>>().Handle(command, Ct);
     }
 
+    /// <summary>The settings this machine's commands see, as a CLI process would get them in its environment.</summary>
+    public Dictionary<string, string?> Environment()
+    {
+        Dictionary<string, string?> settings = Backend.Settings(Place);
+        if (Publishing is not null)
+        {
+            foreach ((string name, string? value) in Publishing.PublishSettings())
+            {
+                settings[name] = value;
+            }
+
+            settings["MYSYNC_PUBLISH_PROVIDER"] = Publishing.Provider;
+        }
+
+        foreach ((string name, string? value) in Overrides)
+        {
+            settings[name] = value;
+        }
+
+        return settings;
+    }
+
     private ServiceCollection Services()
     {
-        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            [AzureStorageOptions.ConnectionStringVariable] = connectionString,
-            [AzureStorageOptions.ContainerVariable] = Container,
-            [PublishStorageOptions.ConnectionStringVariable] = PublishConnectionString,
-            [PublishStorageOptions.BaseUrlVariable] = PublishConnectionString is null ? null : PublishBaseUrl,
-        }).Build();
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(Environment()).Build();
 
         ServiceCollection services = new();
         services.AddSingleton(configuration);
         services.AddLogging();
         services.AddSingleton(new ShareRoot(Folder.Path));
         services.AddSingleton<MySync.Application.Abstractions.Updates.IReleaseSource>(new NoReleases());
-        if (PublishConnectionString is not null)
-        {
-            // Azurite has no static website endpoint: read the $web blob the URL names, as the endpoint would serve it.
-            services.AddSingleton<MySync.Application.Abstractions.Publishing.IPublicationVerifier>(new AzuriteWebsiteVerifier(PublishConnectionString));
-        }
-
         services.AddSingleton<MySync.Application.Abstractions.Composition.ICloneRunner>(provider => new MySync.Cli.Hosting.FolderCloneRunner(services, provider));
 
-        services.AddApplication().AddInfrastructure().AddAzureBlobStorage().AddAzureStaticWebsitePublishing().AddSiteAssets();
+        services.AddApplication().AddInfrastructure().AddSiteAssets();
+        Backend.Register(services, Place);
+        (Publishing ?? Backend).RegisterPublishing(services);
         return services;
     }
 }

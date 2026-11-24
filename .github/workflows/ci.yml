@@ -101,6 +101,7 @@ jobs:
             tests/mysync/application-unit-tests/MySync.Application.UnitTests.csproj \
             tests/mysync/infrastructure-unit-tests/MySync.Infrastructure.UnitTests.csproj \
             tests/mysync/site-assets-unit-tests/MySync.SiteAssets.UnitTests.csproj \
+            tests/mysync/storage-s3-unit-tests/MySync.Storage.S3.UnitTests.csproj \
             tests/mysync/tui-unit-tests/MySync.Tui.UnitTests.csproj \
             tests/mysync/architecture-tests/MySync.ArchitectureTests.csproj
           do
@@ -142,13 +143,38 @@ jobs:
           RID: ${{ matrix.rid }}
         run: tools/release/update-e2e.sh "$RID"
 
-  azurite:
-    name: Azurite suites
+  # The storage and end-to-end suites against REAL storage: a test-only Azure account and a
+  # test-only S3 bucket (there is no emulator; CLAUDE.md §14). MYSYNC_TEST_REQUIRE_STORAGE makes a
+  # missing secret fail the run instead of skipping the tests. Pull requests from forks get no
+  # secrets, so this job doesn't run for them. Setup: docs/ci-storage.md.
+  real-storage:
+    name: Storage + end-to-end tests (real Azure and S3)
     needs: site
-    # Docker is only available on the Linux runners.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # One run at a time against the shared test storage: the clean-up of publications is by time.
+    concurrency:
+      group: real-storage
+      cancel-in-progress: false
+    env:
+      MYSYNC_TEST_REQUIRE_STORAGE: '1'
+      MYSYNC_TEST_AZURE_CONNECTION_STRING: ${{ secrets.MYSYNC_REAL_AZURE_CONNECTION_STRING }}
+      MYSYNC_TEST_AZURE_PUBLISH_CONNECTION_STRING: ${{ secrets.MYSYNC_REAL_AZURE_PUBLISH_CONNECTION_STRING }}
+      MYSYNC_TEST_AZURE_PUBLISH_BASE_URL: ${{ secrets.MYSYNC_REAL_AZURE_PUBLISH_BASE_URL }}
+      MYSYNC_TEST_S3_BUCKET: ${{ secrets.MYSYNC_REAL_S3_BUCKET }}
+      MYSYNC_TEST_S3_REGION: ${{ secrets.MYSYNC_REAL_S3_REGION }}
+      MYSYNC_TEST_S3_PUBLISH_BUCKET: ${{ secrets.MYSYNC_REAL_S3_PUBLISH_BUCKET }}
+      MYSYNC_TEST_S3_PUBLISH_BASE_URL: ${{ secrets.MYSYNC_REAL_S3_PUBLISH_BASE_URL }}
+      # The test IAM user (exactly the permissions of docs/aws.md), through the standard AWS chain.
+      AWS_ACCESS_KEY_ID: ${{ secrets.MYSYNC_REAL_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.MYSYNC_REAL_AWS_SECRET_ACCESS_KEY }}
+      AWS_EC2_METADATA_DISABLED: 'true'
     steps:
       - uses: actions/checkout@v5
+
+      - name: Check the secrets are configured
+        run: tools/ci/check-storage-secrets.sh
 
       # The site build from the `site` job: the CLI embeds it, and a Release build fails without it.
       - name: Download the site build
@@ -165,38 +191,10 @@ jobs:
       - name: Build
         run: dotnet build mysync.slnx --configuration Release
 
-      # The Azurite image (pinned in tests/mysync/testing/AzuriteImage.cs) comes from the cache
-      # rather than MCR on every run.
-      - name: Find the pinned Azurite image
-        id: azurite
-        run: echo "image=$(grep -oE 'mcr\.microsoft\.com/azure-storage/azurite:[^"]+' tests/mysync/testing/AzuriteImage.cs)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache the Azurite image
-        id: azurite-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/azurite-image.tar
-          key: azurite-image-${{ steps.azurite.outputs.image }}
-
-      - name: Load the Azurite image
-        env:
-          IMAGE: ${{ steps.azurite.outputs.image }}
-          CACHED: ${{ steps.azurite-cache.outputs.cache-hit }}
-        run: |
-          set -euo pipefail
-          if [ "$CACHED" = "true" ]; then
-            docker load --input ~/.cache/azurite-image.tar
-          else
-            docker pull "$IMAGE"
-            mkdir -p ~/.cache
-            docker save "$IMAGE" --output ~/.cache/azurite-image.tar
-          fi
-
+      # GitHub masks the secrets in the log; the tests never print a connection string or key.
       - name: Storage integration + end-to-end tests
-        env:
-          # The runner is thrown away after the job, so Testcontainers' reaper (another image to pull) isn't needed.
-          TESTCONTAINERS_RYUK_DISABLED: 'true'
         run: |
           set -euo pipefail
           dotnet test --project tests/mysync/storage-azure-integration-tests/MySync.Storage.Azure.IntegrationTests.csproj --configuration Release --no-build
+          dotnet test --project tests/mysync/storage-s3-integration-tests/MySync.Storage.S3.IntegrationTests.csproj --configuration Release --no-build
           dotnet test --project tests/mysync/end-to-end-tests/MySync.EndToEndTests.csproj --configuration Release --no-build

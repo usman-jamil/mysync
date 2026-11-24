@@ -9,26 +9,32 @@ using MySync.Tui.Runtime;
 using MySync.Tui.State;
 using Shouldly;
 using Xunit;
-using static MySync.EndToEndTests.AzureMachine;
+using static MySync.EndToEndTests.Machine;
 
 namespace MySync.EndToEndTests;
 
 /// <summary>
 /// <c>mysync tui</c>'s runtime driven by a scripted terminal against the real composition
-/// (Application + Infrastructure + Azure on Azurite, real folders) (CLAUDE.md §10d).
+/// (Application + Infrastructure + the provider on real storage, real folders) (CLAUDE.md §10d).
 /// </summary>
-public sealed class TuiTests : IDisposable
-{
-    private readonly AzureMachine _laptop;
-    private readonly AzureMachine _server;
-    private readonly AzureMachine _collector;
-    private readonly string _container = AzuriteEnvironment.NewContainerName();
+public sealed class AzureTuiTests(StorageFixture storage) : TuiTests(storage.Azure);
 
-    public TuiTests(AzuriteFixture azurite)
+public sealed class S3TuiTests(StorageFixture storage) : TuiTests(storage.S3);
+
+/// <summary>Written once, run once per provider.</summary>
+public abstract class TuiTests : IDisposable
+{
+    private readonly Machine _laptop;
+    private readonly Machine _server;
+    private readonly Machine _collector;
+
+    protected TuiTests(Backend backend)
     {
-        _laptop = new AzureMachine(azurite.ConnectionString, _container);
-        _server = new AzureMachine(azurite.ConnectionString, _container);
-        _collector = new AzureMachine(azurite.ConnectionString, _container);
+        ArgumentNullException.ThrowIfNull(backend);
+        string place = backend.NewPlace();
+        _laptop = new Machine(backend, place);
+        _server = new Machine(backend, place);
+        _collector = new Machine(backend, place);
     }
 
     [Fact]
@@ -115,5 +121,6 @@ public sealed class TuiTests : IDisposable
         _laptop.Dispose();
         _server.Dispose();
         _collector.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

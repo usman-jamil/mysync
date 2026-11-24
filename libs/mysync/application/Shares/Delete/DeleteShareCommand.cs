@@ -386,10 +386,7 @@ internal sealed class DeleteShareCommandHandler(
         Result<Abstractions.Publishing.PublishLocation> location = publishTarget.GetLocation();
         if (location.IsFailure)
         {
-            string variable = location.Error.Description.Contains(Domain.Publishing.PublishErrors.PublishBaseUrlVariable, StringComparison.Ordinal)
-                ? Domain.Publishing.PublishErrors.PublishBaseUrlVariable
-                : Domain.Publishing.PublishErrors.PublishConnectionStringVariable;
-            return Result.Failure<int>(Domain.Publishing.PublishErrors.PublicationsNeedSettings(read.Value.Publications.Count, variable));
+            return Result.Failure<int>(Domain.Publishing.PublishErrors.PublicationsNeedSettings(read.Value.Publications.Count, location.Error));
         }
 
         foreach (Domain.Publishing.Publication publication in read.Value.Publications)

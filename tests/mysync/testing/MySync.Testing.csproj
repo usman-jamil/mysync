@@ -8,12 +8,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Testcontainers.Azurite" />
-    <!-- Sets up Azurite's publishing accounts (static website); test code only, never a library's. -->
+    <!-- Test code only, never a library's: cleaning up what a run wrote to the real test storage. -->
     <PackageReference Include="Azure.Storage.Blobs" />
+    <PackageReference Include="AWSSDK.S3" />
     <!-- The abstract contract suites carry [Fact]s and assertions; the runner stays in the test projects. -->
     <PackageReference Include="Shouldly" />
     <PackageReference Include="xunit.v3.extensibility.core" />
+    <!-- SkipException: a test that needs storage nobody configured skips (TestStorage). -->
+    <PackageReference Include="xunit.v3.assert" />
   </ItemGroup>
 
   <ItemGroup>

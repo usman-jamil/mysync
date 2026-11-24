@@ -35,7 +35,7 @@ internal static class ShareInfoView
             Add(fields, "Folder", rootPath);
         }
 
-        Add(fields, "Storage", $"{info.Location.Provider}: {info.Location.AccountName} / {info.Location.Container}");
+        Add(fields, "Storage", info.Location.Describe());
         Add(fields, "Revision", revisions);
         Add(fields, "Last change", $"{info.RemoteUpdatedUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture)} by {Domain.Paths.PathErrors.Display(info.RemoteUpdatedBy)}");
         Add(fields, "Created", info.CreatedUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture));
@@ -150,7 +150,7 @@ internal static class ShareInfoView
 
         if (deleted.RecoverableCopies > 0)
         {
-            ConsoleOutput.Warn($"The storage account still keeps {deleted.RecoverableCopies} deleted {(deleted.RecoverableCopies == 1 ? "copy" : "copies")} (soft delete or blob versioning). They can be restored until the account's retention period ends; purge them in Azure if the data must be gone now.");
+            ConsoleOutput.Warn($"The storage still keeps {deleted.RecoverableCopies} deleted {(deleted.RecoverableCopies == 1 ? "copy" : "copies")}: on Azure, soft delete or blob versioning (restorable until the account's retention period ends); on S3, bucket versioning (kept until a lifecycle rule or you remove the old versions and delete markers). Purge them if the data must be gone now.");
         }
     }
 

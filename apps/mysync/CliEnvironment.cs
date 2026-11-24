@@ -18,15 +18,24 @@ internal sealed class CliEnvironment
     public const string CompressionLevelVariable = "MYSYNC_COMPRESSION_LEVEL";
 
     private readonly Error? _problem;
+    private readonly Error? _publishProblem;
 
     public CliEnvironment(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
         Provider = StorageProviderResolver.Resolve(configuration);
+        PublishProvider = StorageProviderResolver.ResolvePublishing(configuration, Provider);
         if (Provider == StorageProvider.Unknown)
         {
             _problem = ConfigurationErrors.UnknownProvider(configuration[StorageProviderResolver.Variable] ?? string.Empty);
+        }
+
+        if (PublishProvider == StorageProvider.Unknown)
+        {
+            _publishProblem = ConfigurationErrors.Invalid(
+                StorageProviderResolver.PublishVariable,
+                $"'{configuration[StorageProviderResolver.PublishVariable]}' is not a supported publishing provider. Supported: azure-blob, s3.");
         }
 
         string? parallelism = configuration[ParallelismVariable];
@@ -60,8 +69,14 @@ internal sealed class CliEnvironment
 
     public StorageProvider Provider { get; }
 
+    /// <summary>Where publications go: <c>MYSYNC_PUBLISH_PROVIDER</c>, else <see cref="Provider"/>.</summary>
+    public StorageProvider PublishProvider { get; }
+
     public SyncOptions SyncOptions { get; }
 
     /// <summary>Success, or the first configuration problem a storage command must report.</summary>
     public Result Check() => _problem is null ? Result.Success() : Result.Failure(_problem);
+
+    /// <summary>Success, or the publishing provider's problem (an unknown <c>MYSYNC_PUBLISH_PROVIDER</c>).</summary>
+    public Result CheckPublishing() => _publishProblem is null ? Result.Success() : Result.Failure(_publishProblem);
 }

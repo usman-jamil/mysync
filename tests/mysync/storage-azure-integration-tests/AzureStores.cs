@@ -9,7 +9,7 @@ using MySync.Testing;
 
 namespace MySync.Storage.Azure.IntegrationTests;
 
-/// <summary>Builds <see cref="AzureBlobShareStore"/>s against the shared Azurite, each on its own container.</summary>
+/// <summary>Builds <see cref="AzureBlobShareStore"/>s against the test account, each on its own container.</summary>
 internal static class AzureStores
 {
     private static readonly ServiceProvider Infrastructure = new ServiceCollection().AddInfrastructure().BuildServiceProvider();
@@ -24,7 +24,7 @@ internal static class AzureStores
     public static AzureBlobShareStore Create(
         string connectionString, string? container = null, AzureTransferSettings? settings = null, ILogger? logger = null) =>
         new(
-            Options.Create(new AzureStorageOptions { ConnectionString = connectionString, Container = container ?? AzuriteEnvironment.NewContainerName() }),
+            Options.Create(new AzureStorageOptions { ConnectionString = connectionString, Container = container ?? AzureTestStorage.NewContainerName() }),
             Serializer,
             RegistrySerializer,
             TimeProvider.System,

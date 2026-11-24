@@ -16,7 +16,7 @@
     laptop                                                        server
    ~/report                                                      ~/report
       │               ┌──────────────────────────────┐               │
-      │  mysync sync  │ Azure Blob container         │  mysync sync  │
+      │  mysync sync  │ Azure container or S3 bucket │  mysync sync  │
       ├── local ↑ ───▶│ shares/<id>/manifest.json    │◀─── local ↑ ──┤
       │◀─ remote ↓ ───┤ shares/<id>/objects/ab/…     ├─── remote ↓ ─▶│
       │               └──────────────────────────────┘               │
@@ -24,8 +24,9 @@
          no server · hash-based · conflicts are never overwritten
 ```
 
-Sync folders between machines through an Azure Blob Storage container. There is no server: shared
-state lives in the container, and each folder's own state lives in a `.mysynctool` file inside it.
+Sync folders between machines through an Azure Blob Storage container or an AWS S3 bucket. There is
+no server: shared state lives in the container or bucket, and each folder's own state lives in a
+`.mysynctool` file inside it.
 
 ```text
 mysync sync --name next-wave   # in a folder: create a new share called next-wave
@@ -42,7 +43,7 @@ mysync sync                    # from then on, in either folder: two-way sync
 > **Setting up storage for the first time?** Follow a step-by-step guide that creates everything from scratch, with least-privilege credentials:
 >
 > - **[Azure Blob Storage setup](docs/azure.md)**: the shares account, the publishing account, connection strings or SAS, and a check that it all works.
-> - **[AWS S3 setup](docs/aws.md)**: the buckets, an IAM user limited to them, and the same checks. *S3 support is coming in the next release.*
+> - **[AWS S3 setup](docs/aws.md)**: the buckets, an IAM user limited to them, and the same checks. Then see [Using AWS S3](#using-aws-s3).
 
 ## Install
 
@@ -175,17 +176,38 @@ mysync 0.4.0 is up to date (from GitHub usman-jamil/mysync)
 Environment variables only: no config file, no prompts.
 
 > [!TIP]
-> No storage account yet? [docs/azure.md](docs/azure.md) creates one from scratch and ends with the exact variables to set ([docs/aws.md](docs/aws.md) for S3, coming next).
+> No storage yet? [docs/azure.md](docs/azure.md) and [docs/aws.md](docs/aws.md) create it from scratch and end with the exact variables to set.
+
+`MYSYNC_PROVIDER` picks the storage: `azure-blob` (the default) or `s3`. It decides which settings mysync reads and requires; the other provider's variables are ignored, so a machine can keep both sets in its environment and switch with `MYSYNC_PROVIDER` alone.
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `AZURE_STORAGE_CONNECTION_STRING` | yes | | The storage account. `UseDevelopmentStorage=true` targets a local Azurite. |
-| `MYSYNC_CONTAINER` | no | `mysync` | Blob container (3–63 lowercase letters, digits and hyphens). Created when the first share is. |
-| `MYSYNC_PROVIDER` | no | `azure-blob` | Storage provider. Azure Blob is the only one today. |
+| `MYSYNC_PROVIDER` | no | `azure-blob` | `azure-blob` or `s3`. |
 | `MYSYNC_PARALLELISM` | no | `min(cores × 2, 16)` | Concurrent transfers, 1–64. `--parallel <n>` overrides it for one run. |
 | `MYSYNC_COMPRESSION_LEVEL` | no | `fastest` | For shares with [compression](#compression) on: `fastest` or `optimal` (smaller, slower). |
+
+**Azure Blob Storage** (`MYSYNC_PROVIDER` unset or `azure-blob`):
+
+| Variable | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `AZURE_STORAGE_CONNECTION_STRING` | yes | | The storage account. |
+| `MYSYNC_CONTAINER` | no | `mysync` | Blob container (3–63 lowercase letters, digits and hyphens). Created when the first share is. Azure only. |
 | `MYSYNC_PUBLISH_CONNECTION_STRING` | for publishing | | The storage account publications go to. Its static website must be on. See [Publishing](#publishing-a-share). |
 | `MYSYNC_PUBLISH_BASE_URL` | for publishing | | That account's static website address, `https://<account>.z13.web.core.windows.net` (or your own domain). |
+
+**AWS S3** (`MYSYNC_PROVIDER=s3`; see [Using AWS S3](#using-aws-s3)):
+
+| Variable | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `MYSYNC_S3_BUCKET` | yes | | The bucket for shares (it must exist; mysync never creates one). |
+| `MYSYNC_S3_REGION` | yes, or `AWS_REGION` | `AWS_REGION` | The bucket's region, e.g. `eu-west-1`. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, … | yes, one way or another | | Credentials, the standard AWS way (below). |
+| `MYSYNC_PUBLISH_S3_BUCKET` | for publishing | | The public bucket publications go to. See [Publishing on AWS S3](#publishing-on-aws-s3). |
+| `MYSYNC_PUBLISH_S3_REGION` | no | the share's region | Its region. |
+| `MYSYNC_PUBLISH_AWS_PROFILE` | no | the share's credentials | A credential profile for publishing only. |
+| `MYSYNC_PUBLISH_BASE_URL` | for publishing | | Its HTTPS address, `https://<bucket>.s3.<region>.amazonaws.com`, or CloudFront in front of it. |
+
+`MYSYNC_PUBLISH_PROVIDER` (default: `MYSYNC_PROVIDER`) sends publications to the other provider, e.g. Azure shares published to an S3 bucket. Files are then copied through your machine, since neither provider can read the other's objects directly.
 
 ```bash
 # macOS / Linux (e.g. in ~/.zshrc or ~/.bashrc)
@@ -197,7 +219,39 @@ export AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountNa
 $env:AZURE_STORAGE_CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=..."
 ```
 
-The connection string is a secret. Anyone who has it can read and change every share in the account. mysync never prints, logs or stores it, including in `--verbose` output, `--json` output and `.mysynctool`. Keep it out of scripts you commit.
+The connection string is a secret. Anyone who has it can read and change every share in the account. mysync never prints, logs or stores it, including in `--verbose` output, `--json` output and `.mysynctool`. Keep it out of scripts you commit. The same goes for AWS keys and session tokens.
+
+### Using AWS S3
+
+[docs/aws.md](docs/aws.md) creates the buckets and an IAM user with exactly the permissions mysync needs. Then:
+
+```bash
+export MYSYNC_PROVIDER=s3
+export MYSYNC_S3_BUCKET=team-shares
+export MYSYNC_S3_REGION=eu-west-1
+# and credentials, any of the ways below
+```
+
+- **Credentials come from the standard AWS chain**, as for the `aws` CLI, and mysync never asks for them or stores them. In order: `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (with `AWS_SESSION_TOKEN` for temporary keys); the profile `AWS_PROFILE` names (or `default`) in `~/.aws/config` and `~/.aws/credentials`, including **SSO** profiles (run `aws sso login` first) and assumed-role profiles; web identity (`AWS_WEB_IDENTITY_TOKEN_FILE`); the ECS task role; the **EC2 instance role**. On an EC2 server, attach a role with the policy from the guide and set no keys at all.
+- **Off EC2, with no credentials anywhere,** mysync looks at the instance metadata endpoint last, which fails within about a second. Set `AWS_EC2_METADATA_DISABLED=true` to skip it.
+- **The bucket must exist** and be in `MYSYNC_S3_REGION`. mysync never creates or configures buckets. The first `sync --name` checks the bucket's region.
+- **The layout is the same as on Azure:** `shares/<id>/…` and `aliases/<name>` in the bucket. `MYSYNC_CONTAINER` is Azure-only.
+- **Leave versioning off** on the shares bucket, so `mysync delete` removes data for good. With versioning on, old versions stay until a lifecycle rule or you remove them, and `delete` warns how many are left.
+- **Upload size:** files up to 5 TiB (S3's object limit). Compressed uploads, whose length isn't known until they end, go up to about 4.8 TiB. Beyond that the upload fails with a clear error and nothing is stored. Each upload holds one part (16 MiB, more for very large files) in memory.
+- **S3-compatible services aren't supported.** mysync relies on AWS S3's conditional writes and error codes, and is tested only against AWS. Cloudflare R2, MinIO, Wasabi and the like may behave differently in ways that lose data, so there's no endpoint setting.
+- **A folder belongs to its storage.** `.mysynctool` records the provider, region and bucket. A folder created on Azure is refused under `MYSYNC_PROVIDER=s3`, and the reverse, before anything is changed.
+
+**If something's wrong on S3:**
+
+| Message | What it means |
+| --- | --- |
+| `No credentials for AWS S3 were found` (exit 2) | None of the credential sources above has any. |
+| `The AWS session has expired … run aws sso login` (exit 8) | An SSO or temporary session ran out. mysync never runs `aws sso login` itself. |
+| `The storage rejected the request … access denied` (exit 8) | The IAM policy is missing a permission (the guide lists them). If the identity lacks `s3:ListBucket`, S3 reports a missing object as access denied too, so a share or file that doesn't exist looks like a permission problem. |
+| `The bucket … is in us-west-2, not eu-west-1` (exit 2) | Set `MYSYNC_S3_REGION` to the bucket's region. |
+| `… doesn't exist in eu-west-1` (exit 2) | Check `MYSYNC_S3_BUCKET` and the region. |
+| `this machine's clock is off by about N minute(s)` (exit 2) | S3 refuses requests from a clock more than 15 minutes off. Turn on time sync (NTP). |
+| `doesn't serve files to anonymous readers` (`publish`, exit 2) | See [Publishing on AWS S3](#publishing-on-aws-s3): usually Block Public Access, often the **account-level** setting. |
 
 ## Quick start
 
@@ -635,6 +689,22 @@ Only the machines that publish need these two variables, plus any machine that r
 | Published, but exit code 10 | The files are up, but the page couldn't be opened from the internet. `MYSYNC_PUBLISH_BASE_URL` is probably not this account's static website address; check step 3. |
 | `built without its publication page` | This mysync is a development build. Install a release (see [Install](#install)). |
 
+### Publishing on AWS S3
+
+With `MYSYNC_PROVIDER=s3` (or `MYSYNC_PUBLISH_PROVIDER=s3`), publications go to a **dedicated public bucket**. [docs/aws.md](docs/aws.md), step 2, sets it up: a bucket policy that lets anyone read `p/*` and `robots.txt`, and nothing else.
+
+```bash
+export MYSYNC_PUBLISH_S3_BUCKET=team-publish
+export MYSYNC_PUBLISH_BASE_URL=https://team-publish.s3.eu-west-1.amazonaws.com
+```
+
+- **HTTPS only.** Use the bucket's REST address (`https://<bucket>.s3.<region>.amazonaws.com`) or a CloudFront distribution in front of the bucket. The S3 *website* endpoint is plain HTTP, so mysync refuses it.
+- **No dots in the bucket name.** A dotted name breaks HTTPS for `<bucket>.s3.<region>.amazonaws.com`: the certificate doesn't cover it.
+- **Links end in `index.html`** (`…/p/<id>/index.html`), because the REST address serves no index pages.
+- **Before anything is copied**, `publish` checks the bucket is in its region, uploads a small probe and reads it back without credentials through `MYSYNC_PUBLISH_BASE_URL`, and makes sure **nobody can list the bucket**. A listing would reveal every publication's ID, and the IDs are what keep the links private.
+- **If the probe can't be read**, three things can block public reads: the bucket's Block Public Access settings, the **account-level** Block Public Access settings (`aws s3control get-public-access-block`), and an organisation policy. mysync can't tell which one it is, so the message names all three and shows the bucket policy to apply.
+- **Copies stay inside S3** when the share is on S3 and the same credentials can read it (`MYSYNC_PUBLISH_AWS_PROFILE` unset). Otherwise, and for Azure shares, files are copied through your machine.
+
 ### Using it
 
 | Command | |
@@ -658,13 +728,13 @@ With `--json`, every command prints exactly one JSON document on stdout, even wh
 | --- | --- |
 | 0 | Success |
 | 1 | Unexpected error (details with `--verbose`) |
-| 2 | Usage or configuration error (bad option, missing or invalid environment variable, `resolve` on a path not in conflict, the publishing account's static website is off) |
+| 2 | Usage or configuration error (bad option, missing or invalid environment variable, no AWS credentials, the wrong region for the bucket, this machine's clock too far off, `resolve` on a path not in conflict, the publishing account's static website is off, the S3 publishing bucket not public or publicly listable) |
 | 3 | Finished, but conflicts are open (takes precedence over 9) |
 | 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; the name is taken; `update` can't replace this binary; `push` from a folder that already syncs with that share, or the share has a file where the host's folder would go; `pull` into a folder that syncs with that share, or local files in the way; `clone` into a file, into a folder inside a share, or a folder that can't be created |
 | 5 | Another machine kept committing; try again |
 | 6 | Another mysync is working in this folder (or another `mysync tui` is open there) |
 | 7 | The mass-delete safety check stopped the sync |
-| 8 | Share not found, deleted, never finished, or no share has that name; the storage account rejected the credentials; no such release or publication; or a stored file uses an encoding this mysync can't read (upgrade mysync); `pull --latest` in a share with no pushed folders |
+| 8 | Share not found, deleted, never finished, or no share has that name; the storage rejected the credentials (or an AWS session expired); no such release or publication; or a stored file uses an encoding this mysync can't read (upgrade mysync); `pull --latest` in a share with no pushed folders |
 | 9 | Finished, but some paths were skipped (busy, unreadable, invalid name) |
 | 10 | Published, but the publication couldn't be opened from the internet (check `MYSYNC_PUBLISH_BASE_URL`) |
 | 130 | Cancelled (Ctrl+C) |
@@ -694,7 +764,7 @@ None of these is synced, and none contains credentials.
 
 - **Whole shares only.** There's no partial or selective sync; use `.mysyncignore`.
 - **No delta transfer.** A changed file is uploaded again in full.
-- **No per-user access control.** Anyone with the connection string reaches every share in the account.
+- **No per-user access control.** Anyone with the connection string (or the S3 credentials) reaches every share in the account or bucket.
 - **`gc` safety:** run it when no one else is syncing. A sync that starts at the same moment can reuse a stored file that `gc` is about to delete.
 - **Interrupted creates:** if `mysync sync` is interrupted while *creating* a share, the files it had uploaded stay in the container without a share. `gc` can't see them, because it works on one share at a time.
 
@@ -702,19 +772,19 @@ None of these is synced, and none contains credentials.
 
 Contributions are welcome: [`CONTRIBUTING.md`](CONTRIBUTING.md) covers setup, tests, where a change goes, and pull requests.
 
-Requires the .NET 10 SDK, Node (for Nx; see `.nvmrc`) and Docker for the Azurite suites. `CLAUDE.md` describes the architecture and the rules for changing it.
+Requires the .NET 10 SDK and Node (for Nx; see `.nvmrc`). `CLAUDE.md` describes the architecture and the rules for changing it.
 
 ```bash
 npm install
 npx nx build mysync
 npx nx run-many -t test --projects=tag:type:unit-test,tag:type:architecture-test
-npx nx run-many -t test --projects=tag:type:integration-test,tag:type:e2e-test   # Docker, or set MYSYNC_TEST_AZURITE_CONNECTION_STRING
+npx nx run-many -t test --projects=tag:type:integration-test,tag:type:e2e-test   # real test storage: docs/ci-storage.md
 dotnet run --project apps/mysync -- self-check --verbose
 npx nx publish mysync --rid=osx-arm64          # single-file binary in out/osx-arm64
 ```
 
 - **The publication page** (`apps/mysync-site`, React): `npm run site` shows it with a mocked share; `apps/mysync-site/README.md` describes it.
-- **Local Azurite:** `docker run -p 10000:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck`, then `export AZURE_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true`.
-- **Real Azure:** the manually triggered *Real Azure tests* workflow runs the storage and end-to-end suites against a test-only account. With *large* ticked, it also runs a 300 MB file and a 5,000-file share. Add the repository secret `MYSYNC_REAL_AZURE_CONNECTION_STRING` first; the top of `.github/workflows/real-azure.yml` explains how.
+- **Storage tests run against real storage**, a test-only Azure account and a test-only S3 bucket; there is no emulator. CI runs them on every push to `main` with the repository secrets in [docs/ci-storage.md](docs/ci-storage.md), which also explains how to run them yourself. Without those settings, the tests that need storage skip.
+- **Large shares:** the *Large share tests* workflow (manual, and weekly) runs a 300 MB file and a 5,000-file share on both providers.
 - **Releases** are cut by pushing a `mysync-<version>` tag after bumping `<Version>` in `Directory.Build.props` (`CLAUDE.md` §16).
 - **Forks** can publish their own releases: generate a key (`openssl ecparam -name prime256v1 -genkey -noout -out key.pem`), add its contents as the repository secret `MYSYNC_RELEASE_SIGNING_KEY`, and push a tag. Binaries built that way update from the fork and trust only its key. If you host the install scripts yourself, change the repository and public key at the top of each.

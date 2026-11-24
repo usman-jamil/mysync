@@ -2,7 +2,6 @@ using Microsoft.Extensions.DependencyInjection;
 using MySync.Application.Abstractions.Messaging;
 using MySync.Application.Abstractions.Storage;
 using MySync.Cli.Rendering;
-using MySync.Storage.Azure;
 using SharedKernel;
 using Spectre.Console;
 
@@ -41,6 +40,12 @@ internal sealed class CommandRunner(IServiceProvider services, GlobalOptions opt
     /// <summary>The publishing settings (<c>publish</c>, <c>unpublish</c>): checked before any work, like storage.</summary>
     public Result CheckPublishing()
     {
+        Result provider = environment.CheckPublishing();
+        if (provider.IsFailure)
+        {
+            return provider;
+        }
+
         using IServiceScope scope = services.CreateScope();
         Application.Abstractions.Publishing.IPublishTarget target = scope.ServiceProvider.GetRequiredService<Application.Abstractions.Publishing.IPublishTarget>();
         Result<Application.Abstractions.Publishing.PublishLocation> location = target.GetLocation();
@@ -95,7 +100,7 @@ internal sealed class CommandRunner(IServiceProvider services, GlobalOptions opt
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            string detail = ConnectionStringRedactor.Redact(options.Verbose ? exception.ToString() : exception.Message);
+            string detail = Redact(options.Verbose ? exception.ToString() : exception.Message);
             ConsoleOutput.Errors.MarkupLine($"[red]Unexpected error: {Markup.Escape(detail)}[/]");
             if (!options.Verbose)
             {
@@ -104,10 +109,13 @@ internal sealed class CommandRunner(IServiceProvider services, GlobalOptions opt
 
             if (options.Json)
             {
-                JsonOutput.Write(Error.Failure("Unexpected", ConnectionStringRedactor.Redact(exception.Message)), ExitCodes.Unexpected);
+                JsonOutput.Write(Error.Failure("Unexpected", Redact(exception.Message)), ExitCodes.Unexpected);
             }
 
             return ExitCodes.Unexpected;
         }
     }
+
+    /// <summary>Every provider's secrets masked: Azure connection strings and SAS, AWS keys, session tokens and presigned URLs.</summary>
+    internal static string Redact(string? text) => Storage.S3.S3Redactor.Redact(Storage.Azure.ConnectionStringRedactor.Redact(text));
 }

@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\..\libs\mysync\application\MySync.Application.csproj" />
     <ProjectReference Include="..\..\..\libs\mysync\infrastructure\MySync.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\libs\mysync\storage-azure\MySync.Storage.Azure.csproj" />
+    <ProjectReference Include="..\..\..\libs\mysync\storage-s3\MySync.Storage.S3.csproj" />
     <ProjectReference Include="..\..\..\libs\mysync\updates-github\MySync.Updates.GitHub.csproj" />
     <ProjectReference Include="..\..\..\libs\mysync\site-assets\MySync.SiteAssets.csproj" />
     <ProjectReference Include="..\..\..\libs\mysync\tui\MySync.Tui.csproj" />

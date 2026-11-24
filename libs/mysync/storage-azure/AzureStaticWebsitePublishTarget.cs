@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 using MySync.Application.Abstractions.Publishing;
 using MySync.Domain.Configuration;
 using MySync.Domain.Publishing;
+using MySync.Domain.State;
 using MySync.Domain.Storage;
 using SharedKernel;
 
@@ -21,7 +22,7 @@ namespace MySync.Storage.Azure;
 /// <remarks>
 /// <list type="bullet">
 /// <item><b>Server-side copies:</b> Put Blob From URL up to its limit (<see cref="AzureCopyLimits"/>);
-/// above it, or where the service doesn't have it (Azurite answers 501), blocks staged from the
+/// above it, or where the service doesn't have it (501), blocks staged from the
 /// URL and committed with the headers. The bytes never pass through this machine.</item>
 /// <item><b>Never configures the account:</b> static website hosting is checked, never turned on.</item>
 /// <item><b>Secrets:</b> no error carries SDK text; the debug log gets it redacted. A rejected
@@ -54,7 +55,8 @@ internal sealed class AzureStaticWebsitePublishTarget : IPublishTarget
     public Result<PublishLocation> GetLocation() =>
         _connection.Value.IsSuccess ? _connection.Value.Value.Location : Result.Failure<PublishLocation>(_connection.Value.Error);
 
-    public async Task<Result> CheckStaticWebsiteAsync(CancellationToken cancellationToken)
+    /// <summary>Static website hosting is on, with <c>index.html</c> as the index document.</summary>
+    public async Task<Result> PreflightAsync(CancellationToken cancellationToken)
     {
         if (_connection.Value.IsFailure)
         {
@@ -66,14 +68,7 @@ internal sealed class AzureStaticWebsitePublishTarget : IPublishTarget
         try
         {
             BlobServiceProperties properties = (await connection.Service.GetPropertiesAsync(cancellationToken)).Value;
-            if (properties.StaticWebsite is not { Enabled: true } website)
-            {
-                return Result.Failure(PublishErrors.StaticWebsiteDisabled(account));
-            }
-
-            return string.Equals(website.IndexDocument, PublicationLayout.IndexDocument, StringComparison.Ordinal)
-                ? Result.Success()
-                : Result.Failure(PublishErrors.IndexDocumentMismatch(account, website.IndexDocument));
+            return CheckStaticWebsite(properties.StaticWebsite, account);
         }
         catch (RequestFailedException exception) when (exception.Status == 403)
         {
@@ -84,6 +79,35 @@ internal sealed class AzureStaticWebsitePublishTarget : IPublishTarget
         {
             return Result.Failure(Failed(exception, "(service properties)"));
         }
+    }
+
+    /// <summary>The account's static website setting, as the preflight judges it: on, with <c>index.html</c> as the index document.</summary>
+    internal static Result CheckStaticWebsite(BlobStaticWebsite? website, string account)
+    {
+        if (website is not { Enabled: true } enabled)
+        {
+            return Result.Failure(PublishErrors.StaticWebsiteDisabled(account));
+        }
+
+        return string.Equals(enabled.IndexDocument, PublicationLayout.IndexDocument, StringComparison.Ordinal)
+            ? Result.Success()
+            : Result.Failure(PublishErrors.IndexDocumentMismatch(account, enabled.IndexDocument));
+    }
+
+    /// <summary>The share's account is this one: the static website's URL names it.</summary>
+    public bool SharesAccountWith(StorageLocation shares)
+    {
+        ArgumentNullException.ThrowIfNull(shares);
+        return _connection.Value.IsSuccess
+            && string.Equals(shares.Provider, AzureBlobShareStore.ProviderName, StringComparison.Ordinal)
+            && string.Equals(shares.AccountName, _connection.Value.Value.Location.AccountName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Put Blob From URL reads any URL it can GET: a SAS, or another provider's presigned URL.</summary>
+    public bool CanCopy(CopySource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return source.Url is { Scheme: "https" or "http" };
     }
 
     public Task<Result<bool>> PutAsync(string blobName, Stream content, PublishedBlob blob, bool onlyIfAbsent, CancellationToken cancellationToken) =>
@@ -109,23 +133,28 @@ internal sealed class AzureStaticWebsitePublishTarget : IPublishTarget
             }
         }, cancellationToken);
 
-    public Task<Result<CopyMethod>> CopyAsync(Uri source, long length, string blobName, PublishedBlob blob, CancellationToken cancellationToken) =>
+    public Task<Result<CopyMethod>> CopyAsync(CopySource source, long length, string blobName, PublishedBlob blob, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(blob);
+        Uri url = source?.Url ?? throw new ArgumentException("Azure copies from a URL only (see CanCopy).", nameof(source));
+        return CopyFromUrlAsync(url, length, blobName, blob, cancellationToken);
+    }
+
+    private Task<Result<CopyMethod>> CopyFromUrlAsync(Uri url, long length, string blobName, PublishedBlob blob, CancellationToken cancellationToken) =>
         CallAsync(blobName, async web =>
         {
-            ArgumentNullException.ThrowIfNull(source);
-            ArgumentNullException.ThrowIfNull(blob);
             BlockBlobClient target = web.GetBlockBlobClient(blobName);
 
-            if (length <= AzureCopyLimits.PutBlobFromUrlMaxBytes && !_putBlobFromUrlMissing)
+            if (length <= _settings.PutBlobFromUrlMaxBytes && !_putBlobFromUrlMissing)
             {
                 try
                 {
-                    await target.SyncUploadFromUriAsync(source, new BlobSyncUploadFromUriOptions { HttpHeaders = Headers(blob) }, cancellationToken);
+                    await target.SyncUploadFromUriAsync(url, new BlobSyncUploadFromUriOptions { HttpHeaders = Headers(blob) }, cancellationToken);
                     return Result.Success(CopyMethod.PutBlobFromUrl);
                 }
                 catch (RequestFailedException exception) when (exception.Status == 501)
                 {
-                    _putBlobFromUrlMissing = true; // e.g. Azurite; blocks from the URL work there
+                    _putBlobFromUrlMissing = true; // a service without it; blocks from the URL work there
                 }
             }
 
@@ -135,7 +164,7 @@ internal sealed class AzureStaticWebsitePublishTarget : IPublishTarget
             {
                 string blockId = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"{uploadId}-{blocks.Count:D6}"));
                 await target.StageBlockFromUriAsync(
-                    source,
+                    url,
                     blockId,
                     new StageBlockFromUriOptions { SourceRange = new HttpRange(offset, Math.Min(_settings.CopyBlockSize, length - offset)) },
                     cancellationToken);
@@ -219,7 +248,7 @@ internal sealed class AzureStaticWebsitePublishTarget : IPublishTarget
         {
             BlobServiceClient service = new(options.ConnectionString, clientOptions);
             string account = string.IsNullOrEmpty(service.AccountName) ? service.Uri.Host : service.AccountName;
-            return new Connection(service, service.GetBlobContainerClient(WebContainer), new PublishLocation(account, baseUrl));
+            return new Connection(service, service.GetBlobContainerClient(WebContainer), PublishLocation.StaticWebsite(AzureBlobShareStore.ProviderName, account, baseUrl));
         }
         catch (Exception exception) when (exception is FormatException or ArgumentException or UriFormatException or InvalidOperationException)
         {

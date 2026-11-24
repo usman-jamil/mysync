@@ -11,7 +11,7 @@ namespace MySync.Testing;
 /// An <see cref="IAliasStore"/> in memory, with the same conditional-write semantics as Azure
 /// (<c>If-None-Match: *</c> on create, <c>If-Match</c> on delete) and the same blob names
 /// (<see cref="ShareLayout.Alias"/>). Pinned by <see cref="Contracts.AliasStoreContractTests"/>,
-/// which also runs against Azurite. Thread-safe.
+/// which also runs against real Azure and S3 storage. Thread-safe.
 /// </summary>
 public sealed class InMemoryAliasStore : IAliasStore
 {

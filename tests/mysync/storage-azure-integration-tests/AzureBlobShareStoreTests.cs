@@ -16,9 +16,29 @@ using Xunit;
 namespace MySync.Storage.Azure.IntegrationTests;
 
 /// <summary>What only the Azure store does, beyond the shared contract (CLAUDE.md §6, §11).</summary>
-public class AzureBlobShareStoreTests(AzuriteFixture azurite)
+public class AzureBlobShareStoreTests(AzureStorageFixture azure)
 {
+    /// <summary>Parses like a real one, reaches nothing: for the checks that never touch the network.</summary>
+    private const string OfflineConnectionString = "DefaultEndpointsProtocol=https;AccountName=teamsyncstorage;AccountKey=c2VjcmV0LWtleS1mb3ItdGVzdHM=;EndpointSuffix=core.windows.net";
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    /// <summary>
+    /// Azure gives every write a new ETag, even of identical bytes (S3 doesn't: its ETag follows the
+    /// content). The shared contract leaves this to the provider; mysync never relies on it.
+    /// </summary>
+    [Fact]
+    public async Task ReplaceManifest_Should_GiveANewETag_EvenForIdenticalContent()
+    {
+        AzureBlobShareStore store = await ReadyStoreAsync();
+        Manifest manifest = new ManifestBuilder().WithFile("a.txt", "a").Build();
+        string first = (await store.CreateManifestAsync(manifest.ShareId, manifest, Ct)).Value;
+
+        string second = (await store.ReplaceManifestAsync(manifest.ShareId, manifest, first, Ct)).Value;
+
+        second.ShouldNotBe(first);
+        (await store.ReplaceManifestAsync(manifest.ShareId, manifest, first, Ct)).Error.Code.ShouldBe("Storage.PreconditionFailed");
+    }
 
     [Fact]
     public async Task AFileLargerThanABlock_Should_UploadAsSeveralBlocks_AndReadBackByteForByte()
@@ -130,7 +150,7 @@ public class AzureBlobShareStoreTests(AzuriteFixture azurite)
     public async Task TheSameObjectUploadedTwiceAtOnce_Should_SucceedBoth_AndBeStoredOnce()
     {
         AzureBlobShareStore first = await ReadyStoreAsync();
-        AzureBlobShareStore second = AzureStores.Create(azurite.ConnectionString, first.GetLocation().Value.Container);
+        AzureBlobShareStore second = AzureStores.Create(azure.ConnectionString, first.GetLocation().Value.Container);
         var shareId = ShareId.New();
         byte[] content = RandomNumberGenerator.GetBytes(3 * 1024 * 1024);
         var hash = ContentHash.FromBytes(SHA256.HashData(content));
@@ -151,7 +171,7 @@ public class AzureBlobShareStoreTests(AzuriteFixture azurite)
 
         await store.CreateManifestAsync(manifest.ShareId, manifest, Ct);
 
-        BlobClient blob = AzureStores.Container(azurite.ConnectionString, store).GetBlobClient(ShareLayout.For(manifest.ShareId).Manifest);
+        BlobClient blob = AzureStores.Container(azure.ConnectionString, store).GetBlobClient(ShareLayout.For(manifest.ShareId).Manifest);
         BlobDownloadResult stored = (await blob.DownloadContentAsync(Ct)).Value;
         stored.Details.ContentType.ShouldBe("application/json");
         string json = stored.Content.ToString();
@@ -164,7 +184,7 @@ public class AzureBlobShareStoreTests(AzuriteFixture azurite)
     {
         AzureBlobShareStore store = await ReadyStoreAsync();
         var shareId = ShareId.New();
-        await AzureStores.Container(azurite.ConnectionString, store).GetBlobClient(ShareLayout.For(shareId).Manifest)
+        await AzureStores.Container(azure.ConnectionString, store).GetBlobClient(ShareLayout.For(shareId).Manifest)
             .UploadAsync(BinaryData.FromString("{ not json"), Ct);
 
         (await store.GetManifestAsync(shareId, Ct)).Error.Code.ShouldBe("Shares.InvalidManifest");
@@ -176,7 +196,7 @@ public class AzureBlobShareStoreTests(AzuriteFixture azurite)
         AzureBlobShareStore store = await ReadyStoreAsync();
         var shareId = ShareId.New();
         var layout = ShareLayout.For(shareId);
-        BlobContainerClient container = AzureStores.Container(azurite.ConnectionString, store);
+        BlobContainerClient container = AzureStores.Container(azure.ConnectionString, store);
         ContentHash real = ManifestBuilder.HashOf("real");
         await store.UploadObjectAsync(shareId, real, ObjectUpload.Raw(new MemoryStream("real"u8.ToArray()), 4), Ct);
         foreach (string stray in (string[])[$"{layout.ObjectsPrefix}ab/not-a-hash", $"{layout.ObjectsPrefix}readme.txt", $"{layout.ManifestHistoryPrefix}latest.json", $"{layout.ManifestHistoryPrefix}17.json"])
@@ -209,13 +229,13 @@ public class AzureBlobShareStoreTests(AzuriteFixture azurite)
     }
 
     [Fact]
-    public async Task GetLocation_Should_NameTheAccountFromTheConnectionString_AndNoSecret()
+    public void GetLocation_Should_NameTheAccountFromTheConnectionString_AndNoSecret()
     {
-        AzureBlobShareStore store = AzureStores.Create(azurite.ConnectionString, "team-share");
+        AzureBlobShareStore store = AzureStores.Create(OfflineConnectionString, "team-share");
 
         StorageLocation location = store.GetLocation().Value;
 
-        location.ShouldBe(new StorageLocation("azure-blob", azurite.AccountName, "team-share"));
+        location.ShouldBe(new StorageLocation("azure-blob", "teamsyncstorage", "team-share"));
     }
 
     [Fact]
@@ -237,7 +257,7 @@ public class AzureBlobShareStoreTests(AzuriteFixture azurite)
     [InlineData("under_score")]
     public void AnInvalidContainerName_Should_BeAConfigurationError_NamingTheVariable(string container)
     {
-        Error error = AzureStores.Create(azurite.ConnectionString, container).GetLocation().Error;
+        Error error = AzureStores.Create(OfflineConnectionString, container).GetLocation().Error;
 
         error.Code.ShouldBe("Configuration.Invalid");
         error.Description.ShouldContain("MYSYNC_CONTAINER");
@@ -260,7 +280,7 @@ public class AzureBlobShareStoreTests(AzuriteFixture azurite)
     public async Task AWrongKey_Should_BeUnauthorized_AndNoErrorOrLogLineShouldCarryTheKey()
     {
         string wrongKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
-        string connectionString = WithAccountKey(azurite.ConnectionString, wrongKey);
+        string connectionString = WithAccountKey(azure.ConnectionString, wrongKey);
         RecordingLogger logger = new();
         AzureBlobShareStore store = AzureStores.Create(connectionString, logger: logger);
 
@@ -294,13 +314,13 @@ public class AzureBlobShareStoreTests(AzuriteFixture azurite)
 
     private async Task<AzureBlobShareStore> ReadyStoreAsync()
     {
-        AzureBlobShareStore store = AzureStores.Create(azurite.ConnectionString);
+        AzureBlobShareStore store = AzureStores.Create(azure.ConnectionString);
         (await store.EnsureReadyForNewShareAsync(Ct)).IsSuccess.ShouldBeTrue();
         return store;
     }
 
     private BlockBlobClient ObjectBlob(AzureBlobShareStore store, ShareId shareId, ContentHash hash) =>
-        AzureStores.Container(azurite.ConnectionString, store).GetBlockBlobClient(ShareLayout.For(shareId).ObjectBlob(hash));
+        AzureStores.Container(azure.ConnectionString, store).GetBlockBlobClient(ShareLayout.For(shareId).ObjectBlob(hash));
 
     private static string WithAccountKey(string connectionString, string key) =>
         string.Join(';', connectionString.Split(';').Select(part =>

@@ -15,33 +15,27 @@ using Xunit;
 namespace MySync.Storage.Azure.IntegrationTests;
 
 /// <summary>
-/// <see cref="AzureStaticWebsitePublishTarget"/> against Azurite's publishing accounts. Azurite
-/// gaps (CLAUDE.md, Publishing): no static website endpoint, so public verification is faked
-/// elsewhere; no Put Blob From URL (501), so copies here take the blocks-from-URL path.
+/// <see cref="AzureStaticWebsitePublishTarget"/> against a real, test-only publishing account
+/// (static website hosting on). The static-website rules themselves are checked offline.
 /// </summary>
-public sealed class AzureStaticWebsitePublishTargetTests(AzuriteFixture azurite)
+public sealed class AzureStaticWebsitePublishTargetTests(AzureStorageFixture azure)
 {
     private const string BaseUrl = "https://mysyncpublish.z13.web.core.windows.net";
+
+    private const string OfflineConnectionString = "DefaultEndpointsProtocol=https;AccountName=teampublish;AccountKey=c2VjcmV0LWtleS1mb3ItdGVzdHM=;EndpointSuffix=core.windows.net";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static AzureTransferSettings SmallCopyBlocks { get; } = AzureStores.TestSettings with { CopyBlockSize = 1024 * 1024 };
 
-    private string PublishConnection()
-    {
-        Assert.SkipWhen(azurite.PublishConnectionString is null, $"No publishing account: set {AzuriteEnvironment.PublishConnectionStringVariable} with supplied storage.");
-        return azurite.PublishConnectionString!;
-    }
+    private string PublishConnection() => azure.PublishConnectionString;
 
-    private static AzureStaticWebsitePublishTarget Target(string? connectionString, string? baseUrl = BaseUrl, RecordingLogger? logger = null) =>
-        new(Options.Create(new PublishStorageOptions { ConnectionString = connectionString, BaseUrl = baseUrl }), SmallCopyBlocks, logger);
+    private static AzureStaticWebsitePublishTarget Target(string? connectionString, string? baseUrl = BaseUrl, RecordingLogger? logger = null, AzureTransferSettings? settings = null) =>
+        new(Options.Create(new PublishStorageOptions { ConnectionString = connectionString, BaseUrl = baseUrl }), settings ?? SmallCopyBlocks, logger);
 
     private static string Prefix() => $"p/{PublishId.New()}/";
 
     private BlobContainerClient Web() => new BlobServiceClient(PublishConnection()).GetBlobContainerClient("$web");
-
-    /// <summary>The public URL of the supplied publishing account's static website, for <see cref="ARealStaticWebsite_Should_ServeGzipFiles_SoEveryClientGetsTheOriginalBytes"/>.</summary>
-    public const string PublishBaseUrlVariable = "MYSYNC_TEST_PUBLISH_BASE_URL";
 
     private static readonly byte[] LogText = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Range(0, 2000).Select(i => $"2026-11-22 line {i} of a log\n")));
 
@@ -61,7 +55,7 @@ public sealed class AzureStaticWebsitePublishTargetTests(AzuriteFixture azurite)
         }
 
         // Copied server-side from a share's gzip object:
-        AzureBlobShareStore source = AzureStores.Create(azurite.ConnectionString);
+        AzureBlobShareStore source = AzureStores.Create(azure.ConnectionString);
         (await source.EnsureReadyForNewShareAsync(Ct)).IsSuccess.ShouldBeTrue();
         var shareId = ShareId.New();
         ContentHash hash = MySync.Testing.ManifestBuilder.HashOf(LogText);
@@ -70,7 +64,8 @@ public sealed class AzureStaticWebsitePublishTargetTests(AzuriteFixture azurite)
             (await source.UploadObjectAsync(shareId, hash, new ObjectUpload(stored, ObjectEncoding.Gzip, LogText.LongLength, () => Result.Success()), Ct)).IsSuccess.ShouldBeTrue();
         }
 
-        Uri url = (await source.GetObjectReadUrlAsync(shareId, hash, TimeSpan.FromMinutes(5), Ct)).Value!;
+        CopySource url = (await source.GetCopySourceAsync(shareId, hash, TimeSpan.FromMinutes(5), Ct)).Value!;
+        target.CanCopy(url).ShouldBeTrue();
         (await target.CopyAsync(url, gzip.LongLength, prefix + "files/copy.log", headers, Ct)).IsSuccess.ShouldBeTrue();
 
         foreach (string name in new[] { "files/put.log", "files/copy.log" })
@@ -87,10 +82,8 @@ public sealed class AzureStaticWebsitePublishTargetTests(AzuriteFixture azurite)
     [Fact]
     public async Task ARealStaticWebsite_Should_ServeGzipFiles_SoEveryClientGetsTheOriginalBytes()
     {
-        // Only real Azure has a static website endpoint (Azurite has none): real-azure.yml runs this.
-        string? baseUrl = Environment.GetEnvironmentVariable(PublishBaseUrlVariable);
-        Assert.SkipWhen(string.IsNullOrWhiteSpace(baseUrl) || azurite.PublishConnectionString is null, $"Needs a real publishing account: {AzuriteEnvironment.PublishConnectionStringVariable} and {PublishBaseUrlVariable}.");
-        AzureStaticWebsitePublishTarget target = Target(azurite.PublishConnectionString, baseUrl);
+        string baseUrl = azure.PublishBaseUrl;
+        AzureStaticWebsitePublishTarget target = Target(azure.PublishConnectionString, baseUrl);
         string prefix = Prefix();
         byte[] gzip = GzipBytes(LogText);
         using (MemoryStream content = new(gzip))
@@ -99,7 +92,7 @@ public sealed class AzureStaticWebsitePublishTargetTests(AzuriteFixture azurite)
                 .IsSuccess.ShouldBeTrue();
         }
 
-        Uri file = new(new Uri(baseUrl!.TrimEnd('/') + "/"), prefix + "files/app.log");
+        Uri file = new(new Uri(baseUrl.TrimEnd('/') + "/"), prefix + "files/app.log");
         try
         {
             // 1. Served as stored, and saying so (no decoding in this client).
@@ -185,35 +178,49 @@ public sealed class AzureStaticWebsitePublishTargetTests(AzuriteFixture azurite)
     }
 
     [Fact]
-    public async Task CheckStaticWebsite_Should_Pass_OnlyWithIndexHtml()
+    public async Task Preflight_Should_Pass_OnTheTestPublishingAccount() =>
+        (await Target(PublishConnection()).PreflightAsync(Ct)).IsSuccess.ShouldBeTrue();
+
+    [Fact]
+    public void TheStaticWebsiteCheck_Should_Pass_OnlyWhenOn_WithIndexHtml()
     {
-        (await Target(PublishConnection()).CheckStaticWebsiteAsync(Ct)).IsSuccess.ShouldBeTrue();
+        AzureStaticWebsitePublishTarget.CheckStaticWebsite(new BlobStaticWebsite { Enabled = true, IndexDocument = "index.html" }, "teampublish").IsSuccess.ShouldBeTrue();
 
-        string? noWebsite = azurite.AccountConnectionString(AzuriteEnvironment.NoWebsiteAccount);
-        string? wrongIndex = azurite.AccountConnectionString(AzuriteEnvironment.WrongIndexAccount);
-        Assert.SkipWhen(noWebsite is null || wrongIndex is null, "Supplied storage has no accounts with other settings.");
-
-        Error disabled = (await Target(noWebsite).CheckStaticWebsiteAsync(Ct)).Error;
+        Error disabled = AzureStaticWebsitePublishTarget.CheckStaticWebsite(new BlobStaticWebsite { Enabled = false }, "teampublish").Error;
         disabled.Code.ShouldBe("Publish.StaticWebsiteDisabled");
-        disabled.Description.ShouldContain($"--account-name {AzuriteEnvironment.NoWebsiteAccount} --static-website --index-document index.html");
-        (await Target(wrongIndex).CheckStaticWebsiteAsync(Ct)).Error.Code.ShouldBe("Publish.IndexDocumentMismatch");
+        disabled.Description.ShouldContain("--account-name teampublish --static-website --index-document index.html");
+        AzureStaticWebsitePublishTarget.CheckStaticWebsite(null, "teampublish").Error.Code.ShouldBe("Publish.StaticWebsiteDisabled");
+        AzureStaticWebsitePublishTarget.CheckStaticWebsite(new BlobStaticWebsite { Enabled = true, IndexDocument = "home.html" }, "teampublish").Error.Code.ShouldBe("Publish.IndexDocumentMismatch");
     }
 
     [Fact]
-    public async Task GetLocation_Should_NameTheAccountAndBaseUrl()
+    public void GetLocation_Should_NameTheAccountAndBaseUrl_AndServeIndexDocuments()
     {
-        PublishLocation location = Target(PublishConnection()).GetLocation().Value;
+        PublishLocation location = Target(OfflineConnectionString).GetLocation().Value;
 
-        location.AccountName.ShouldBe(AzuriteEnvironment.AccountNameOf(PublishConnection()));
+        location.Provider.ShouldBe("azure-blob");
+        location.AccountName.ShouldBe("teampublish");
         location.BaseUrl.AbsoluteUri.ShouldBe(BaseUrl + "/");
+        location.ServesIndexDocuments.ShouldBeTrue();
+        location.NotServedStatusCodes.ShouldBe(new HashSet<int> { 404 });
+    }
+
+    [Fact]
+    public void CanCopy_Should_TakeAnyHttpsUrl_AndNothingElse()
+    {
+        AzureStaticWebsitePublishTarget target = Target(OfflineConnectionString);
+
+        target.CanCopy(new CopySource(new Uri("https://acct.blob.core.windows.net/c/b?sig=x"))).ShouldBeTrue();
+        target.CanCopy(new CopySource(new Uri("https://bucket.s3.eu-west-1.amazonaws.com/k?X-Amz-Signature=x"))).ShouldBeTrue("a presigned S3 URL is readable too");
+        target.CanCopy(new CopySource(null, new NativeObjectReference("s3", "eu-west-1", "b", "k", "aws:x"))).ShouldBeFalse();
     }
 
     [Theory]
     [InlineData(null, BaseUrl, "Configuration.Missing", "MYSYNC_PUBLISH_CONNECTION_STRING")]
-    [InlineData("UseDevelopmentStorage=true", null, "Configuration.Missing", "MYSYNC_PUBLISH_BASE_URL")]
-    [InlineData("UseDevelopmentStorage=true", "http://insecure.example", "Configuration.Invalid", "MYSYNC_PUBLISH_BASE_URL")]
-    [InlineData("UseDevelopmentStorage=true", "not a url", "Configuration.Invalid", "MYSYNC_PUBLISH_BASE_URL")]
-    [InlineData("UseDevelopmentStorage=true", "https://x.example/?sig=abc", "Configuration.Invalid", "MYSYNC_PUBLISH_BASE_URL")]
+    [InlineData(OfflineConnectionString, null, "Configuration.Missing", "MYSYNC_PUBLISH_BASE_URL")]
+    [InlineData(OfflineConnectionString, "http://insecure.example", "Configuration.Invalid", "MYSYNC_PUBLISH_BASE_URL")]
+    [InlineData(OfflineConnectionString, "not a url", "Configuration.Invalid", "MYSYNC_PUBLISH_BASE_URL")]
+    [InlineData(OfflineConnectionString, "https://x.example/?sig=abc", "Configuration.Invalid", "MYSYNC_PUBLISH_BASE_URL")]
     [InlineData("AccountName=x;AccountKey=c2VjcmV0LWtleQ==;Garbage", BaseUrl, "Configuration.Invalid", "MYSYNC_PUBLISH_CONNECTION_STRING")]
     public void ASettingThatIsMissingOrMalformed_Should_BeAConfigurationError_WithoutItsValue(string? connection, string? baseUrl, string code, string variable)
     {
@@ -246,24 +253,28 @@ public sealed class AzureStaticWebsitePublishTargetTests(AzuriteFixture azurite)
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(11)]
-    [InlineData(3 * 1024 * 1024 + 5)]
-    public async Task Copy_Should_CopyAnObjectFromThePrivateStore_ServerSide_WithItsHeaders(int size)
+    [InlineData(0, false)]
+    [InlineData(11, false)]
+    [InlineData(3 * 1024 * 1024 + 5, false)]
+    [InlineData(11, true)]
+    [InlineData(3 * 1024 * 1024 + 5, true)] // several 1 MiB blocks
+    public async Task Copy_Should_CopyAnObjectFromThePrivateStore_ServerSide_WithItsHeaders(int size, bool blocks)
     {
         byte[] content = System.Security.Cryptography.RandomNumberGenerator.GetBytes(size);
         var shareId = ShareId.New();
         ContentHash hash = ManifestBuilder.HashOf(content);
-        AzureBlobShareStore source = AzureStores.Create(azurite.ConnectionString);
+        AzureBlobShareStore source = AzureStores.Create(azure.ConnectionString);
         (await source.EnsureReadyForNewShareAsync(Ct)).IsSuccess.ShouldBeTrue();
         (await source.UploadObjectAsync(shareId, hash, ObjectUpload.Raw(new MemoryStream(content), content.Length), Ct)).IsSuccess.ShouldBeTrue();
-        Uri url = (await source.GetObjectReadUrlAsync(shareId, hash, TimeSpan.FromMinutes(5), Ct)).Value!;
+        CopySource url = (await source.GetCopySourceAsync(shareId, hash, TimeSpan.FromMinutes(5), Ct)).Value!;
         string name = Prefix() + "files/docs/a b [1] #?.pdf";
         PublishedBlob headers = new(ContentTypeMap.For(name), DispositionPolicy.ContentDisposition(name), PublishedBlob.Immutable);
 
-        Result<CopyMethod> copied = await Target(PublishConnection()).CopyAsync(url, size, name, headers, Ct);
+        // One Put Blob From URL; with its limit lowered below any size, blocks staged from the URL.
+        AzureTransferSettings settings = blocks ? SmallCopyBlocks with { PutBlobFromUrlMaxBytes = -1 } : SmallCopyBlocks;
+        Result<CopyMethod> copied = await Target(PublishConnection(), settings: settings).CopyAsync(url, size, name, headers, Ct);
 
-        copied.Value.ShouldBe(CopyMethod.BlocksFromUrl); // Azurite has no Put Blob From URL
+        copied.Value.ShouldBe(blocks ? CopyMethod.BlocksFromUrl : CopyMethod.PutBlobFromUrl);
         BlobClient blob = Web().GetBlobClient(name);
         (await blob.DownloadContentAsync(Ct)).Value.Content.ToArray().ShouldBe(content);
         BlobProperties properties = (await blob.GetPropertiesAsync(cancellationToken: Ct)).Value;
@@ -301,7 +312,7 @@ public sealed class AzureStaticWebsitePublishTargetTests(AzuriteFixture azurite)
     public async Task AWrongKey_Should_BeThePublishingAccountsUnauthorized_WithNoKeyInAnyErrorOrLog()
     {
         string wrongKey = Convert.ToBase64String(Encoding.UTF8.GetBytes("definitely-not-the-key-0123456789"));
-        string connection = PublishConnection().Replace(AzuriteEnvironment.AzuriteKey, wrongKey, StringComparison.Ordinal);
+        string connection = PublishConnection().Replace(AzureTestStorage.KeyOf(PublishConnection()), wrongKey, StringComparison.Ordinal);
         RecordingLogger logger = new();
         AzureStaticWebsitePublishTarget target = Target(connection, logger: logger);
 

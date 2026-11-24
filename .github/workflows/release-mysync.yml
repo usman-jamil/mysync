@@ -103,6 +103,21 @@ jobs:
     name: Test
     needs: site
     runs-on: ubuntu-latest
+    concurrency:
+      group: real-storage
+      cancel-in-progress: false
+    env:
+      MYSYNC_TEST_REQUIRE_STORAGE: '1'
+      MYSYNC_TEST_AZURE_CONNECTION_STRING: ${{ secrets.MYSYNC_REAL_AZURE_CONNECTION_STRING }}
+      MYSYNC_TEST_AZURE_PUBLISH_CONNECTION_STRING: ${{ secrets.MYSYNC_REAL_AZURE_PUBLISH_CONNECTION_STRING }}
+      MYSYNC_TEST_AZURE_PUBLISH_BASE_URL: ${{ secrets.MYSYNC_REAL_AZURE_PUBLISH_BASE_URL }}
+      MYSYNC_TEST_S3_BUCKET: ${{ secrets.MYSYNC_REAL_S3_BUCKET }}
+      MYSYNC_TEST_S3_REGION: ${{ secrets.MYSYNC_REAL_S3_REGION }}
+      MYSYNC_TEST_S3_PUBLISH_BUCKET: ${{ secrets.MYSYNC_REAL_S3_PUBLISH_BUCKET }}
+      MYSYNC_TEST_S3_PUBLISH_BASE_URL: ${{ secrets.MYSYNC_REAL_S3_PUBLISH_BASE_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.MYSYNC_REAL_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.MYSYNC_REAL_AWS_SECRET_ACCESS_KEY }}
+      AWS_EC2_METADATA_DISABLED: 'true'
     steps:
       - uses: actions/checkout@v5
 
@@ -121,36 +136,12 @@ jobs:
       - name: Build
         run: dotnet build mysync.slnx --configuration Release
 
-      # The Azurite image (pinned in tests/mysync/testing/AzuriteImage.cs) comes from the cache
-      # rather than MCR on every run.
-      - name: Find the pinned Azurite image
-        id: azurite
-        run: echo "image=$(grep -oE 'mcr\.microsoft\.com/azure-storage/azurite:[^"]+' tests/mysync/testing/AzuriteImage.cs)" >> "$GITHUB_OUTPUT"
+      # Everything, the storage and end-to-end suites included, against the real test storage (as in
+      # ci.yml); a missing secret fails the release rather than skipping those tests.
+      - name: Check the secrets are configured
+        run: tools/ci/check-storage-secrets.sh
 
-      - name: Cache the Azurite image
-        id: azurite-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/azurite-image.tar
-          key: azurite-image-${{ steps.azurite.outputs.image }}
-
-      - name: Load the Azurite image
-        env:
-          IMAGE: ${{ steps.azurite.outputs.image }}
-          CACHED: ${{ steps.azurite-cache.outputs.cache-hit }}
-        run: |
-          set -euo pipefail
-          if [ "$CACHED" = "true" ]; then
-            docker load --input ~/.cache/azurite-image.tar
-          else
-            docker pull "$IMAGE"
-            mkdir -p ~/.cache
-            docker save "$IMAGE" --output ~/.cache/azurite-image.tar
-          fi
-
-      - name: Test everything (Azurite suites included; Docker is available here)
-        env:
-          TESTCONTAINERS_RYUK_DISABLED: 'true'
+      - name: Test everything
         run: dotnet test --solution mysync.slnx --configuration Release --no-build
 
   # Who releases: this repository, and the public half of its MYSYNC_RELEASE_SIGNING_KEY. Every

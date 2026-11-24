@@ -1,0 +1,18 @@
+{
+  "name": "mysync-storage-s3",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/mysync/storage-s3",
+  "tags": [
+    "stack:mysync",
+    "type:lib"
+  ],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "dotnet build libs/mysync/storage-s3/MySync.Storage.S3.csproj -c Release"
+      }
+    }
+  }
+}

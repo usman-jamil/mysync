@@ -20,4 +20,20 @@ public sealed record StorageLocation(string Provider, string AccountName, string
     }
 
     public override string ToString() => $"{Provider}:{AccountName}/{Container}";
+
+    /// <summary>For people: <c>azure-blob (account teamsync, container mysync)</c>, <c>s3 (bucket team-shares in eu-west-1)</c>.</summary>
+    public string Describe() => Provider switch
+    {
+        "s3" => $"s3 (bucket {Container} in {AccountName})",
+        "azure-blob" => $"azure-blob (account {AccountName}, container {Container})",
+        _ => ToString(),
+    };
+
+    /// <summary>The environment variables that choose this provider's location (no values: they may be secrets).</summary>
+    public static string SettingsOf(string provider) => provider switch
+    {
+        "s3" => "MYSYNC_S3_BUCKET, MYSYNC_S3_REGION",
+        "azure-blob" => "AZURE_STORAGE_CONNECTION_STRING, MYSYNC_CONTAINER",
+        _ => "MYSYNC_PROVIDER",
+    };
 }

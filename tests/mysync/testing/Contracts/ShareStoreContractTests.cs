@@ -12,9 +12,9 @@ namespace MySync.Testing.Contracts;
 
 /// <summary>
 /// The behaviour every <see cref="IShareStore"/> must have (CLAUDE.md §11, §14). Derive once per
-/// implementation: <see cref="InMemoryShareStore"/> in the application unit tests, Azure Blob
-/// against Azurite in the storage integration tests. If the fake and Azurite disagree, the fake
-/// is wrong.
+/// implementation: <see cref="InMemoryShareStore"/> in the application unit tests, Azure Blob and
+/// S3 against real test storage in their integration tests. If the fake and a real provider
+/// disagree, the fake is wrong.
 /// </summary>
 /// <remarks>
 /// Timestamps are whole seconds: the manifest format's precision belongs to the serializer, not
@@ -121,17 +121,26 @@ public abstract class ShareStoreContractTests
         snapshot.Manifest.ShouldMatchManifest(second);
     }
 
+    /// <remarks>
+    /// Provider-neutral on purpose. Whether identical bytes get a new ETag is the provider's business
+    /// (Azure: yes, pinned in its own tests; S3: no, the ETag follows the content). mysync never
+    /// writes the same manifest bytes twice: every commit has a new revision
+    /// (<c>ManifestSerializerTests.EveryCommit_Should_ChangeTheBytes</c>).
+    /// </remarks>
     [Fact]
-    public async Task ReplaceManifest_Should_GiveANewETag_EvenForIdenticalContent()
+    public async Task ReplaceManifest_WithIdenticalContent_Should_Succeed_AndAStaleETagStillFail_OnceHeadMoved()
     {
         IShareStore store = await ReadyStoreAsync();
-        Manifest manifest = new ManifestBuilder().WithFile("a.txt", "a").Build();
+        ManifestBuilder builder = new ManifestBuilder().WithFile("a.txt", "a");
+        Manifest manifest = builder.Build();
         string first = Unwrap(await store.CreateManifestAsync(manifest.ShareId, manifest, Ct));
 
-        string second = Unwrap(await store.ReplaceManifestAsync(manifest.ShareId, manifest, first, Ct));
+        string same = Unwrap(await store.ReplaceManifestAsync(manifest.ShareId, manifest, first, Ct));
+        string moved = Unwrap(await store.ReplaceManifestAsync(manifest.ShareId, builder.WithFile("b.txt", "b").Build(revision: 2), same, Ct));
 
-        second.ShouldNotBe(first);
+        moved.ShouldNotBe(first);
         (await store.ReplaceManifestAsync(manifest.ShareId, manifest, first, Ct)).Error.Code.ShouldBe("Storage.PreconditionFailed");
+        (await store.GetManifestAsync(manifest.ShareId, Ct)).Value!.ETag.ShouldBe(moved);
     }
 
     [Fact]
@@ -628,7 +637,7 @@ public abstract class ShareStoreContractTests
     }
 
     [Fact]
-    public async Task GetObjectReadUrl_Should_GiveAUrl_OrNull_ButNeverFail()
+    public async Task GetCopySource_Should_GiveAUrlOrANativeReference_OrNull_ButNeverFail()
     {
         IShareStore store = await ReadyStoreAsync();
         var shareId = ShareId.New();
@@ -636,12 +645,22 @@ public abstract class ShareStoreContractTests
         ContentHash hash = ManifestBuilder.HashOf(content);
         Unwrap(await Upload(store, shareId, hash, content));
 
-        Uri? url = Unwrap(await store.GetObjectReadUrlAsync(shareId, hash, TimeSpan.FromMinutes(5), Ct));
+        Application.Abstractions.Publishing.CopySource? source = Unwrap(await store.GetCopySourceAsync(shareId, hash, TimeSpan.FromMinutes(5), Ct));
 
-        if (url is not null)
+        if (source is not null)
         {
-            url.IsAbsoluteUri.ShouldBeTrue();
-            url.AbsoluteUri.ShouldNotContain("AccountKey", Case.Insensitive);
+            (source.Url is not null || source.Native is not null).ShouldBeTrue("a copy source names the object somehow");
+            if (source.Url is { } url)
+            {
+                url.IsAbsoluteUri.ShouldBeTrue();
+                url.AbsoluteUri.ShouldNotContain("AccountKey", Case.Insensitive);
+            }
+
+            if (source.Native is { } native)
+            {
+                native.Key.ShouldBe(Domain.Storage.ShareLayout.For(shareId).ObjectBlob(hash), "the key is the ShareLayout name");
+                native.CredentialScope.ShouldNotBeNullOrWhiteSpace();
+            }
         }
     }
 

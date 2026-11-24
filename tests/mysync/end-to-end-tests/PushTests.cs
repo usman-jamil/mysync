@@ -7,27 +7,33 @@ using MySync.Domain.Sync.Push;
 using MySync.Testing;
 using Shouldly;
 using Xunit;
-using static MySync.EndToEndTests.AzureMachine;
+using static MySync.EndToEndTests.Machine;
 
 namespace MySync.EndToEndTests;
 
 /// <summary>
-/// <c>mysync push</c> on Azurite with the full DI graph and real folders (CLAUDE.md §10b): servers
+/// <c>mysync push</c> on real storage with the full DI graph and real folders (CLAUDE.md §10b): servers
 /// push into a laptop's share at the same time, the laptop's next sync gets everything, and what it
 /// then does with the pushed folders is ordinary syncing.
 /// </summary>
-public sealed class PushTests : IDisposable
-{
-    private readonly AzureMachine _laptop;
-    private readonly AzureMachine _web01;
-    private readonly AzureMachine _web02;
-    private readonly string _container = AzuriteEnvironment.NewContainerName();
+public sealed class AzurePushTests(StorageFixture storage) : PushTests(storage.Azure);
 
-    public PushTests(AzuriteFixture azurite)
+public sealed class S3PushTests(StorageFixture storage) : PushTests(storage.S3);
+
+/// <summary>Written once, run once per provider.</summary>
+public abstract class PushTests : IDisposable
+{
+    private readonly Machine _laptop;
+    private readonly Machine _web01;
+    private readonly Machine _web02;
+
+    protected PushTests(Backend backend)
     {
-        _laptop = new AzureMachine(azurite.ConnectionString, _container);
-        _web01 = new AzureMachine(azurite.ConnectionString, _container);
-        _web02 = new AzureMachine(azurite.ConnectionString, _container);
+        ArgumentNullException.ThrowIfNull(backend);
+        string place = backend.NewPlace();
+        _laptop = new Machine(backend, place);
+        _web01 = new Machine(backend, place);
+        _web02 = new Machine(backend, place);
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -191,6 +197,7 @@ public sealed class PushTests : IDisposable
         _laptop.Dispose();
         _web01.Dispose();
         _web02.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     private static byte[] RandomBytes(int length)

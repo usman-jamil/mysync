@@ -1,8 +1,5 @@
 # Setting up AWS S3 for mysync
 
-> [!NOTE]
-> S3 support is coming in the next mysync release. Until then mysync works with [Azure Blob Storage](azure.md) only; the `MYSYNC_PROVIDER=s3` settings below are not recognised yet.
-
 mysync needs one private bucket for shares. Publishing needs a second bucket that the public can read. These steps create both from scratch, plus an IAM user whose keys can reach those two buckets and nothing else.
 
 **Before you start**

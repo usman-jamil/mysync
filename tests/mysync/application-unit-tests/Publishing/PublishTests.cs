@@ -216,6 +216,111 @@ public class PublishTests
     }
 
     [Fact]
+    public async Task ANativeCopySource_Should_BeCopiedNatively_WhenTheTargetSharesItsCredentials()
+    {
+        Machine machine = await SharedAsync();
+        _world.Store.CanMakeReadUrls = false;
+        _world.Store.NativeCredentialScope = "scope-a";
+        _world.Publishing.NativeCredentialScope = "scope-a";
+
+        PublishReport report = (await machine.PublishAsync()).ShouldSucceed();
+
+        report.Copies.ShouldBe(new Dictionary<CopyMethod, int> { [CopyMethod.CopyObject] = 3 });
+        Text(PublicationLayout.For(report.PublishId).File(Path("docs/readme.md"))).ShouldBe("# hi");
+    }
+
+    [Fact]
+    public async Task ANativeCopySource_FromOtherCredentials_Should_UseItsUrl_OrStream()
+    {
+        Machine machine = await SharedAsync();
+        _world.Store.NativeCredentialScope = "scope-a";
+        _world.Publishing.NativeCredentialScope = "scope-b"; // another profile: it may not read the share's bucket
+
+        (await machine.PublishAsync()).ShouldSucceed().Copies.ShouldBe(new Dictionary<CopyMethod, int> { [CopyMethod.PutBlobFromUrl] = 3 });
+
+        _world.Publishing.CopiesFromUrls = false;
+        (await machine.PublishAsync()).ShouldSucceed().Copies.ShouldBe(new Dictionary<CopyMethod, int> { [CopyMethod.Streamed] = 3 });
+    }
+
+    [Fact]
+    public async Task MixedProviders_Should_StreamEveryFile()
+    {
+        // An Azure share (URL sources) published to S3 (copies natively from S3 only).
+        Machine machine = await SharedAsync();
+        _world.Publishing.CopiesFromUrls = false;
+        _world.Publishing.NativeCredentialScope = "s3-scope";
+
+        PublishReport report = (await machine.PublishAsync()).ShouldSucceed();
+
+        report.Copies.ShouldBe(new Dictionary<CopyMethod, int> { [CopyMethod.Streamed] = 3 });
+        Text(PublicationLayout.For(report.PublishId).File(Path("docs/readme.md"))).ShouldBe("# hi");
+        _world.Publishing.Operations.ShouldNotContain(operation => operation.StartsWith("copy:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AHostWithoutIndexDocuments_Should_LinkToIndexHtml_ButKeepTheScriptsInTheFolder()
+    {
+        Machine machine = await SharedAsync();
+        _world.Publishing.ServesIndexDocuments = false;
+
+        PublishReport report = (await machine.PublishAsync()).ShouldSucceed();
+
+        string folder = $"https://publishacct.z13.web.core.windows.net/p/{report.PublishId}/";
+        report.Url.AbsoluteUri.ShouldBe(folder + "index.html");
+        report.FolderUrl.AbsoluteUri.ShouldBe(folder);
+        report.ShellCommand.ShouldBe($"curl -fsSL {folder}download.sh | sh");
+        report.PowerShellCommand.ShouldBe($"irm {folder}download.ps1 | iex");
+        (await machine.PublicationsAsync()).ShouldSucceed().Publications.Single().Url.ShouldBe(folder + "index.html");
+        var layout = PublicationLayout.For(report.PublishId);
+        Text(layout.Blob("download.sh")).ShouldContain($"base='{folder}'");
+        Text(layout.Blob("download.ps1")).ShouldContain($"$base = '{folder}'");
+        _world.Verifier.Requests.Single().AbsoluteUri.ShouldBe(folder + "site-data.js");
+    }
+
+    [Fact]
+    public async Task AHostThatServesIndexDocuments_Should_LinkToTheFolder()
+    {
+        Machine machine = await SharedAsync();
+
+        PublishReport report = (await machine.PublishAsync()).ShouldSucceed();
+
+        report.Url.ShouldBe(report.FolderUrl);
+        report.Url.AbsoluteUri.ShouldEndWith($"/p/{report.PublishId}/");
+    }
+
+    [Fact]
+    public async Task Verification_Should_BeToldWhatTheTargetCallsNotServed()
+    {
+        Machine machine = await SharedAsync();
+        _world.Publishing.NotServedStatusCodes = new HashSet<int> { 403, 404 };
+
+        (await machine.PublishAsync()).ShouldSucceed();
+
+        _world.Verifier.NotServedStatusCodes.ShouldBe(new HashSet<int> { 403, 404 });
+    }
+
+    [Fact]
+    public async Task APreflightFailure_Should_StopBeforeAnythingIsWritten()
+    {
+        Machine machine = await SharedAsync();
+        _world.Publishing.PreflightError = PublishErrors.NotPublic("team-publish", "https://team-publish.s3.eu-west-1.amazonaws.com");
+
+        (await machine.PublishAsync()).ShouldFail().Code.ShouldBe("Publish.NotPublic");
+
+        _world.Publishing.Operations.ShouldBeEmpty();
+        (await _world.Store.GetPublicationsAsync(machine.ShareId, SyncWorld.Ct)).Value.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task TheSameAccountWarning_Should_BeTheTargetsCall()
+    {
+        Machine machine = await SharedAsync();
+        _world.Publishing.SameAccount = location => location.Container == "mysync"; // e.g. S3: the same bucket
+
+        (await machine.PublishAsync()).ShouldSucceed().Warnings.ShouldContain(warning => warning.Contains("private shares", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AStreamedCopyWhoseBytesDontMatchTheirHash_Should_FailThePublication_AndPublishNothing()
     {
         Machine machine = await SharedAsync();

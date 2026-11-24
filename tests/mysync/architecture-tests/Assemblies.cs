@@ -14,6 +14,7 @@ internal static class Assemblies
     public static readonly Assembly UpdatesGitHubAssembly = typeof(MySync.Updates.GitHub.DependencyInjection).Assembly;
     public static readonly Assembly SiteAssetsAssembly = typeof(MySync.SiteAssets.DependencyInjection).Assembly;
     public static readonly Assembly StorageAzureAssembly = typeof(MySync.Storage.Azure.AzureStorageOptions).Assembly;
+    public static readonly Assembly StorageS3Assembly = typeof(MySync.Storage.S3.S3StorageOptions).Assembly;
     public static readonly Assembly TuiAssembly = typeof(MySync.Tui.Runtime.TuiRuntime).Assembly;
     public static readonly Assembly CliAssembly = Assembly.Load("mysync"); // every CLI type is internal; the assembly is named after the executable
 
@@ -22,6 +23,8 @@ internal static class Assemblies
     public const string ApplicationNamespace = "MySync.Application";
     public const string InfrastructureNamespace = "MySync.Infrastructure";
     public const string StorageNamespace = "MySync.Storage";
+    public const string StorageAzureNamespace = "MySync.Storage.Azure";
+    public const string StorageS3Namespace = "MySync.Storage.S3";
     public const string UpdatesNamespace = "MySync.Updates";
     public const string SiteAssetsNamespace = "MySync.SiteAssets";
     public const string CliNamespace = "MySync.Cli";
@@ -30,6 +33,7 @@ internal static class Assemblies
     public const string TuiRuntimeNamespace = "MySync.Tui.Runtime";
 
     public const string AzurePackages = "Azure";
+    public const string AwsPackages = "Amazon";
     public const string SpectreConsolePackage = "Spectre.Console";
     public const string ConsoleAppFrameworkPackage = "ConsoleAppFramework";
 }

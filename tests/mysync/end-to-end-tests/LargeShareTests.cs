@@ -4,28 +4,33 @@ using MySync.Domain.Shares;
 using MySync.Testing;
 using Shouldly;
 using Xunit;
-using static MySync.EndToEndTests.AzureMachine;
+using static MySync.EndToEndTests.Machine;
 
 namespace MySync.EndToEndTests;
 
 /// <summary>
-/// Sizes Azurite can't tell us much about: a 300 MB file and a 5,000-file share. Off unless
-/// <see cref="Variable"/> is <c>1</c>; the manually triggered real-Azure workflow turns them on
-/// against a test-only storage account (CLAUDE.md §14).
+/// Sizes the regular run doesn't spend time on: a 300 MB file and a 5,000-file share. Off unless
+/// <see cref="Variable"/> is <c>1</c>; the manually triggered real-storage workflow turns them on
+/// (CLAUDE.md §14).
 /// </summary>
-public sealed class LargeShareTests : IDisposable
+public sealed class AzureLargeShareTests(StorageFixture storage) : LargeShareTests(storage.Azure);
+
+public sealed class S3LargeShareTests(StorageFixture storage) : LargeShareTests(storage.S3);
+
+/// <summary>Written once, run once per provider.</summary>
+public abstract class LargeShareTests : IDisposable
 {
     public const string Variable = "MYSYNC_TEST_LARGE";
 
-    private readonly AzureMachine _a;
-    private readonly AzureMachine _b;
+    private readonly Machine _a;
+    private readonly Machine _b;
 
-    public LargeShareTests(AzuriteFixture azurite)
+    protected LargeShareTests(Backend backend)
     {
-        ArgumentNullException.ThrowIfNull(azurite);
-        string container = AzuriteEnvironment.NewContainerName();
-        _a = new AzureMachine(azurite.ConnectionString, container);
-        _b = new AzureMachine(azurite.ConnectionString, container);
+        ArgumentNullException.ThrowIfNull(backend);
+        string place = backend.NewPlace();
+        _a = new Machine(backend, place);
+        _b = new Machine(backend, place);
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -78,10 +83,11 @@ public sealed class LargeShareTests : IDisposable
     {
         _a.Dispose();
         _b.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     private static void SkipUnlessEnabled() =>
-        Assert.SkipUnless(Environment.GetEnvironmentVariable(Variable) == "1", $"Large-share tests run only with {Variable}=1 (the real-Azure workflow).");
+        Assert.SkipUnless(Environment.GetEnvironmentVariable(Variable) == "1", $"Large-share tests run only with {Variable}=1 (the Large share tests workflow, real-storage.yml).");
 
     // Random bytes, streamed: a 300 MB array would be a test of the test machine's memory.
     private static async Task<string> WriteRandomAsync(string path, long size)

@@ -14,17 +14,17 @@ namespace MySync.EndToEndTests.Cli;
 /// </summary>
 public sealed class TuiCliTests : IDisposable
 {
-    private readonly AzuriteFixture _azurite;
+    private readonly AzureTestStorage _azure;
     private readonly TempShareFolder _folder = new();
     private readonly TempShareFolder _other = new();
-    private readonly string _container = AzuriteEnvironment.NewContainerName();
+    private readonly string _container = AzureTestStorage.NewContainerName();
     private readonly string _name = "tui-" + Guid.NewGuid().ToString("N")[..12];
 
-    public TuiCliTests(AzuriteFixture azurite) => _azurite = azurite;
+    public TuiCliTests(StorageFixture storage) => _azure = storage.AzureStorage;
 
     private Dictionary<string, string?> Variables() => new()
     {
-        ["AZURE_STORAGE_CONNECTION_STRING"] = _azurite.ConnectionString,
+        ["AZURE_STORAGE_CONNECTION_STRING"] = _azure.ConnectionString,
         ["MYSYNC_CONTAINER"] = _container,
         ["TERM"] = "xterm-256color",
     };

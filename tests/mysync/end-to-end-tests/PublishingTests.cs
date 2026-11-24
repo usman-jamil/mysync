@@ -1,6 +1,6 @@
+using System.Net;
 using System.Text.Json.Nodes;
-using Azure.Storage.Blobs;
-using Azure.Storage.Blobs.Models;
+using MySync.Application.Abstractions.Publishing;
 using MySync.Application.Publishing.Publish;
 using MySync.Domain.Publishing;
 using MySync.Domain.Shares;
@@ -10,94 +10,118 @@ using Xunit;
 
 namespace MySync.EndToEndTests;
 
+/// <summary>Publishing an Azure share to the Azure test account's static website.</summary>
+public sealed class AzurePublishingTests(StorageFixture storage) : PublishingTests(storage.Azure, storage.Azure);
+
+/// <summary>Publishing an S3 share to the public S3 test bucket (native copies inside S3).</summary>
+public sealed class S3PublishingTests(StorageFixture storage) : PublishingTests(storage.S3, storage.S3);
+
+/// <summary>An Azure share published to S3: neither can read the other's objects, so every file is streamed.</summary>
+public sealed class AzureToS3PublishingTests(StorageFixture storage) : PublishingTests(storage.Azure, storage.S3);
+
+/// <summary>An S3 share published to Azure: Put Blob From URL reads the share's presigned URLs.</summary>
+public sealed class S3ToAzurePublishingTests(StorageFixture storage) : PublishingTests(storage.S3, storage.Azure);
+
 /// <summary>
-/// Publishing with the full DI graph (embedded site assets, Azure store and publish target) on
-/// Azurite: a private account for the share and a publishing account with static website hosting.
+/// Publishing with the full DI graph (embedded site assets, the share's store, the publish target),
+/// on real storage, checked the way the public sees it: anonymous HTTP through the base URL.
 /// </summary>
-public sealed class PublishingTests(AzuriteFixture azurite) : IDisposable
+public abstract class PublishingTests : IDisposable
 {
-    private readonly AzureMachine _a = new(azurite.ConnectionString, AzuriteEnvironment.NewContainerName());
-    private readonly AzureMachine _b = new(azurite.ConnectionString, string.Empty);
+    private readonly Backend _shares;
+    private readonly Backend _publishing;
+    private readonly Machine _a;
+    private readonly Machine _b;
+    private readonly HttpClient _anonymous = new();
+
+    protected PublishingTests(Backend shares, Backend publishing)
+    {
+        ArgumentNullException.ThrowIfNull(shares);
+        _shares = shares;
+        _publishing = publishing;
+        string place = shares.NewPlace();
+        _a = new Machine(shares, place);
+        _b = new Machine(shares, place);
+    }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private BlobContainerClient Web() => new BlobServiceClient(azurite.PublishConnectionString).GetBlobContainerClient("$web");
-
     private async Task<ShareId> SharedAsync()
     {
-        Assert.SkipWhen(azurite.PublishConnectionString is null, $"No publishing account: set {AzuriteEnvironment.PublishConnectionStringVariable} with supplied storage.");
-        _a.PublishConnectionString = azurite.PublishConnectionString;
-        _b.PublishConnectionString = azurite.PublishConnectionString;
-        _b.Container = _a.Container;
+        _ = _publishing.PublishBaseUrl; // skips (or fails in CI) without a publishing side
+        _a.Publishing = _publishing;
+        _b.Publishing = _publishing;
         _a.Folder.WriteFile("docs/readme.md", "# hello").WriteFile("photos/über café/IMG 1.jpg", "jpeg bytes").WriteFile("site/index.html", "<script>alert(1)</script>").WriteFile("empty.txt", string.Empty);
         return await _a.CreateAsync();
     }
 
     [Fact]
-    public async Task Publish_Should_PutTheWholeSiteOnTheStaticWebsite_AndVerifyIt()
+    public async Task Publish_Should_PutTheWholeSiteUp_AndVerifyIt_Anonymously()
     {
         ShareId shareId = await SharedAsync();
 
-        PublishReport report = AzureMachine.Ok(await _a.PublishAsync(new PublishShareCommand(Title: "Q3 reports")));
+        PublishReport report = Machine.Ok(await _a.PublishAsync(new PublishShareCommand(Title: "Q3 reports")));
 
         report.Verified.ShouldBeTrue(report.VerificationDetail);
         report.Files.ShouldBe(4);
-        report.Url.AbsoluteUri.ShouldBe($"{AzureMachine.PublishBaseUrl}/p/{report.PublishId}/");
+        string folder = $"{_publishing.PublishBaseUrl}/p/{report.PublishId}/";
+        report.FolderUrl.AbsoluteUri.ShouldBe(folder);
+        report.Url.AbsoluteUri.ShouldBe(_publishing.Provider == "s3" ? folder + "index.html" : folder);
+        report.Copies.Keys.ShouldBe([ExpectedCopy()]);
         var layout = PublicationLayout.For(report.PublishId);
 
-        List<string> blobs = [];
-        await foreach (BlobItem item in Web().GetBlobsAsync(BlobTraits.None, BlobStates.None, layout.Prefix, Ct))
-        {
-            blobs.Add(item.Name[layout.Prefix.Length..]);
-        }
-
+        List<string> blobs = [.. (await _publishing.ListPublishedAsync(layout.Prefix)).Select(name => name[layout.Prefix.Length..])];
         blobs.Order(StringComparer.Ordinal).ShouldBe(
         [
             "SHA256SUMS.txt", "assets/THIRD-PARTY-NOTICES.txt", "assets/app.css", "assets/app.js", "download.ps1", "download.sh",
             "files/docs/readme.md", "files/empty.txt", "files/photos/über café/IMG 1.jpg", "files/site/index.html", "index.html", "site-data.js",
         ]);
 
-        (await Web().GetBlobClient(layout.File(ManifestBuilder.PathOf("photos/über café/IMG 1.jpg"))).DownloadContentAsync(Ct)).Value.Content.ToString().ShouldBe("jpeg bytes");
-        BlobProperties app = (await Web().GetBlobClient(layout.Blob("assets/app.js")).GetPropertiesAsync(cancellationToken: Ct)).Value;
-        app.ContentType.ShouldBe("text/javascript; charset=utf-8");
-        BlobProperties html = (await Web().GetBlobClient(layout.File(ManifestBuilder.PathOf("site/index.html"))).GetPropertiesAsync(cancellationToken: Ct)).Value;
-        html.ContentDisposition.ShouldStartWith("attachment;");
-        (await Web().GetBlobClient(layout.Index).DownloadContentAsync(Ct)).Value.Content.ToString().ShouldContain("./site-data.js");
-        (await Web().GetBlobClient("robots.txt").ExistsAsync(Ct)).Value.ShouldBeTrue();
+        (await GetStringAsync(folder + "files/photos/" + Uri.EscapeDataString("über café") + "/IMG%201.jpg")).ShouldBe("jpeg bytes");
+        using (HttpResponseMessage app = await GetAsync(folder + "assets/app.js"))
+        {
+            app.Content.Headers.ContentType!.ToString().ShouldBe("text/javascript; charset=utf-8");
+        }
 
-        string siteData = (await Web().GetBlobClient(layout.Blob("site-data.js")).DownloadContentAsync(Ct)).Value.Content.ToString();
+        using (HttpResponseMessage html = await GetAsync(folder + "files/site/index.html"))
+        {
+            html.Content.Headers.ContentDisposition!.DispositionType.ShouldBe("attachment");
+        }
+
+        (await GetStringAsync(report.Url.AbsoluteUri)).ShouldContain("./site-data.js");
+        (await GetAsync($"{_publishing.PublishBaseUrl}/robots.txt")).Dispose();
+
+        string siteData = await GetStringAsync(folder + "site-data.js");
         JsonNode data = JsonNode.Parse(siteData["window.__MYSYNC_SITE__ = ".Length..^2])!;
         data["publication"]!["title"]!.GetValue<string>().ShouldBe("Q3 reports");
         data["entries"]!.AsArray().Count.ShouldBe(4);
         siteData.ShouldNotContain(shareId.ToString());
 
-        Publication record = AzureMachine.Ok(await _a.PublicationsAsync()).Publications.Single();
+        Publication record = Machine.Ok(await _a.PublicationsAsync()).Publications.Single();
         record.Status.ShouldBe(PublicationStatus.Published);
         record.SiteAssetsVersion.ShouldStartWith("sha256:");
+        record.Url.ShouldBe(report.Url.AbsoluteUri);
     }
 
     [Fact]
     public async Task Unpublish_FromAnotherMachine_And_Delete_Should_TakeEveryPublicationDown()
     {
         ShareId shareId = await SharedAsync();
-        PublishReport first = AzureMachine.Ok(await _a.PublishAsync());
-        PublishReport second = AzureMachine.Ok(await _a.PublishAsync());
+        PublishReport first = Machine.Ok(await _a.PublishAsync());
+        PublishReport second = Machine.Ok(await _a.PublishAsync());
 
-        AzureMachine.Ok(await _b.UnpublishAsync(first.PublishId.Value, shareId.ToString()));
-        (await Web().GetBlobClient(PublicationLayout.For(first.PublishId).Index).ExistsAsync(Ct)).Value.ShouldBeFalse();
-        (await Web().GetBlobClient(PublicationLayout.For(second.PublishId).Index).ExistsAsync(Ct)).Value.ShouldBeTrue();
-
-        Application.Shares.Delete.DeleteShareResponse deleted = AzureMachine.Ok(await _a.DeleteAsync());
-
-        deleted.PublicationsRemoved.ShouldBe(1);
-        List<string> left = [];
-        await foreach (BlobItem item in Web().GetBlobsAsync(BlobTraits.None, BlobStates.None, PublicationLayout.For(second.PublishId).Prefix, Ct))
+        Machine.Ok(await _b.UnpublishAsync(first.PublishId.Value, shareId.ToString()));
+        (await _publishing.ListPublishedAsync(PublicationLayout.For(first.PublishId).Prefix)).ShouldBeEmpty();
+        (await _publishing.ListPublishedAsync(PublicationLayout.For(second.PublishId).Index)).ShouldNotBeEmpty();
+        using (HttpResponseMessage gone = await _anonymous.GetAsync(first.Url, Ct))
         {
-            left.Add(item.Name);
+            ((int)gone.StatusCode).ShouldBeOneOf([.. NotServed()]);
         }
 
-        left.ShouldBeEmpty();
+        Application.Shares.Delete.DeleteShareResponse deleted = Machine.Ok(await _a.DeleteAsync());
 
+        deleted.PublicationsRemoved.ShouldBe(1);
+        (await _publishing.ListPublishedAsync(PublicationLayout.For(second.PublishId).Prefix)).ShouldBeEmpty();
         (await _b.WithStoreAsync(store => store.GetPublicationsAsync(shareId, Ct))).Value.ShouldBeNull();
     }
 
@@ -105,15 +129,43 @@ public sealed class PublishingTests(AzuriteFixture azurite) : IDisposable
     public async Task Delete_Should_RefuseWithoutThePublishingSettings_WhenTheShareHasPublications()
     {
         await SharedAsync();
-        AzureMachine.Ok(await _a.PublishAsync());
-        _a.PublishConnectionString = null;
+        Machine.Ok(await _a.PublishAsync());
+        _a.Publishing = null;
 
         (await _a.DeleteAsync()).Error.Code.ShouldBe("Publish.PublicationsNeedSettings");
+
+        _a.Publishing = _publishing;
+        Machine.Ok(await _a.DeleteAsync()); // and with them, everything goes
     }
 
     public void Dispose()
     {
         _a.Dispose();
         _b.Dispose();
+        _anonymous.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    // Within one provider the copy stays server-side; across providers only Azure can read the other's (presigned) URLs.
+    private CopyMethod ExpectedCopy() => (_shares.Provider, _publishing.Provider) switch
+    {
+        ("azure-blob", "azure-blob") or ("s3", "azure-blob") => CopyMethod.PutBlobFromUrl,
+        ("s3", "s3") => CopyMethod.CopyObject,
+        _ => CopyMethod.Streamed,
+    };
+
+    private int[] NotServed() => _publishing.Provider == "s3" ? [403, 404] : [404];
+
+    private async Task<HttpResponseMessage> GetAsync(string url)
+    {
+        HttpResponseMessage response = await _anonymous.GetAsync(new Uri(url), Ct);
+        response.StatusCode.ShouldBe(HttpStatusCode.OK, url);
+        return response;
+    }
+
+    private async Task<string> GetStringAsync(string url)
+    {
+        using HttpResponseMessage response = await GetAsync(url);
+        return await response.Content.ReadAsStringAsync(Ct);
     }
 }
