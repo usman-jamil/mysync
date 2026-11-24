@@ -38,6 +38,12 @@ mysync sync                    # from then on, in either folder: two-way sync
 - **Never silently overwrites.** When both machines changed the same file, neither change is applied. mysync reports the conflict and waits for you to decide.
 - **One self-contained binary** for Windows, macOS and Linux (x64 and arm64). Credentials come from environment variables only, and mysync never prompts for them.
 
+> [!IMPORTANT]
+> **Setting up storage for the first time?** Follow a step-by-step guide that creates everything from scratch, with least-privilege credentials:
+>
+> - **[Azure Blob Storage setup](docs/azure.md)**: the shares account, the publishing account, connection strings or SAS, and a check that it all works.
+> - **[AWS S3 setup](docs/aws.md)**: the buckets, an IAM user limited to them, and the same checks. *S3 support is coming in the next release.*
+
 ## Install
 
 **macOS and Linux:**
@@ -167,6 +173,9 @@ mysync 0.4.0 is up to date (from GitHub usman-jamil/mysync)
 ## Configure
 
 Environment variables only: no config file, no prompts.
+
+> [!TIP]
+> No storage account yet? [docs/azure.md](docs/azure.md) creates one from scratch and ends with the exact variables to set ([docs/aws.md](docs/aws.md) for S3, coming next).
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
@@ -547,6 +556,9 @@ Download everything:
 ```
 
 ### Setting up publishing (once per team)
+
+> [!TIP]
+> [docs/azure.md](docs/azure.md) sets up the publishing account together with the shares account, in one pass.
 
 Publishing needs a storage account with Azure's **static website** hosting turned on. Use a **separate account** just for publishing: its public address then names nothing about the account that holds your shares. The steps below use the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) (`az login` first); the [Azure portal](https://portal.azure.com) equivalents are in brackets.
 

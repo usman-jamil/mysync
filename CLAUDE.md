@@ -88,6 +88,7 @@ Published Q3 reports: revision 18, 142 files (38.2 MB)
 ├── .gitattributes                # *.cs checked out as CRLF everywhere, so IDE0055 agrees on every CI OS
 │
 ├── install.sh / install.ps1      # first install from GitHub releases, signature-checked (§16)
+├── docs/                         # storage setup guides linked from the README: azure.md, aws.md (S3: ahead of the provider)
 ├── tools/
 │   ├── unicode/GenerateNfcData.cs  # file-based app: UCD → NFC tables + conformance data (§8)
 │   └── release/                    # release signing public key, update/install end-to-end test, test-only fixtures (§16)
