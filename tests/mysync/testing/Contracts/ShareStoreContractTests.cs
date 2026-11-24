@@ -658,7 +658,7 @@ public abstract class ShareStoreContractTests
 
             if (source.Native is { } native)
             {
-                native.Key.ShouldBe(Domain.Storage.ShareLayout.For(shareId).ObjectBlob(hash), "the key is the ShareLayout name");
+                native.Key.ShouldEndWith(Domain.Storage.ShareLayout.For(shareId).ObjectBlob(hash), customMessage: "the object's real key: the ShareLayout name (after a test run's key prefix)");
                 native.CredentialScope.ShouldNotBeNullOrWhiteSpace();
             }
         }

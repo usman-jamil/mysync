@@ -8,6 +8,16 @@ namespace MySync.Storage.S3;
 /// <summary>ListObjectsV2 under a prefix, page by page (S3 returns up to 1,000 keys per page).</summary>
 internal static class S3Listing
 {
+    /// <summary>
+    /// The bucket exists and the client's region is its region: a one-key listing, which needs only
+    /// <c>s3:ListBucket</c>. From another region S3 answers it with a redirect naming the bucket's
+    /// region (<c>Configuration.WrongRegion</c>), for a missing bucket with NoSuchBucket. Not
+    /// GetBucketLocation: signed for the wrong region, S3 answers that one with access denied.
+    /// Throws what the SDK throws; the caller maps it.
+    /// </summary>
+    public static Task CheckBucketAsync(S3Client client, S3Bucket bucket, CancellationToken cancellationToken) =>
+        client.Api.ListObjectsV2Async(new ListObjectsV2Request { BucketName = bucket.Name, Prefix = bucket.Key(string.Empty), MaxKeys = 1 }, cancellationToken);
+
     /// <param name="prefix">A layout prefix (the bucket's test prefix is added here).</param>
     /// <param name="pageSize">Keys per page; tests make it small to cross pages. S3's default (1,000) otherwise.</param>
     public static async IAsyncEnumerable<Result<S3Object>> ListAsync(

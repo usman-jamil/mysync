@@ -30,8 +30,8 @@ public sealed class S3PublishTargetTests : IDisposable
 
     public S3PublishTargetTests()
     {
-        _api.GetBucketLocationAsync(Arg.Any<GetBucketLocationRequest>(), Arg.Any<CancellationToken>())
-            .Returns(_ => { _operations.Add("location"); return new GetBucketLocationResponse { Location = new S3Region(S3Fakes.Region) }; });
+        _api.ListObjectsV2Async(Arg.Any<ListObjectsV2Request>(), Arg.Any<CancellationToken>())
+            .Returns(_ => { _operations.Add("location"); return new ListObjectsV2Response { IsTruncated = false }; });
         _api.PutObjectAsync(Arg.Any<PutObjectRequest>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             PutObjectRequest request = call.Arg<PutObjectRequest>()!;
@@ -102,7 +102,7 @@ public sealed class S3PublishTargetTests : IDisposable
     [Fact]
     public async Task Preflight_Should_StopAtTheWrongRegion_BeforeWritingAnything()
     {
-        _api.GetBucketLocationAsync(Arg.Any<GetBucketLocationRequest>(), Arg.Any<CancellationToken>()).Returns(new GetBucketLocationResponse { Location = new S3Region("us-east-2") });
+        _api.ListObjectsV2Async(Arg.Any<ListObjectsV2Request>(), Arg.Any<CancellationToken>()).ThrowsAsync(S3Fakes.Error(HttpStatusCode.MovedPermanently, "PermanentRedirect"));
 
         (await Target().PreflightAsync(Ct)).Error.Code.ShouldBe("Configuration.WrongRegion");
 

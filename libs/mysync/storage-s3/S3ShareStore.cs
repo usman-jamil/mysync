@@ -95,11 +95,8 @@ internal sealed class S3ShareStore : IShareStore
     public Task<Result> EnsureReadyForNewShareAsync(CancellationToken cancellationToken) =>
         CallAsync("(bucket)", S3Operation.List, async (client, bucket) =>
         {
-            GetBucketLocationResponse location = await client.Api.GetBucketLocationAsync(new GetBucketLocationRequest { BucketName = bucket.Name }, cancellationToken);
-            string actual = RegionOf(location.Location?.Value);
-            return string.Equals(actual, bucket.Region, StringComparison.Ordinal)
-                ? Result.Success()
-                : Result.Failure(Domain.Configuration.ConfigurationErrors.WrongRegion(bucket.Name, bucket.Region, actual));
+            await S3Listing.CheckBucketAsync(client, bucket, cancellationToken);
+            return Result.Success();
         }, cancellationToken);
 
     public Task<Result<ManifestSnapshot?>> GetManifestAsync(ShareId shareId, CancellationToken cancellationToken)
@@ -414,14 +411,6 @@ internal sealed class S3ShareStore : IShareStore
                 .Where(token => !string.Equals(token, "aws-chunked", StringComparison.OrdinalIgnoreCase)));
         return ObjectEncodings.FromContentEncoding(remaining);
     }
-
-    /// <summary>GetBucketLocation's answer as a region: empty is us-east-1, <c>EU</c> is eu-west-1.</summary>
-    internal static string RegionOf(string? locationConstraint) => locationConstraint switch
-    {
-        null or "" => "us-east-1",
-        "EU" => "eu-west-1",
-        _ => locationConstraint,
-    };
 
     internal static Dictionary<string, string> ObjectMetadata(ContentHash hash, ObjectUpload upload, long? stored)
     {

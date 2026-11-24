@@ -113,11 +113,8 @@ internal sealed class S3PublishTarget : IPublishTarget, IDisposable
         // 1. The bucket exists, in the configured region.
         Result inRegion = await RunAsync("(bucket)", S3Operation.List, async s3 =>
         {
-            GetBucketLocationResponse found = await s3.Api.GetBucketLocationAsync(new GetBucketLocationRequest { BucketName = bucket.Name }, cancellationToken);
-            string actual = S3ShareStore.RegionOf(found.Location?.Value);
-            return string.Equals(actual, bucket.Region, StringComparison.Ordinal)
-                ? Result.Success(true)
-                : Result.Failure<bool>(ConfigurationErrors.WrongRegion(bucket.Name, bucket.Region, actual));
+            await S3Listing.CheckBucketAsync(s3, bucket, cancellationToken);
+            return Result.Success(true);
         }, cancellationToken);
         if (inRegion.IsFailure)
         {

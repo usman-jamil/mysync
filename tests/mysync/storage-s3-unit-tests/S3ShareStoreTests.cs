@@ -235,24 +235,18 @@ public class S3ShareStoreTests
     public void AnUnknownEncoding_Should_BeUnsupported() =>
         S3ShareStore.EncodingOf("br").Error.Code.ShouldBe("Storage.UnsupportedEncoding");
 
-    [Theory]
-    [InlineData(null, "us-east-1")]
-    [InlineData("", "us-east-1")]
-    [InlineData("EU", "eu-west-1")]
-    [InlineData("ap-southeast-2", "ap-southeast-2")]
-    public void GetBucketLocation_Should_BeReadAsARegion(string? constraint, string region) =>
-        S3ShareStore.RegionOf(constraint).ShouldBe(region);
-
     [Fact]
     public async Task EnsureReady_Should_RefuseABucketInAnotherRegion_AndNeverCreateOne()
     {
-        _api.GetBucketLocationAsync(Arg.Any<GetBucketLocationRequest>(), Arg.Any<CancellationToken>())
-            .Returns(new GetBucketLocationResponse { Location = new S3Region("us-west-2") });
+        _api.ListObjectsV2Async(Arg.Any<ListObjectsV2Request>(), Arg.Any<CancellationToken>()).ThrowsAsync(S3Fakes.Error(
+            HttpStatusCode.MovedPermanently, "PermanentRedirect", $"<Error><Code>PermanentRedirect</Code><Endpoint>{S3Fakes.Bucket}.s3.us-west-2.amazonaws.com</Endpoint></Error>"));
 
         Error error = (await Store().EnsureReadyForNewShareAsync(Ct)).Error;
 
         error.Code.ShouldBe("Configuration.WrongRegion");
         error.Description.ShouldContain("is in us-west-2, not eu-west-1");
+        await _api.Received(1).ListObjectsV2Async(Arg.Is<ListObjectsV2Request>(request => request!.MaxKeys == 1), Arg.Any<CancellationToken>());
+        await _api.DidNotReceiveWithAnyArgs().GetBucketLocationAsync(default(GetBucketLocationRequest)!, Ct); // denied when signed for the wrong region
         await _api.DidNotReceiveWithAnyArgs().PutBucketAsync(default(PutBucketRequest)!, Ct);
     }
 
