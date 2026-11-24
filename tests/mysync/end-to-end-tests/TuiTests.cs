@@ -60,6 +60,7 @@ public abstract class TuiTests : IDisposable
             .WaitFor("↓ new in share")
             .Press('s')
             .WaitFor("Sync finished")
+            .WaitFor("Everything is in sync") // the rescan that follows a sync has finished: a key now starts a new one
             .ThenAsync(async () =>
             {
                 _laptop.Folder.WriteFile("config/app.yml", "port: 8080 (laptop)\n");
@@ -82,6 +83,7 @@ public abstract class TuiTests : IDisposable
             .WaitFor("Resolve finished")
             .WaitFor("No conflicts.")
             .Press(KeyCode.Escape)
+            .WaitFor("Everything is in sync") // the rescan after the resolve is done, so p isn't turned away
             .Press('/').Type("docs").Press(KeyCode.Enter).Press(KeyCode.Home)
             .Press('p')
             .WaitFor("Push a copy to another share")
