@@ -60,6 +60,10 @@ builder.Services.AddSingleton(environment);
 builder.Services.AddSingleton(environment.SyncOptions);
 builder.Services.AddTransient<CommandRunner>();
 
+// mysync clone runs the clone in the folder it picked: this same composition, built again with the
+// share root set there (FolderCloneRunner). The current directory never changes.
+builder.Services.AddSingleton<MySync.Application.Abstractions.Composition.ICloneRunner>(provider => new FolderCloneRunner(builder.Services, provider));
+
 builder.Services
     .AddApplication()
     .AddInfrastructure()
@@ -120,6 +124,7 @@ app.Add<PublishCommands>();
 app.Add<PushCommands>();
 app.Add<PullCommands>();
 app.Add<TuiCommands>();
+app.Add<CloneCommands>();
 
 await app.RunAsync(KnownCommands.ArrangeForParsing(args));
 

@@ -41,6 +41,11 @@ public class ErrorCatalogTests
         { MySync.Domain.Session.SessionErrors.Busy("sync"), "Session.Busy" },
         { MySync.Domain.Sync.Pull.PullErrors.DestinationOccupied(2, ["a.log", "b.log"], overwrite: false), "Pull.DestinationOccupied" }, // exit 4
         { MySync.Domain.Sync.Pull.PullErrors.DestinationIsTheShare("/home/u/logs", "app-logs"), "Pull.DestinationIsTheShare" }, // exit 4
+        { MySync.Domain.Shares.Clone.CloneErrors.TargetIsAFile("/home/u/app-config"), "Clone.TargetIsAFile" }, // exit 4
+        { MySync.Domain.Shares.Clone.CloneErrors.InsideAShare("/home/u/work", Share()), "Clone.InsideAShare" }, // exit 4
+        { MySync.Domain.Shares.Clone.CloneErrors.CannotCreate("/root/x", "Access denied"), "Clone.CannotCreate" }, // exit 4
+        { MySync.Domain.Shares.Clone.CloneErrors.FolderNotEmpty("/home/u/app-config"), "Shares.FolderNotEmpty" }, // exit 4
+        { MySync.Domain.Shares.Clone.CloneErrors.UnsafeRoot("/"), "Shares.UnsafeRoot" }, // exit 4
     };
 
     [Theory]
@@ -74,6 +79,7 @@ public class ErrorCatalogTests
         MySync.Domain.Sync.Push.PushErrors.InvalidSince("2x").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Sync.Pull.PullErrors.PathNotFound("x").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Session.TuiErrors.NotATerminal().Type.ShouldBe(ErrorType.Validation);
+        MySync.Domain.Shares.Clone.CloneErrors.FolderRequired(Share()).Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Session.TuiErrors.TooSmall(60, 20).Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Session.SessionErrors.PushToOwnShare("app-config").Type.ShouldBe(ErrorType.Validation);
         MySync.Domain.Session.SessionErrors.NothingOnDisk("x").Type.ShouldBe(ErrorType.Validation);

@@ -16,14 +16,15 @@ internal static class SyncReportView
 {
     private const int HashLength = 8;
 
-    public static void Render(SyncReport report, bool cloned)
+    /// <param name="into">For <c>mysync clone</c>: the folder cloned into, as shown.</param>
+    public static void Render(SyncReport report, bool cloned, string? into = null)
     {
         ArgumentNullException.ThrowIfNull(report);
 
         RenderWarnings(report.Warnings);
         AnsiConsole.MarkupLine(Totals(report));
 
-        AnsiConsole.MarkupLine(Outcome(report, cloned));
+        AnsiConsole.MarkupLine(Outcome(report, cloned, into));
 
         RenderConflicts(report.Conflicts);
         RenderSkipped(report.Skipped);
@@ -41,7 +42,7 @@ internal static class SyncReportView
         }
         AnsiConsole.MarkupLine(
             $"[green]Created share {ConsoleOutput.Value(created.Name.Value)}[/] ({ConsoleOutput.Value(created.ShareId.ToString())}): {created.FileCount} {Files(created.FileCount)}, {ConsoleOutput.Bytes(created.TotalBytes)}{sent}");
-        AnsiConsole.MarkupLine($"Share it with:  [bold]{ConsoleOutput.Value($"mysync sync {created.Name}")}[/]");
+        AnsiConsole.MarkupLine($"Share it with:  [bold]{ConsoleOutput.Value($"mysync clone {created.Name}")}[/]");
         RenderSkipped(created.Skipped);
     }
 
@@ -131,13 +132,14 @@ internal static class SyncReportView
         }
     }
 
-    private static string Outcome(SyncReport report, bool cloned)
+    private static string Outcome(SyncReport report, bool cloned, string? into)
     {
         string revision = $"revision {report.Revision.Value}";
         if (cloned)
         {
             string which = report.Name is { } name ? $"{name} ({report.ShareId})" : report.ShareId.ToString();
-            return $"[green]Cloned share {ConsoleOutput.Value(which)}[/] {ConsoleOutput.Muted($"({revision})")}";
+            string where = into is null ? string.Empty : $" into {ConsoleOutput.Value(into)}";
+            return $"[green]Cloned share {ConsoleOutput.Value(which)}[/]{where} {ConsoleOutput.Muted($"({revision})")}";
         }
 
         if (report.Committed)

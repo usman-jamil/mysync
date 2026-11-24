@@ -112,7 +112,7 @@ internal static class ShareInfoView
 
         string previous = renamed.Previous.Count == 0 ? string.Empty : $" (was {string.Join(", ", renamed.Previous.Select(name => name.Value))})";
         AnsiConsole.MarkupLine($"[green]Renamed[/] share {ConsoleOutput.Value(renamed.ShareId.ToString())} to {ConsoleOutput.Value(renamed.Name.Value)}{ConsoleOutput.Value(previous)}.");
-        AnsiConsole.MarkupLine($"Clone it with:  [bold]{ConsoleOutput.Value($"mysync sync {renamed.Name}")}[/]");
+        AnsiConsole.MarkupLine($"Clone it with:  [bold]{ConsoleOutput.Value($"mysync clone {renamed.Name}")}[/]");
     }
 
     /// <summary><c>mysync delete</c>: what is gone, what was kept here, and what the storage account may still hold.</summary>

@@ -68,7 +68,7 @@ public sealed class TuiCliTests : IDisposable
 
         result.ExitCode.ShouldBe(2, result.ToString());
         result.StdOut.ShouldContain("--name");
-        result.StdOut.ShouldContain("mysync sync <name> in an empty folder");
+        result.StdOut.ShouldContain("mysync clone <name> first");
         result.StdOut.ShouldNotContain("\u001b[?1049h");
         _folder.Exists(StateFileNames.State).ShouldBeFalse();
     }

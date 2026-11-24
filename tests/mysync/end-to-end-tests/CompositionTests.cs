@@ -69,6 +69,7 @@ public class CompositionTests
         var services = new ServiceCollection();
         services.AddSingleton(configuration);
         services.AddLogging();
+        services.AddSingleton<MySync.Application.Abstractions.Composition.ICloneRunner>(provider => new MySync.Cli.Hosting.FolderCloneRunner(services, provider));
         services.AddApplication().AddInfrastructure().AddAzureBlobStorage().AddAzureStaticWebsitePublishing().AddGitHubReleaseSource("acme/mysync", "1.0.0").AddSiteAssets();
 
         return services;

@@ -39,6 +39,7 @@ public static class DependencyInjection
         services.TryAddSingleton<ILocalFolderFactory, LocalFolderFactory>();
         services.TryAddSingleton<IFileScanner, FileScanner>();
         services.TryAddSingleton<ILocalSources, LocalSources>();
+        services.TryAddSingleton<ICloneFolders, CloneFolders>();
         services.TryAddSingleton<IContentHasher, Sha256ContentHasher>();
         services.TryAddSingleton<IShareStateStore, JsonShareStateStore>();
         services.TryAddSingleton<IFolderLock, FolderLock>();

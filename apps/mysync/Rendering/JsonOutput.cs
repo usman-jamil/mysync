@@ -37,7 +37,16 @@ internal static class JsonOutput
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     });
 
-    public static int Write(SyncReport report, string command, int exitCode)
+    /// <summary><c>mysync clone</c>: the clone report, plus the folder and whether the command created it.</summary>
+    public static int Write(Application.Shares.CloneInto.CloneIntoFolderResponse cloned, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(cloned);
+        return Write(cloned.Report, "clone", exitCode, cloned.Folder, cloned.CreatedFolder);
+    }
+
+    public static int Write(SyncReport report, string command, int exitCode) => Write(report, command, exitCode, folder: null, createdFolder: null);
+
+    private static int Write(SyncReport report, string command, int exitCode, string? folder, bool? createdFolder)
     {
         ArgumentNullException.ThrowIfNull(report);
 
@@ -56,6 +65,8 @@ internal static class JsonOutput
             [.. report.Warnings],
             report.DryRun ? [.. report.Plan.Actions.Where(action => action.Kind != SyncActionKind.NoChange).Select(action => new PlannedJson(action.Path.Value, ActionCode(action.Kind)))] : null,
             command == "resolve" ? [.. report.Resolved.Select(path => path.Value)] : null,
+            folder,
+            createdFolder,
             exitCode);
 
         Emit(json, Context.SyncJson);
@@ -76,7 +87,7 @@ internal static class JsonOutput
                 Totals(created.Uploaded, sent: true),
                 [.. created.Skipped.Select(skip => new SkippedJson(skip.Path, CauseCode(skip.Cause), skip.Detail))],
                 [.. created.Warnings],
-                $"mysync sync {created.Name}",
+                $"mysync clone {created.Name}",
                 created.Compression.ToCode(),
                 exitCode),
             Context.CreateJson);
@@ -442,11 +453,13 @@ internal static class JsonOutput
         return exitCode;
     }
 
-    public static int Write(Error error, int exitCode)
+    /// <param name="leftBehind">A failed <c>mysync clone</c>: what its clean-up couldn't remove, as <c>Clone.LeftBehind</c> details.</param>
+    public static int Write(Error error, int exitCode, IReadOnlyList<string>? leftBehind = null)
     {
         ArgumentNullException.ThrowIfNull(error);
 
         IEnumerable<Error> details = error is ValidationError validation ? validation.Errors : [];
+        details = details.Concat((leftBehind ?? []).Select(left => Error.Failure("Clone.LeftBehind", left)));
         Emit(
             new FailureJson(new ErrorJson(error.Code, error.Description, [.. details.Select(inner => new ErrorJson(inner.Code, inner.Description, null))]), exitCode),
             Context.FailureJson);
@@ -540,6 +553,8 @@ internal sealed record SyncJson(
     List<string> Warnings,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<PlannedJson>? Plan,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<string>? Resolved,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Folder,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? CreatedFolder,
     int ExitCode);
 
 internal sealed record ConflictListJson(string Command, string ShareId, List<ConflictJson> Conflicts, int ExitCode);

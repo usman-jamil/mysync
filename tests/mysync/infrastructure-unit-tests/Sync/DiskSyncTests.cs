@@ -217,6 +217,7 @@ public sealed class DiskSyncTests : IDisposable
         services.AddSingleton<MySync.Application.Abstractions.Publishing.ISiteAssetSource>(new InMemorySiteAssetSource());
         services.AddSingleton<MySync.Application.Abstractions.Publishing.IPublishTarget>(provider =>
             new InMemoryPublishTarget((InMemoryShareStore)provider.GetRequiredService<MySync.Application.Abstractions.Storage.IShareStore>()));
+        services.AddSingleton<MySync.Application.Abstractions.Composition.ICloneRunner>(provider => new MySync.Cli.Hosting.FolderCloneRunner(services, provider));
         services.AddApplication();
         services.AddInfrastructure();
 

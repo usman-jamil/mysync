@@ -135,6 +135,8 @@ internal sealed class Machine
         services.AddScoped<Abstractions.Publishing.IPublishTarget>(_ => world.Publishing);
         services.AddScoped<Abstractions.Publishing.IPublicationVerifier>(_ => world.Verifier);
         services.AddSingleton<Abstractions.Publishing.ISiteDataSerializer>(new TestSiteDataSerializer());
+        services.AddSingleton<MySync.Application.Abstractions.FileSystem.ICloneFolders>(new NoCloneFolders());
+        services.AddSingleton<MySync.Application.Abstractions.Composition.ICloneRunner>(new NoCloneRunner());
         services.AddApplication();
         _services = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }

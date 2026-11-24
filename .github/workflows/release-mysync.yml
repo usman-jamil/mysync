@@ -452,8 +452,8 @@ jobs:
           export MYSYNC_CONTAINER=mysync                                  # optional
 
           cd ~/projects/report && mysync sync --name q3-report   # creates a share called q3-report
-          cd ~/elsewhere/report && mysync sync q3-report         # on another machine, in an empty folder: clone it
-          mysync sync                                            # from then on, in either folder: two-way sync
+          cd ~/elsewhere && mysync clone q3-report               # on another machine: clone it into a new folder, ./q3-report
+          cd q3-report && mysync sync                            # from then on, in either folder: two-way sync
           ```
 
           `mysync status` shows what a sync would do, `mysync conflicts` lists what both sides changed,

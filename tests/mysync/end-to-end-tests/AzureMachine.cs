@@ -148,6 +148,8 @@ internal sealed class AzureMachine(string connectionString, string container) : 
             services.AddSingleton<MySync.Application.Abstractions.Publishing.IPublicationVerifier>(new AzuriteWebsiteVerifier(PublishConnectionString));
         }
 
+        services.AddSingleton<MySync.Application.Abstractions.Composition.ICloneRunner>(provider => new MySync.Cli.Hosting.FolderCloneRunner(services, provider));
+
         services.AddApplication().AddInfrastructure().AddAzureBlobStorage().AddAzureStaticWebsitePublishing().AddSiteAssets();
         return services;
     }

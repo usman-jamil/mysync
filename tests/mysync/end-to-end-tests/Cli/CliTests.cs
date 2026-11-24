@@ -66,7 +66,7 @@ public sealed class CliTests : IDisposable
 
         created.ExitCode.ShouldBe(0, created.ToString());
         created.StdOut.ShouldContain($"({shareId}): 2 files, 5 B");
-        created.StdOut.ShouldContain("Share it with:  mysync sync cli-"); // by name; this test clones by ID
+        created.StdOut.ShouldContain("Share it with:  mysync clone cli-"); // by name; this test clones by ID
         cloned.ExitCode.ShouldBe(0, cloned.ToString());
         cloned.StdOut.ShouldContain($"Cloned share {shareId}");
         synced.ExitCode.ShouldBe(0, synced.ToString());
@@ -760,7 +760,7 @@ public sealed class CliTests : IDisposable
         string shareId = ShareIdOf(_a);
         created.ExitCode.ShouldBe(0, created.ToString());
         created.StdOut.ShouldContain($"Created share next-wave ({shareId}): 2 files,");
-        created.StdOut.ShouldContain("Share it with:  mysync sync next-wave");
+        created.StdOut.ShouldContain("Share it with:  mysync clone next-wave");
 
         CliResult listed = await RunAsync(_b, "shares");
         listed.ExitCode.ShouldBe(0, listed.ToString());

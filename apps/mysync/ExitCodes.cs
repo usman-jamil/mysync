@@ -43,6 +43,7 @@ internal static class ExitCodes
             "Shares.FolderNotEmpty" or "Shares.AlreadyAShare" or "Shares.NotAShare" or "Shares.UnsafeRoot" or "Shares.NameTaken" => FolderPrecondition,
             "Push.SourceIsTheShare" or "Push.TargetIsAFile" => FolderPrecondition,
             "Pull.DestinationOccupied" or "Pull.DestinationIsTheShare" => FolderPrecondition,
+            "Clone.TargetIsAFile" or "Clone.InsideAShare" or "Clone.CannotCreate" => FolderPrecondition,
             "Pull.NoPushes" => NotFoundOrUnauthorized,
             "Sync.CommitRetriesExhausted" or "Sync.ShareChangedDuringGc" => CommitRetriesExhausted,
             "State.FolderLocked" or "Tui.AlreadyRunning" => FolderLocked,

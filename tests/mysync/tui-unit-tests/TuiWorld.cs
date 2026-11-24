@@ -75,6 +75,8 @@ internal sealed class TuiMachine
         services.AddSingleton<Application.Abstractions.Publishing.IPublicationVerifier>(provider =>
             new InMemoryPublicationVerifier((InMemoryPublishTarget)provider.GetRequiredService<Application.Abstractions.Publishing.IPublishTarget>()));
         services.AddSingleton<Application.Abstractions.Publishing.ISiteDataSerializer>(new TestSiteDataSerializer());
+        services.AddSingleton<MySync.Application.Abstractions.FileSystem.ICloneFolders>(new NoCloneFolders());
+        services.AddSingleton<MySync.Application.Abstractions.Composition.ICloneRunner>(new NoCloneRunner());
         services.AddApplication();
         _services = services.BuildServiceProvider();
     }

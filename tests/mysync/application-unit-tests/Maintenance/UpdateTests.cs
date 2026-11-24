@@ -253,6 +253,8 @@ public sealed class UpdateTests : IDisposable
         services.AddSingleton<IExecutableInstaller>(_installer);
         services.AddSingleton<IContentHasher>(new TestContentHasher());
         services.AddSingleton(new UpdateOptions(_key.ExportSubjectPublicKeyInfoPem()));
+        services.AddSingleton<MySync.Application.Abstractions.FileSystem.ICloneFolders>(new NoCloneFolders());
+        services.AddSingleton<MySync.Application.Abstractions.Composition.ICloneRunner>(new NoCloneRunner());
         services.AddApplication();
 
         await using ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });

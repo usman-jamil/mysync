@@ -27,4 +27,9 @@
     <ProjectReference Include="..\testing\MySync.Testing.csproj" />
   </ItemGroup>
 
+  <!-- mysync clone's runner lives in the composition root (the CLI); linked in, so DiskCloneTests run the real one. -->
+  <ItemGroup>
+    <Compile Include="..\..\..\apps\mysync\Hosting\FolderCloneRunner.cs" Link="Linked\FolderCloneRunner.cs" />
+  </ItemGroup>
+
 </Project>

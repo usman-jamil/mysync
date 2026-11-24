@@ -29,7 +29,7 @@ state lives in the container, and each folder's own state lives in a `.mysynctoo
 
 ```text
 mysync sync --name next-wave   # in a folder: create a new share called next-wave
-mysync sync next-wave          # in an empty folder, on another machine: clone it
+mysync clone next-wave         # on another machine: clone it into a new folder, ./next-wave
 mysync sync                    # from then on, in either folder: two-way sync
 ```
 
@@ -197,11 +197,13 @@ The connection string is a secret. Anyone who has it can read and change every s
 cd ~/projects/report
 mysync sync --name q3-report
 #   Created share q3-report (0b6f3c1e-8f0a-4c43-9d3e-5a1f2b7c9e10): 142 files, 38.2 MB
-#   Share it with:  mysync sync q3-report
+#   Share it with:  mysync clone q3-report
 
-# Machine B, in an empty folder
-mkdir ~/report && cd ~/report
-mysync sync q3-report
+# Machine B: a new folder is created for the share
+mysync clone q3-report
+#   Cloned share q3-report (0b6f3c1e-…) into ./q3-report (revision 1)
+#   Next:  cd q3-report
+cd q3-report
 
 # From then on, on either machine, inside the folder
 mysync sync
@@ -215,7 +217,8 @@ Each `mysync sync` uploads what changed here and downloads what changed there. I
 | --- | --- |
 | `mysync sync --name <name>` | Create a share from this folder, with that name. |
 | `mysync sync` | Two-way sync this folder's share. |
-| `mysync sync <name>` | Clone a share into this (empty) folder, by its name (or its share ID). |
+| `mysync clone <name> [<folder>]` | Clone a share, by its name or share ID, into a new folder named after it (or `<folder>`), created for it. If the clone fails or is cancelled, what it created is removed again. |
+| `mysync sync <name>` | Clone a share into this (empty) folder. Still works exactly as before; `--force` merges a folder that already has files. |
 | `mysync shares` | List every named share: its name and share ID. |
 | `mysync rename <name>` | Give this folder's share a new name (or a first one, for a share from an older version). |
 | `mysync compression [on\|off]` | Show the share's compression setting, or turn it on or off for files uploaded from now on. `--share <name>` for another share. |
@@ -416,7 +419,7 @@ mysync tui
 ```
 
 - **In a folder that's already a share,** it opens straight away and rescans once. Nothing else happens until you press a key: no background syncing, no watching.
-- **In a new folder,** give it a name: `mysync tui --name app-config` creates an **empty** share (add `--compress` for a compressed one) and opens. Your files show as "new here"; the first `s` uploads them. To work on a share that already exists elsewhere, clone it first with `mysync sync <name>` in an empty folder.
+- **In a new folder,** give it a name: `mysync tui --name app-config` creates an **empty** share (add `--compress` for a compressed one) and opens. Your files show as "new here"; the first `s` uploads them. To work on a share that already exists elsewhere, clone it first with `mysync clone <name>`, then run `mysync tui` in its folder.
 - **Keys:** `↑` `↓` (or `k` `j`) move, `→` / `Enter` open a folder, `←` closes it; `r` rescans; `s` syncs; `p` pushes the highlighted file or folder to another share; `c` shows the conflicts (`m` keeps yours, `t` keeps theirs, `M` / `T` for all of them, `d` shows the diff); `f` / `1`–`6` filter the list; `/` searches; `?` lists every key; `Esc` goes back or cancels a running job; `q` quits. Ctrl+C cancels a running job (a second one quits).
 - **Conflicts** the rescan finds are decided after a sync has recorded them (the sync leaves them as they are), exactly as with `mysync resolve`.
 - **Push** (`p`) sends a copy of one item to another share, as `mysync push` does; nothing here or in this folder's share changes.
@@ -454,7 +457,7 @@ incident-logs/
 - **What gets pushed:** with no paths, the contents of the current folder; a file keeps its name, and a folder keeps its own name (`/var/log/app` → `app/…`). Everything is pushed except mysync's own files and OS clutter (`.DS_Store`, `Thumbs.db`, …). A `.mysyncignore` or `.gitignore` in a pushed folder is not applied: it's pushed like any other file.
 - **The host:** the machine's name, or `--host <name>`. Two pushes in the same second get `…-2`, `…-3`.
 - **Many servers at once:** each writes its own folder, so twenty servers can push to one share at the same moment.
-- **Getting the files:** on a laptop, `mysync sync incident-logs` in an empty folder, or `mysync sync` in a folder already cloned from it. The pushed folders are ordinary synced files from then on: edit or delete them and sync as usual.
+- **Getting the files:** on a laptop, `mysync clone incident-logs`, or `mysync sync` in a folder already cloned from it. The pushed folders are ordinary synced files from then on: edit or delete them and sync as usual.
 - **A new share:** `--create` creates the share (by name) if it doesn't exist yet; add `--compress` to create it with [compression](#compression) on (good for logs). For a share that already exists, `--compress` changes nothing: it warns and points to `mysync compression on --share <name>`.
 - **Trying it first:** `-n, --dry-run` reads the files and shows the target folder and what would be uploaded, without changing anything.
 - **Refused:** pushing a folder that already syncs with that share (use `mysync sync` there), and the home folder or a drive root without `--force`.
@@ -645,7 +648,7 @@ With `--json`, every command prints exactly one JSON document on stdout, even wh
 | 1 | Unexpected error (details with `--verbose`) |
 | 2 | Usage or configuration error (bad option, missing or invalid environment variable, `resolve` on a path not in conflict, the publishing account's static website is off) |
 | 3 | Finished, but conflicts are open (takes precedence over 9) |
-| 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; the name is taken; `update` can't replace this binary; `push` from a folder that already syncs with that share, or the share has a file where the host's folder would go; `pull` into a folder that syncs with that share, or local files in the way |
+| 4 | Folder precondition failed: not empty, already a share, not a share, or an unsafe root; the name is taken; `update` can't replace this binary; `push` from a folder that already syncs with that share, or the share has a file where the host's folder would go; `pull` into a folder that syncs with that share, or local files in the way; `clone` into a file, into a folder inside a share, or a folder that can't be created |
 | 5 | Another machine kept committing; try again |
 | 6 | Another mysync is working in this folder (or another `mysync tui` is open there) |
 | 7 | The mass-delete safety check stopped the sync |

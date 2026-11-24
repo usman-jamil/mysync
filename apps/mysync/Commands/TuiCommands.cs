@@ -68,7 +68,7 @@ internal sealed class TuiCommands(CommandRunner runner, IServiceProvider service
                 int failed = runner.Fail(started.Error);
                 if (started.Error.Code == "Shares.NameRequired")
                 {
-                    ConsoleOutput.Info("To work on an existing share instead, run mysync sync <name> in an empty folder first, then mysync tui there.");
+                    ConsoleOutput.Info("To work on an existing share instead, run mysync clone <name> first, then mysync tui in its folder.");
                 }
 
                 return failed;
